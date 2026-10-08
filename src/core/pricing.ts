@@ -1,0 +1,37 @@
+export type Tier = 'standard'|'premium'|'test';
+
+function assertPositive(value:number,label:string):void {
+  if(!Number.isFinite(value)||value<=0) throw new Error(`${label} doit être un nombre positif`);
+}
+function assertNonNegative(value:number,label:string):void {
+  if(!Number.isFinite(value)||value<0) throw new Error(`${label} doit être un nombre positif ou nul`);
+}
+
+export function estimatePriceFcfa(seconds:number,tier:Tier):number {
+  assertPositive(seconds,'La durée');
+  const pricePerSecond=tier==='standard'?460:700;
+  return Math.round(seconds*pricePerSecond);
+}
+
+export function estimateRealCost(seconds:number,usdPerSecond:number,usdToEur:number,eurToFcfa:number){
+  assertPositive(seconds,'La durée');
+  assertNonNegative(usdPerSecond,'Le tarif fournisseur');
+  assertPositive(usdToEur,'Le taux USD/EUR');
+  assertPositive(eurToFcfa,'Le taux EUR/FCFA');
+  const costUsd=seconds*usdPerSecond;
+  const costEur=costUsd*usdToEur;
+  return {costUsd,costEur,costRealFcfa:costEur*eurToFcfa};
+}
+
+export function formatFcfa(amount:number):string {
+  assertNonNegative(amount,'Le montant');
+  const formatted=new Intl.NumberFormat('fr-FR',{maximumFractionDigits:0}).format(Math.round(amount));
+  return `${formatted.replace(/[\u00a0\u202f ]/g,'\u00a0')} FCFA`;
+}
+
+export function calculateBudget(spentEur:number,capEur:number){
+  assertNonNegative(spentEur,'Le montant consommé');
+  assertPositive(capEur,'Le plafond');
+  const usagePercent=Math.min(100,Math.round((spentEur/capEur)*100));
+  return {spentEur,capEur,remainingEur:Math.max(0,capEur-spentEur),usagePercent,warning:spentEur/capEur>=.8};
+}
