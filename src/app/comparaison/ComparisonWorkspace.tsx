@@ -194,7 +194,7 @@ function ComparisonEvaluation({ comparisonId, result, onSave }: {
     <legend className="font-semibold text-[#253b4e]">Évaluer ce résultat</legend>
     <div className="grid gap-3 sm:grid-cols-3">
       {([['fidelity', 'Fidélité véhicule'], ['realism', 'Réalisme'], ['brandFit', 'Charte RIMCO']] as const).map(([key, label]) => <label key={key} className="grid gap-1 text-[#716d66]">{label}
-        <select value={ratings[key] || ''} onChange={(event) => setRatings((current) => ({ ...current, [key]: Number(event.target.value) }))} className="min-h-10 rounded-md border border-[#d2cec6] bg-white px-2 text-[#253b4e]">
+        <select aria-label={`${label} pour ${result.modelName}`} value={ratings[key] || ''} onChange={(event) => setRatings((current) => ({ ...current, [key]: Number(event.target.value) }))} className="min-h-10 rounded-md border border-[#d2cec6] bg-white px-2 text-[#253b4e]">
           <option value="">À noter</option>{[1, 2, 3, 4, 5].map((score) => <option key={score} value={score}>{score} / 5</option>)}
         </select>
       </label>)}
