@@ -19,8 +19,7 @@ export async function GET(request: Request) {
       const records = allVersions().filter((item) => item.userId === actor.id || actor.role === 'admin');
       const versions = records.map((latest) => {
         const status = latest.reviewStatus === 'approved' ? 'ready' : latest.reviewStatus === 'rejected' ? 'rejected' : latest.reviewStatus === 'pending' ? 'review' : latest.status;
-        const canPreview = actor.role === 'admin' || actor.role === 'valideur';
-        return { id: latest.id, videoId: latest.videoId, title: latest.brief.vehicle_description, status, priceFcfa: latest.priceFcfa, prompt: latest.prompt, previewUrl: canPreview && latest.status === 'ready' ? latest.videoUrl : undefined, videoUrl: latest.reviewStatus === 'approved' ? latest.videoUrl : undefined, createdAt: latest.createdAt };
+        return { id: latest.id, videoId: latest.videoId, title: latest.brief.vehicle_description, status, priceFcfa: latest.priceFcfa, prompt: latest.prompt, previewUrl: latest.status === 'ready' ? latest.videoUrl : undefined, videoUrl: latest.status === 'ready' ? latest.videoUrl : undefined, createdAt: latest.createdAt };
       }).filter((item) => !requestedStatus || item.status === requestedStatus);
       return NextResponse.json({ versions });
     }
@@ -40,7 +39,8 @@ export async function GET(request: Request) {
       const ledgerRows = Array.isArray(latest?.usage_ledger) ? latest.usage_ledger : [];
       const canPreviewReview = video.status === 'review' && (actor.role === 'admin' || actor.role === 'valideur' && video.brand_id === actor.brandId && video.department === actor.department);
       const latestIsMock = latest?.provider_request_id?.startsWith('mock:') ?? false;
-      const path = video.status === 'approved' ? latest?.final_path ?? (latestIsMock ? latest?.raw_path : null) : canPreviewReview || video.status === 'ready' && video.user_id === actor.id || video.status === 'review' && video.user_id === actor.id ? latestIsMock ? latest?.raw_path : latest?.final_path : null;
+      const isOwner = video.user_id === actor.id;
+      const path = video.status === 'approved' || video.status === 'ready' && isOwner ? latest?.final_path ?? (latestIsMock ? latest?.raw_path : null) : canPreviewReview || video.status === 'review' && isOwner ? latestIsMock ? latest?.raw_path : latest?.final_path : null;
       const briefData = latest?.brief_json && typeof latest.brief_json === 'object' ? latest.brief_json as Record<string, unknown> : {};
       const mockMetadata = briefData.mock_metadata && typeof briefData.mock_metadata === 'object' ? briefData.mock_metadata as Record<string, unknown> : {};
       const isPersistedMock = latest?.provider_request_id?.startsWith('mock:') ?? false;
@@ -51,11 +51,11 @@ export async function GET(request: Request) {
         const storage = admin.storage.from('videos');
         const { data: signed } = await storage.createSignedUrl(path, 3600);
         previewUrl = signed?.signedUrl ?? null;
-        if (video.status === 'approved') {
+        if (video.status === 'approved' || video.status === 'ready' && isOwner) {
           videoUrl = await createSignedVideoDownloadUrl((storagePath, expiresIn, options) => storage.createSignedUrl(storagePath, expiresIn, options), path);
         }
       }
-      if (video.status === 'approved' && isPersistedMock) videoUrl = previewUrl;
+      if ((video.status === 'approved' || video.status === 'ready' && isOwner) && isPersistedMock) videoUrl = previewUrl;
       const status = video.status === 'approved' ? 'ready' : video.status === 'rejected' ? 'rejected' : video.status === 'review' ? 'review' : video.status === 'ready' ? 'ready' : latest?.status === 'failed' ? 'failed' : latest?.status === 'queued' || latest?.status === 'generating' || latest?.status === 'postprocessing' ? 'generating' : 'draft';
       return { id: latest?.id ?? video.id, videoId: video.id, title: video.title, status, versionStatus: latest?.status ?? null, priceFcfa: ledgerRows[0] ? Number(ledgerRows[0].price_fcfa) : typeof mockMetadata.priceFcfa === 'number' ? mockMetadata.priceFcfa : null, validationStatus: validationRows[0]?.status ?? null, prompt: latest?.generated_prompt ?? null, videoUrl, previewUrl, createdAt: video.created_at };
     }));
