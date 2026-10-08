@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 2,
+  "name": "RIMCO Studio",
+  "overview": "RIMCO Studio est un outil de production interne pour créer, suivre et approuver des vidéos automobiles. Son registre est celui de l’atelier de précision : une interface experte et rassurante qui met le véhicule, les décisions de production et le coût au premier plan. Le rouge RIMCO porte l’identité et les actions importantes ; le bleu ardoise structure les informations. Les surfaces restent plates, calmes et séparées par des tons et des traits fins. L’interface est entièrement en français et vise WCAG 2.2 AA, la navigation clavier et la préférence de mouvement réduit.",
+  "colors": {
+    "brand-red": {"base":"#c51e1c","ramp":{"50":"#fff1f0","100":"#ffe0de","200":"#ffc2be","300":"#ff918a","400":"#f45a53","500":"#df342e","600":"#c51e1c","700":"#a71715","800":"#831810","900":"#631713"}},
+    "brand-burgundy": {"base":"#831810","ramp":{"50":"#fbefed","100":"#f5d9d5","200":"#ebb2aa","300":"#dc8175","400":"#c85448","500":"#ac3429","600":"#94251c","700":"#831810","800":"#68140e","900":"#4e110d"}},
+    "ink": {"base":"#253b4e","ramp":{"50":"#f0f4f7","100":"#dce5eb","200":"#bdceda","300":"#91adbf","400":"#63899f","500":"#466d85","600":"#35556c","700":"#253b4e","800":"#1e3142","900":"#182737"}},
+    "background": {"base":"#f5f5f3","ramp":{"50":"#fbfbfa","100":"#f5f5f3","200":"#ebeae7","300":"#dddbd6","400":"#c6c3bc","500":"#aaa69e","600":"#8d8981","700":"#716d66","800":"#56534e","900":"#3e3c38"}},
+    "surface": {"base":"#fbfbfa","ramp":{"50":"#ffffff","100":"#fbfbfa","200":"#f4f3f1","300":"#e9e7e2","400":"#d8d5cf","500":"#bdb9b1","600":"#9b978f","700":"#716d66","800":"#514e49","900":"#393733"}},
+    "muted": {"base":"#716d66","ramp":{"50":"#f8f7f5","100":"#efeeeb","200":"#dedcd7","300":"#c4c1ba","400":"#a4a097","500":"#87837b","600":"#716d66","700":"#5b5852","800":"#45433e","900":"#302e2a"}},
+    "border": {"base":"#e4e1db","ramp":{"50":"#fbfaf9","100":"#f5f3f0","200":"#e4e1db","300":"#d2cec6","400":"#bcb7ae","500":"#9f998f","600":"#817c73","700":"#66625b","800":"#4d4a45","900":"#373531"}},
+    "focus": {"base":"#c51e1c","ramp":{"50":"#fff1f0","100":"#ffe0de","200":"#ffc2be","300":"#ff918a","400":"#f45a53","500":"#df342e","600":"#c51e1c","700":"#a71715","800":"#831810","900":"#631713"}}
+  },
+  "typography": {"display":"Bebas Neue","body":"Helvetica Neue, Helvetica, Arial, sans-serif"},
+  "components": {
+    "button-primary":"<button style=\"background:#c51e1c;color:#fff;border:1px solid #c51e1c;border-radius:8px;padding:10px 16px;font:600 14px Helvetica,Arial,sans-serif\">Créer la vidéo</button>",
+    "button-secondary":"<button style=\"background:#fbfbfa;color:#253b4e;border:1px solid #d2cec6;border-radius:8px;padding:10px 16px;font:600 14px Helvetica,Arial,sans-serif\">Annuler</button>",
+    "input":"<label style=\"display:grid;gap:6px;font:600 13px Helvetica,Arial,sans-serif;color:#253b4e\">Lieu<input style=\"border:1px solid #d2cec6;border-radius:8px;padding:10px 12px;background:#fbfbfa;color:#253b4e\" /></label>",
+    "navigation":"<nav style=\"background:#831810;color:#fff;padding:12px\"><a href=\"#studio\" style=\"color:inherit;text-decoration:none\">Studio</a></nav>",
+    "chip":"<span style=\"display:inline-flex;border:1px solid #d2cec6;border-radius:999px;padding:4px 9px;color:#253b4e;background:#f5f5f3;font:600 12px Helvetica,Arial,sans-serif\">À valider</span>",
+    "surface":"<section style=\"background:#fbfbfa;border:1px solid #e4e1db;border-radius:10px;padding:20px;color:#253b4e\">Contenu de production</section>"
+  }
+}
