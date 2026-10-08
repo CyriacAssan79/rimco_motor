@@ -52,5 +52,7 @@ async function ensureUser(supabase: SupabaseClient, email: string, password: str
     user_metadata: { name },
   });
   if (refreshError || !refreshed.user) throw refreshError ?? new Error(`Impossible de réinitialiser le compte E2E ${email}.`);
+  const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
+  if (signInError) throw new Error(`Le compte E2E ${email} ne peut pas ouvrir de session après sa préparation : ${signInError.message}`);
   return refreshed.user;
 }
