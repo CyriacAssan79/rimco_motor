@@ -10,7 +10,7 @@ async function signIn(page: import('@playwright/test').Page, email: string, pass
   await page.getByLabel('Adresse e-mail').fill(email);
   await page.getByLabel('Mot de passe').fill(password);
   await page.getByRole('button', { name: 'Se connecter' }).click();
-  const alert = page.getByRole('alert');
+  const alert = page.locator('p[role="alert"]');
   if (await alert.isVisible()) throw new Error(`Échec de connexion pour ${email}: ${await alert.innerText()}`);
 }
 
