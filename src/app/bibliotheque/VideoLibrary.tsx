@@ -10,7 +10,6 @@ export function VideoLibrary() {
   const [filter, setFilter] = useState('all');
   const [query, setQuery] = useState('');
   const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
 
   const loadVideos = useCallback(async () => {
     const response = await fetch('/api/versions');
@@ -33,19 +32,8 @@ export function VideoLibrary() {
   const filtered = useMemo(() => videos.filter((video) =>
     (filter === 'all' || video.status === filter) && `${video.title ?? ''} ${video.make ?? ''} ${video.model ?? ''}`.toLowerCase().includes(query.toLowerCase()),
   ), [videos, filter, query]);
-  const tabs = [['all', 'Toutes'], ['ready', 'Prêtes'], ['review', 'À valider'], ['generating', 'En cours'], ['rejected', 'Refusées'], ['failed', 'Échec']];
-  const labels: Record<string, string> = { ready: 'Prête', review: 'Validation', generating: 'Génération', queued: 'Génération', failed: 'Échec', rejected: 'Refusée', draft: 'Brouillon' };
-
-  async function sendForReview(video: Video) {
-    setBusy(true); setError('');
-    try {
-      const response = await fetch(`/api/versions/${video.id}/review`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ decision: 'submit' }) });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error ?? 'La vidéo n’a pas pu être envoyée en validation.');
-      await loadVideos();
-    } catch (e) { setError(e instanceof Error ? e.message : 'Une erreur est survenue.'); }
-    finally { setBusy(false); }
-  }
+  const tabs = [['all', 'Toutes'], ['ready', 'Prêtes'], ['generating', 'En cours'], ['failed', 'Échec']];
+  const labels: Record<string, string> = { ready: 'Prête', review: 'Prête', generating: 'Génération', queued: 'Génération', failed: 'Échec', rejected: 'Échec', draft: 'Brouillon' };
 
   return <>
     <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
@@ -61,7 +49,7 @@ export function VideoLibrary() {
           <div className="col-span-2 flex items-center justify-between gap-4 md:col-span-1 md:justify-end"><span className="whitespace-nowrap text-xs font-semibold">{new Intl.NumberFormat('fr-FR').format(video.priceFcfa ?? video.estimatedPriceFcfa ?? video.price_fcfa ?? 0)} FCFA</span>{video.status === 'ready' && video.videoUrl && <a href={video.videoUrl} download className="text-xs font-semibold text-[#831810] underline underline-offset-4">Télécharger</a>}</div>
         </div>
         {video.previewUrl && <div className="border-t border-black/[.055] px-5 py-4"><video controls preload="metadata" src={video.previewUrl} className="aspect-video max-h-[420px] w-full bg-[#202124]" aria-label={`Aperçu de ${video.title ?? 'la vidéo'}`} /></div>}
-        {video.status === 'ready' && <div className="flex flex-wrap items-center justify-between gap-3 border-t border-black/[.055] px-5 py-3"><p className="text-xs text-[#716d66]">La vidéo est prête. Visionnez-la puis envoyez-la en validation.</p><button type="button" onClick={() => void sendForReview(video)} disabled={busy} className="min-h-10 rounded-md bg-[#c51e1c] px-4 py-2 text-xs font-semibold text-white hover:bg-[#a71715] disabled:opacity-50">{busy ? 'Envoi…' : 'Envoyer en validation'}</button></div>}
+        {video.status === 'ready' && <div className="border-t border-black/[.055] px-5 py-3"><p className="text-xs text-[#716d66]">Votre vidéo est prête à être visionnée et téléchargée.</p></div>}
       </article>)}
     </div>}
   </>;
