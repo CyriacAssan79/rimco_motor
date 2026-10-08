@@ -24,11 +24,11 @@ port = 54323
 enabled = true
 site_url = "http://127.0.0.1:3000"
 additional_redirect_urls = ["http://localhost:3000"]
-enable_signup = false
+enable_signup = true # Local-only E2E setup; public signup stays disabled in the hosted Supabase project.
 jwt_expiry = 3600
 
 [auth.email]
-enable_signup = false
+enable_signup = true # Required for local password-auth E2E tests.
 double_confirm_changes = true
 enable_confirmations = false
 
