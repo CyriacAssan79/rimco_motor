@@ -44,5 +44,11 @@ async function ensureUser(supabase: SupabaseClient, email: string, password: str
   if (listError) throw listError;
   const existing = page.users.find((candidate) => candidate.email === email);
   if (!existing) throw new Error(`Le compte E2E ${email} est introuvable.`);
-  return existing;
+  const { data: refreshed, error: refreshError } = await supabase.auth.admin.updateUserById(existing.id, {
+    password,
+    email_confirm: true,
+    user_metadata: { name },
+  });
+  if (refreshError || !refreshed.user) throw refreshError ?? new Error(`Impossible de réinitialiser le compte E2E ${email}.`);
+  return refreshed.user;
 }
