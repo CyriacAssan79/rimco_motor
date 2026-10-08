@@ -41,9 +41,9 @@ test('admin prépare une comparaison de modèles sur une photo validée',async({
  await page.getByRole('checkbox',{name:/Veo 3.1 Fast/}).check();
  await page.getByRole('button',{name:'Simuler la comparaison'}).click();
  await expect(page.getByRole('status')).toContainText('Aucun appel fournisseur n’a été effectué.');
- await page.getByLabel('Fidélité véhicule pour Kling 2.6 Pro').selectOption('5');
- await page.getByLabel('Réalisme pour Kling 2.6 Pro').selectOption('4');
- await page.getByLabel('Charte RIMCO pour Kling 2.6 Pro').selectOption('5');
+ await page.getByLabel('Fidélité véhicule pour Kling 2.6 Pro').first().selectOption('5');
+ await page.getByLabel('Réalisme pour Kling 2.6 Pro').first().selectOption('4');
+ await page.getByLabel('Charte RIMCO pour Kling 2.6 Pro').first().selectOption('5');
  await page.getByRole('button',{name:'Enregistrer la note'}).first().click();
  await expect(page.getByRole('status').filter({hasText:'Évaluation enregistrée.'})).toBeVisible();
  const download = page.waitForEvent('download');
