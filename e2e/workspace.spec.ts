@@ -10,8 +10,7 @@ async function signIn(page: import('@playwright/test').Page, email: string, pass
   await page.getByLabel('Adresse e-mail').fill(email);
   await page.getByLabel('Mot de passe').fill(password);
   await page.getByRole('button', { name: 'Se connecter' }).click();
-  const alert = page.locator('p[role="alert"]');
-  if (await alert.isVisible()) throw new Error(`Échec de connexion pour ${email}: ${await alert.innerText()}`);
+  await expect(page).toHaveURL('/', { timeout: 10_000 });
 }
 
 test('connexion administrateur puis accès au studio de création',async({page})=>{await signIn(page,adminEmail,adminPassword);await expect(page).toHaveURL('/');await expect(page.getByRole('heading',{name:'Atelier de production'})).toBeVisible();await page.getByRole('link',{name:'Ouvrir le studio'}).click();await expect(page.getByRole('heading',{name:'Créer une vidéo'})).toBeVisible();await expect(page.getByLabel('Décrivez votre vidéo')).toBeVisible();await expect(page.getByRole('heading',{name:'Véhicule de référence'})).toBeVisible()});
