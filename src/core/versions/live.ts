@@ -155,7 +155,7 @@ export async function refreshLiveVersion(versionId: string, actor: Actor) {
       if (readyError) throw new HttpError(503, 'Le fichier final est prêt; son état doit être réconcilié.');
       video.status = 'ready';
     }
-    const approvedFinal = video?.status === 'approved' && version.final_path;
+    const approvedFinal = (video?.status === 'approved' || video?.status === 'ready' && ownsVideo) && version.final_path;
     const validatorPreview = video?.status === 'review' && (actor.role === 'admin' || actor.role === 'valideur' && video.brand_id === actor.brandId && video.department === actor.department);
     const path = approvedFinal || validatorPreview ? approvedFinal || version.final_path : null;
     return { id: versionId, status: version.status, videoUrl: path ? await signedVideoUrl(admin, path) : undefined };
@@ -206,8 +206,8 @@ export async function refreshLiveVersion(versionId: string, actor: Actor) {
     if (!claimedVersion) return { id: versionId, status: 'postprocessing' as const };
     try {
       const processed = await beginPostproduction(versionId);
-      const canPreview = actor.role === 'admin' || actor.role === 'valideur' && video.brand_id === actor.brandId && video.department === actor.department;
-      return { id: versionId, status: processed.status, videoUrl: canPreview ? await signedVideoUrl(admin, processed.finalPath) : undefined };
+      const canDownload = ownsVideo || actor.role === 'admin';
+      return { id: versionId, status: processed.status, videoUrl: canDownload ? await signedVideoUrl(admin, processed.finalPath) : undefined };
     } catch (postprodError) {
       const message = postprodError instanceof HttpError ? postprodError.message : 'La post-production a échoué.';
       await Promise.all([
