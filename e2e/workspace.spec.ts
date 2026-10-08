@@ -11,9 +11,11 @@ async function signIn(page: import('@playwright/test').Page, email: string, pass
   await page.getByLabel('Adresse e-mail').fill(email);
   await page.getByLabel('Mot de passe').fill(password);
   await page.getByRole('button', { name: 'Se connecter' }).click();
+  const alert = page.getByRole('alert');
+  if (await alert.isVisible()) throw new Error(`Échec de connexion pour ${email}: ${await alert.innerText()}`);
 }
 
-test('connexion administrateur puis accès au studio de création',async({page})=>{await page.goto('/connexion');await expect(page.getByRole('heading',{name:'Connexion'})).toBeVisible();await page.getByLabel('Adresse e-mail').fill(process.env.E2E_ADMIN_EMAIL??'admin@rimco.test');await page.getByLabel('Mot de passe').fill(process.env.E2E_ADMIN_PASSWORD??'Test-Rimco-Admin-2026!');await page.getByRole('button',{name:'Se connecter'}).click();await expect(page).toHaveURL('/');await expect(page.getByRole('heading',{name:'Atelier de production'})).toBeVisible();await page.getByRole('link',{name:'Ouvrir le studio'}).click();await expect(page.getByRole('heading',{name:'Créer une vidéo'})).toBeVisible();await expect(page.getByLabel('Décrivez votre vidéo')).toBeVisible();await expect(page.getByRole('heading',{name:'Véhicule de référence'})).toBeVisible()});
+test('connexion administrateur puis accès au studio de création',async({page})=>{await page.goto('/connexion');await expect(page.getByRole('heading',{name:'Connexion'})).toBeVisible();await page.getByLabel('Adresse e-mail').fill(adminEmail);await page.getByLabel('Mot de passe').fill(adminPassword);await page.getByRole('button',{name:'Se connecter'}).click();await page.waitForTimeout(1_000);const alert=page.getByRole('alert');if(await alert.isVisible())throw new Error(`Échec de connexion pour ${adminEmail}: ${await alert.innerText()}`);await expect(page).toHaveURL('/');await expect(page.getByRole('heading',{name:'Atelier de production'})).toBeVisible();await page.getByRole('link',{name:'Ouvrir le studio'}).click();await expect(page.getByRole('heading',{name:'Créer une vidéo'})).toBeVisible();await expect(page.getByLabel('Décrivez votre vidéo')).toBeVisible();await expect(page.getByRole('heading',{name:'Véhicule de référence'})).toBeVisible()});
 
 test('collaborateur génère, valideur approuve, puis le collaborateur télécharge la vidéo simulée',async({page,browser})=>{
  test.setTimeout(90_000);
