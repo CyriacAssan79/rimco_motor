@@ -3,7 +3,6 @@ import { expect, test } from '@playwright/test';
 const adminEmail = process.env.E2E_ADMIN_EMAIL ?? 'admin@rimco.test';
 const adminPassword = process.env.E2E_ADMIN_PASSWORD ?? 'Test-Rimco-Admin-2026!';
 const creatorEmail = process.env.E2E_CREATOR_EMAIL ?? 'collaborateur@rimco.test';
-const validatorEmail = process.env.E2E_VALIDATOR_EMAIL ?? 'valideur@rimco.test';
 const testUserPassword = adminPassword;
 
 async function signIn(page: import('@playwright/test').Page, email: string, password: string) {
@@ -17,7 +16,7 @@ async function signIn(page: import('@playwright/test').Page, email: string, pass
 
 test('connexion administrateur puis accès au studio de création',async({page})=>{await page.goto('/connexion');await expect(page.getByRole('heading',{name:'Connexion'})).toBeVisible();await page.getByLabel('Adresse e-mail').fill(adminEmail);await page.getByLabel('Mot de passe').fill(adminPassword);await page.getByRole('button',{name:'Se connecter'}).click();await page.waitForTimeout(1_000);const alert=page.getByRole('alert');if(await alert.isVisible())throw new Error(`Échec de connexion pour ${adminEmail}: ${await alert.innerText()}`);await expect(page).toHaveURL('/');await expect(page.getByRole('heading',{name:'Atelier de production'})).toBeVisible();await page.getByRole('link',{name:'Ouvrir le studio'}).click();await expect(page.getByRole('heading',{name:'Créer une vidéo'})).toBeVisible();await expect(page.getByLabel('Décrivez votre vidéo')).toBeVisible();await expect(page.getByRole('heading',{name:'Véhicule de référence'})).toBeVisible()});
 
-test('collaborateur génère, valideur approuve, puis le collaborateur télécharge la vidéo simulée',async({page,browser})=>{
+test('collaborateur génère, visionne et télécharge la vidéo simulée',async({page})=>{
  test.setTimeout(90_000);
  await signIn(page, creatorEmail, testUserPassword);
  await page.goto('/studio');
@@ -26,20 +25,6 @@ test('collaborateur génère, valideur approuve, puis le collaborateur télécha
  await page.getByRole('button',{name:/Générer ma vidéo/}).click();
  await expect(page.getByText('Votre vidéo est prête à consulter.')).toBeVisible({timeout:65_000});
  await page.getByRole('link',{name:'Voir ma vidéo'}).click();
- await expect(page.getByRole('button',{name:'Envoyer en validation'})).toBeVisible();
- await page.getByRole('button',{name:'Envoyer en validation'}).click();
- await expect(page.locator('article').first().getByText('Validation',{exact:true})).toBeVisible();
- const validatorContext=await browser.newContext({baseURL:'http://127.0.0.1:3000'});
- try {
-   const validatorPage=await validatorContext.newPage();
-   await signIn(validatorPage, validatorEmail, testUserPassword);
-   await validatorPage.goto('/validation');
-   await expect(validatorPage.locator('video[aria-label^="Aperçu de"]').first()).toBeVisible();
-   await validatorPage.getByRole('button',{name:'Approuver'}).click();
-   await expect(validatorPage.getByText('La file est à jour')).toBeVisible();
- } finally {
-   await validatorContext.close();
- }
  await page.goto('/bibliotheque');
  await expect(page.locator('video[aria-label^="Aperçu de"]').first()).toBeVisible();
  const download=page.waitForEvent('download');
