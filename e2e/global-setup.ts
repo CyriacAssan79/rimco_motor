@@ -12,14 +12,16 @@ export default async function globalSetup() {
   const supabase = createClient(url, key, { auth: { autoRefreshToken: false, persistSession: false } });
   const adminEmail = process.env.E2E_ADMIN_EMAIL ?? 'admin@rimco.test';
   const adminPassword = process.env.E2E_ADMIN_PASSWORD ?? 'Test-Rimco-Admin-2026!';
-  const admin = await ensureUser(supabase, adminEmail, adminPassword, 'Administrateur test');
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!anonKey) throw new Error('La clé publique Supabase locale est requise pour les tests E2E.');
+  const admin = await ensureUser(supabase, url, anonKey, adminEmail, adminPassword, 'Administrateur test');
   const { data: brand, error: brandError } = await supabase.from('brands').select('id').eq('name', 'RIMCO Motors').single();
   if (brandError || !brand) throw new Error('La marque RIMCO Motors est absente du seed Supabase.');
 
   const creatorEmail = process.env.E2E_CREATOR_EMAIL ?? 'collaborateur@rimco.test';
   const validatorEmail = process.env.E2E_VALIDATOR_EMAIL ?? 'valideur@rimco.test';
-  const creator = await ensureUser(supabase, creatorEmail, adminPassword, 'Collaborateur E2E');
-  const validator = await ensureUser(supabase, validatorEmail, adminPassword, 'Valideur E2E');
+  const creator = await ensureUser(supabase, url, anonKey, creatorEmail, adminPassword, 'Collaborateur E2E');
+  const validator = await ensureUser(supabase, url, anonKey, validatorEmail, adminPassword, 'Valideur E2E');
   for (const [user, role] of [[creator, 'collaborateur'], [validator, 'valideur']] as const) {
     const { error } = await supabase.from('profiles').update({ role, brand_id: brand.id, department: 'Marketing', is_active: true }).eq('id', user.id);
     if (error) throw new Error(`Impossible de préparer le profil ${role} pour E2E: ${error.message}`);
@@ -36,7 +38,7 @@ export default async function globalSetup() {
   if (assetError) throw assetError;
 }
 
-async function ensureUser(supabase: SupabaseClient, email: string, password: string, name: string) {
+async function ensureUser(supabase: SupabaseClient, url: string, anonKey: string, email: string, password: string, name: string) {
   const { data, error } = await supabase.auth.admin.createUser({ email, password, email_confirm: true, user_metadata: { name } });
   let user = data.user;
   if (error) {
@@ -52,7 +54,8 @@ async function ensureUser(supabase: SupabaseClient, email: string, password: str
     user_metadata: { name },
   });
   if (refreshError || !refreshed.user) throw refreshError ?? new Error(`Impossible de réinitialiser le compte E2E ${email}.`);
-  const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
+  const authCheck = createClient(url, anonKey, { auth: { autoRefreshToken: false, persistSession: false } });
+  const { error: signInError } = await authCheck.auth.signInWithPassword({ email, password });
   if (signInError) throw new Error(`Le compte E2E ${email} ne peut pas ouvrir de session après sa préparation : ${signInError.message}`);
   return refreshed.user;
 }
