@@ -38,13 +38,15 @@ export default async function globalSetup() {
 
 async function ensureUser(supabase: SupabaseClient, email: string, password: string, name: string) {
   const { data, error } = await supabase.auth.admin.createUser({ email, password, email_confirm: true, user_metadata: { name } });
-  if (!error && data.user) return data.user;
-  if (!error || !error.message.toLowerCase().includes('already')) throw error ?? new Error(`Impossible de créer ${email}.`);
-  const { data: page, error: listError } = await supabase.auth.admin.listUsers({ page: 1, perPage: 1000 });
-  if (listError) throw listError;
-  const existing = page.users.find((candidate) => candidate.email === email);
-  if (!existing) throw new Error(`Le compte E2E ${email} est introuvable.`);
-  const { data: refreshed, error: refreshError } = await supabase.auth.admin.updateUserById(existing.id, {
+  let user = data.user;
+  if (error) {
+    if (!error.message.toLowerCase().includes('already')) throw error;
+    const { data: page, error: listError } = await supabase.auth.admin.listUsers({ page: 1, perPage: 1000 });
+    if (listError) throw listError;
+    user = page.users.find((candidate) => candidate.email === email) ?? null;
+  }
+  if (!user) throw new Error(`Le compte E2E ${email} est introuvable.`);
+  const { data: refreshed, error: refreshError } = await supabase.auth.admin.updateUserById(user.id, {
     password,
     email_confirm: true,
     user_metadata: { name },
