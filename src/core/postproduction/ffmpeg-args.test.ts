@@ -12,7 +12,7 @@ describe('FFmpeg final video arguments', () => {
     expect(args).toContain('/app/public/brand/logo-rimco.png');
     expect(args).toContain('-loop');
     expect(args).toContain('1');
-    expect(args).toContain('[1:v:0]format=rgba[logo_rgba];[logo_rgba][0:v:0]scale2ref=w=main_w*0.54:h=-1[logo][base];[base][logo]overlay=x=main_w*0.035:y=main_h*0.035:format=auto:eof_action=repeat[vout]');
+    expect(args).toContain('[1:v:0]format=rgba[logo_rgba];[logo_rgba][0:v:0]scale2ref=w=main_w*0.12:h=-1[logo][base];[base][logo]overlay=x=main_w*0.035:y=main_h*0.035:format=auto:eof_action=repeat[vout]');
     expect(args).toContain('libx264');
     expect(args).toContain('15');
     expect(args).toContain('[vout]');
@@ -31,7 +31,7 @@ describe('FFmpeg final video arguments', () => {
     const args = makeFinalVideoArgs({ rawFile: '/tmp/raw.mp4', logoFile: '/app/logo.png', outputFile: '/tmp/final.mp4', durationSeconds: 10, overlayLogo: true, audioFile: '/tmp/music.mp3' });
     expect(args).toContain('-stream_loop');
     expect(args).toContain('/tmp/music.mp3');
-    expect(args).toContain('[2:v:0]format=rgba[logo_rgba];[logo_rgba][0:v:0]scale2ref=w=main_w*0.54:h=-1[logo][base];[base][logo]overlay=x=main_w*0.035:y=main_h*0.035:format=auto:eof_action=repeat[vout]');
+    expect(args).toContain('[2:v:0]format=rgba[logo_rgba];[logo_rgba][0:v:0]scale2ref=w=main_w*0.12:h=-1[logo][base];[base][logo]overlay=x=main_w*0.035:y=main_h*0.035:format=auto:eof_action=repeat[vout]');
     expect(args).toContain('1:a:0');
   });
 
@@ -44,7 +44,7 @@ describe('FFmpeg final video arguments', () => {
 
   it('adds the logo after joining both storyboard clips', () => {
     const args = makeShotMontageArgs({ shotFiles: ['/tmp/one.mp4', '/tmp/two.mp4'], logoFile: '/app/logo.png', outputFile: '/tmp/montage.mp4', overlayLogo: true, durationSeconds: 6 });
-    expect(args).toContain('[0:v:0][1:v:0]concat=n=2:v=1:a=0[base];[2:v:0]format=rgba[logo_rgba];[logo_rgba][base]scale2ref=w=main_w*0.54:h=-1[logo][video];[video][logo]overlay=x=main_w*0.035:y=main_h*0.035:format=auto:eof_action=repeat[vout]');
+    expect(args).toContain('[0:v:0][1:v:0]concat=n=2:v=1:a=0[base];[2:v:0]format=rgba[logo_rgba];[logo_rgba][base]scale2ref=w=main_w*0.12:h=-1[logo][video];[video][logo]overlay=x=main_w*0.035:y=main_h*0.035:format=auto:eof_action=repeat[vout]');
     expect(args).toContain('[vout]');
     expect(args).toContain('6');
   });
