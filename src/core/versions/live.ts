@@ -115,7 +115,7 @@ export async function createLiveVersion(actor: Actor, input: CreateVersionInput,
     brief = generated.brief as Brief;
     if (!model.allowed_formats?.includes(brief.format)) throw new HttpError(422, `Le modèle ne prend pas en charge le format ${brief.format}.`);
     prompt = briefToPrompt(brief, model.adapter_family);
-    const { error: settleError } = await settleUsageCost(admin, { entryId: llmLedgerId, outcome: 'charged', actualCostUsd: generated.costUsd ?? llmReserveUsd, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA });
+    const { error: settleError } = await settleUsageCost(admin, { entryId: llmLedgerId, outcome: 'charged', actualCostUsd: generated.costUsd ?? llmReserveUsd, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA, billable: false });
     if (settleError) throw new HttpError(503, 'Le coût du brief LLM doit être réconcilié avant de lancer la vidéo.');
     const { error: briefUpdateError } = await admin.from('video_versions').update({ brief_json: { ...brief, overlayLogo: input.overlayLogo }, generated_prompt: prompt }).eq('id', version.id);
     if (briefUpdateError) throw new HttpError(503, 'Le brief est facturé mais n’a pas pu être enregistré. Réessayez depuis l’administration.');
@@ -131,6 +131,7 @@ export async function createLiveVersion(actor: Actor, input: CreateVersionInput,
         actualCostUsd: completed ? reportedCostUsd ?? llmReserveUsd : 0,
         usdToEur: env.USD_TO_EUR_RATE,
         eurToFcfa: env.EUR_TO_FCFA,
+        billable: false,
       });
     }
     await Promise.all([

@@ -1,5 +1,5 @@
 export type Tier = 'standard'|'premium'|'test';
-export const CLIENT_MARKUP_RATE = 0.30;
+export const CLIENT_MARKUP_RATE = 0.20;
 
 function assertPositive(value:number,label:string):void {
   if(!Number.isFinite(value)||value<=0) throw new Error(`${label} doit être un nombre positif`);
@@ -24,7 +24,7 @@ export function estimateRealCost(seconds:number,usdPerSecond:number,usdToEur:num
   return {costUsd,costEur,costRealFcfa:costEur*eurToFcfa};
 }
 
-/** Client billing is the Fal usage charge converted to FCFA, plus a 30% markup. */
+/** Client billing is the combined provider usage estimate converted to FCFA, plus a 20% markup. */
 export function calculateClientPriceFcfa(costUsd:number,usdToEur:number,eurToFcfa:number):number {
   assertNonNegative(costUsd,'Le coût fournisseur');
   assertPositive(usdToEur,'Le taux USD/EUR');

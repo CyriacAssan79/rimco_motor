@@ -72,7 +72,7 @@ begin
   end if;
   final_usd := p_actual_cost_usd;
   final_eur := final_usd * p_usd_to_eur;
-  client_price_fcfa := case when final_usd > 0 then ceil(final_eur * p_eur_to_fcfa * 1.30) else entry.price_fcfa end;
+  client_price_fcfa := case when final_usd > 0 then ceil(final_eur * p_eur_to_fcfa * 1.20) else entry.price_fcfa end;
   update public.usage_ledger
     set status='charged', cost_usd=final_usd, cost_eur=final_eur,
         cost_real_fcfa=final_eur*p_eur_to_fcfa,

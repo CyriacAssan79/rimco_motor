@@ -58,6 +58,7 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
   const estimatedPrice = selectedModel?.estimatedPricesFcfa?.[String(durationS)];
   const priceLabel = mode === 'live' && estimatedPrice ? `≈ ${formatFcfa(estimatedPrice)}` : mode === 'mock' ? 'Simulation' : '—';
   const durationOptions = mode === 'mock' ? [5] : getRoutedDurations(tier);
+  const generationActive = Boolean(job && !['ready', 'failed'].includes(job.status));
 
   useEffect(() => {
     if (selectedModel && !selectedModel.formats.includes(format)) setFormat(selectedModel.formats[0] ?? '16:9');
@@ -219,7 +220,8 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
           {mode === 'mock' && <p className="sm:col-span-2 rounded-md bg-[#fbf6ed] p-3 text-xs text-[#765d39]">La simulation valide le parcours sans contacter fal.ai ni produire de vraie vidéo.</p>}
           <p className="text-xs text-[#716d66]">Le modèle respecte la photo du véhicule. Les mouvements, le rythme et les temps forts sont construits automatiquement dans un seul plan continu.</p>
           {error && <p role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>}
-          <button disabled={busy || !assetId || mode === 'live' && (!routedModel || !estimatedPrice)} className="w-full rounded-md bg-[#c51e1c] py-3.5 text-sm font-semibold text-white transition hover:bg-[#a71715] disabled:cursor-not-allowed disabled:opacity-50">{busy ? 'Préparation…' : `Générer ma vidéo · ${priceLabel}`}</button>
+          <button disabled={busy || generationActive || !assetId || mode === 'live' && (!routedModel || !estimatedPrice)} aria-describedby={generationActive ? 'generation-lock-message' : undefined} className="w-full rounded-md bg-[#c51e1c] py-3.5 text-sm font-semibold text-white transition hover:bg-[#a71715] disabled:cursor-not-allowed disabled:opacity-50">{busy ? 'Préparation…' : generationActive ? 'Génération en cours…' : `Générer ma vidéo · ${priceLabel}`}</button>
+          {generationActive && <p id="generation-lock-message" role="status" className="rounded-md bg-[#fbf6ed] p-3 text-xs leading-5 text-[#765d39]">Une génération est déjà en cours. Le bouton sera réactivé lorsque la vidéo sera prête ou si la génération échoue.</p>}
         </section>
       </form>
 
@@ -229,14 +231,16 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
           <div className="mt-5 grid aspect-video place-items-center overflow-hidden border border-[#e2e2e5] bg-[#f1f1f2]">{selectedAsset?.previewUrl ? <Image src={selectedAsset.previewUrl} alt={mode === 'mock' ? 'Illustration de démonstration — le rendu réel suivra la photo du véhicule envoyée à Fal' : `Aperçu de ${selectedAsset.make ?? ''} ${selectedAsset.model ?? ''}`} width={640} height={360} unoptimized className="size-full object-cover" /> : <span className="text-4xl text-[#c51e1c]" aria-hidden="true">▷</span>}</div>
           <h3 className="mt-4 text-sm font-semibold">{selectedAsset ? `${selectedAsset.make ?? 'Véhicule'} ${selectedAsset.model ?? ''}` : 'Choisissez un véhicule'}</h3>
           <div className="mt-4 space-y-2 border-t border-[#e2e2e5] pt-4 text-xs">
+            {title.trim() && <div><span className="text-[#77736d]">Titre</span><br /><b>{title.trim()}</b></div>}
             <div><span className="text-[#77736d]">Scène choisie</span><br /><b>{selectedScene?.label ?? 'Choisissez une scène'}</b></div>
             <div><span className="text-[#77736d]">Concept</span><br /><b>{selectedConcept?.title}</b></div>
+            {mode === 'live' && selectedModel && <div><span className="text-[#77736d]">Modèle prévu</span><br /><b>{selectedModel.name}</b></div>}
             <div className="flex justify-between border-t border-[#eeeae4] pt-3"><span className="text-[#77736d]">Clip continu</span><b>{durationS} secondes</b></div>
             <div className="flex justify-between"><span className="text-[#77736d]">Montant probable</span><b>{priceLabel}</b></div>
             {mode === 'live' && <p className="text-[10px] leading-4 text-[#88847d]">Estimation indicative, selon le modèle et sa durée. Le montant final peut varier.</p>}
           </div>
         </section>
-        {job && <section className="rounded-md border border-black/[.055] bg-white p-5"><div className="flex items-center justify-between"><h3 className="text-sm font-semibold">État de la vidéo</h3><span className="text-[10px] font-semibold uppercase text-[#a47731]">{job.status === 'ready' ? 'Prête' : job.status === 'failed' ? 'Échec' : 'En cours'}</span></div><p className="mt-2 text-xs text-[#88847d]">{job.status === 'ready' ? 'Votre vidéo est prête à consulter.' : job.error ?? 'Actualisation automatique toutes les 10 secondes.'}</p>{job.prompt && <details className="mt-4 border-t border-[#eeeae4] pt-3"><summary className="cursor-pointer text-xs font-semibold text-[#716d66]">Voir le prompt généré</summary><p className="mt-2 whitespace-pre-wrap text-xs leading-5 text-[#77736d]">{job.prompt}</p></details>}{job.status === 'ready' && <Link href="/bibliotheque" className="mt-4 block rounded-lg bg-[#c51e1c] px-3 py-2.5 text-center text-xs font-semibold text-white">Voir ma vidéo →</Link>}</section>}
+        {job && <section className="rounded-md border border-black/[.055] bg-white p-5"><div className="flex items-center justify-between"><h3 className="text-sm font-semibold">État de la vidéo</h3><span className="text-[10px] font-semibold uppercase text-[#a47731]">{job.status === 'ready' ? 'Prête' : job.status === 'failed' ? 'Échec' : 'En cours'}</span></div><p className="mt-2 text-xs text-[#88847d]">{job.status === 'ready' ? 'Votre vidéo est prête à consulter.' : job.status === 'failed' ? job.error ?? 'La génération a échoué. Vous pouvez relancer une nouvelle vidéo.' : 'Une génération est déjà en cours. Le Studio actualise son état automatiquement toutes les 10 secondes.'}</p>{job.prompt && <details className="mt-4 border-t border-[#eeeae4] pt-3"><summary className="cursor-pointer text-xs font-semibold text-[#716d66]">Voir le prompt généré</summary><p className="mt-2 whitespace-pre-wrap text-xs leading-5 text-[#77736d]">{job.prompt}</p></details>}{job.status === 'ready' && <Link href="/bibliotheque" className="mt-4 block rounded-lg bg-[#c51e1c] px-3 py-2.5 text-center text-xs font-semibold text-white">Voir ma vidéo →</Link>}</section>}
         <section className="rounded-md border border-[#eee3d2] bg-[#fbf6ed] p-5"><p className="text-xs font-semibold text-[#765d39]">Fidélité au véhicule</p><p className="mt-2 text-xs leading-5 text-[#8d806b]">La photo fixe le modèle, la couleur et les proportions. Pour un premier essai, gardez une scène simple et sans figurant.</p></section>
       </aside>
     </div>
