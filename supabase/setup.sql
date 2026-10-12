@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 11109)
-Total output lines: 567
-
 -- RIMCO Studio initial schema. Safe to apply repeatedly on a clean or existing V1 database.
 create extension if not exists pgcrypto;
 
@@ -243,7 +240,52 @@ begin
   return new;
 end $$;
 drop trigger if exists guard_validation_update_trigger on public.validations;
-create trigger guard_validation_update_trigger before update on public.validations for …1109 tokens truncated…ts(select 1 from public.assets a where a.path=name and a.kind='audio' and a.status='validée')) or
+create trigger guard_validation_update_trigger before update on public.validations for each row execute function public.guard_validation_update();
+drop policy if exists ledger_admin_read on public.usage_ledger;
+create policy ledger_admin_read on public.usage_ledger for select to authenticated using(public.is_admin());
+drop policy if exists comparisons_admin_all on public.comparisons;
+create policy comparisons_admin_all on public.comparisons for all to authenticated using(public.is_admin()) with check(public.is_admin());
+
+-- Expose model choices without revealing provider unit costs to collaborators or validators.
+create or replace view public.model_catalog with (security_invoker=true) as
+  select id,name,tier,adapter_family,mode,allowed_durations,allowed_formats,is_active,is_default from public.ai_models;
+revoke all on public.ai_models from anon,authenticated;
+grant select on public.ai_models to authenticated;
+grant select on public.model_catalog to authenticated;
+
+-- Storage objects are private. Uploads go into a first-level folder named with auth.uid().
+insert into storage.buckets(id,name,public,file_size_limit,allowed_mime_types) values
+  ('assets','assets',false,26214400,array['image/jpeg','image/png','image/webp']::text[]),
+  ('videos','videos',false,104857600,array['video/mp4']::text[]),
+  ('audio','audio',false,26214400,array['audio/mpeg','audio/wav','audio/mp4']::text[]),
+  ('brand','brand',false,26214400,array['image/jpeg','image/png','image/webp']::text[])
+on conflict(id) do update set public=false,file_size_limit=excluded.file_size_limit,allowed_mime_types=excluded.allowed_mime_types;
+drop policy if exists rimco_storage_read on storage.objects;
+create policy rimco_storage_read on storage.objects for select to authenticated using(
+  public.is_admin() or
+  (bucket_id='brand' and (storage.foldername(name))[1]=auth.uid()::text) or
+  (bucket_id='brand' and exists(select 1 from public.assets a join public.profiles p on p.id=auth.uid() and p.brand_id=a.brand_id and p.is_active where a.path=name and a.kind='logo' and a.status='validée')) or
+  (bucket_id in ('assets','audio') and (storage.foldername(name))[1]=auth.uid()::text) or
+  (bucket_id='assets' and exists(select 1 from public.assets a where a.path=name and a.status='validée')) or
+  (bucket_id='audio' and exists(select 1 from public.assets a where a.path=name and a.kind='audio' and a.status='validée')) or
+  (bucket_id='videos' and exists(select 1 from public.videos v join public.video_versions vv on vv.video_id=v.id where v.user_id=auth.uid() and v.status='approved' and vv.final_path=name)) or
+  (bucket_id='videos' and exists(select 1 from public.profiles p join public.videos v on v.brand_id=p.brand_id and v.department=p.department and v.status='review' join public.video_versions vv on vv.video_id=v.id where p.id=auth.uid() and p.role='valideur' and p.is_active and vv.final_path=name))
+);
+drop policy if exists rimco_storage_upload on storage.objects;
+create policy rimco_storage_upload on storage.objects for insert to authenticated with check(bucket_id in ('assets','audio','brand') and (storage.foldername(name))[1]=auth.uid()::text);
+drop policy if exists rimco_storage_update on storage.objects;
+create policy rimco_storage_update on storage.objects for update to authenticated using(bucket_id in ('assets','audio','brand') and (storage.foldername(name))[1]=auth.uid()::text) with check(bucket_id in ('assets','audio','brand') and (storage.foldername(name))[1]=auth.uid()::text);
+drop policy if exists rimco_storage_delete on storage.objects;
+create policy rimco_storage_delete on storage.objects for delete to authenticated using(public.is_admin() or (bucket_id in ('assets','audio','brand') and (storage.foldername(name))[1]=auth.uid()::text));
+-- Validators preview the composed file once it is ready for review.
+drop policy if exists rimco_storage_read on storage.objects;
+create policy rimco_storage_read on storage.objects for select to authenticated using(
+  public.is_admin() or
+  (bucket_id='brand' and (storage.foldername(name))[1]=auth.uid()::text) or
+  (bucket_id='brand' and exists(select 1 from public.assets a join public.profiles p on p.id=auth.uid() and p.brand_id=a.brand_id and p.is_active where a.path=name and a.kind='logo' and a.status='validée')) or
+  (bucket_id in ('assets','audio') and (storage.foldername(name))[1]=auth.uid()::text) or
+  (bucket_id='assets' and exists(select 1 from public.assets a where a.path=name and a.status='validée')) or
+  (bucket_id='audio' and exists(select 1 from public.assets a where a.path=name and a.kind='audio' and a.status='validée')) or
   (bucket_id='videos' and exists(select 1 from public.videos v join public.video_versions vv on vv.video_id=v.id where v.user_id=auth.uid() and v.status='approved' and vv.final_path=name)) or
   (bucket_id='videos' and exists(select 1 from public.profiles p join public.videos v on v.brand_id=p.brand_id and v.department=p.department and v.status='review' join public.video_versions vv on vv.video_id=v.id where p.id=auth.uid() and p.role='valideur' and p.is_active and vv.final_path=name))
 );

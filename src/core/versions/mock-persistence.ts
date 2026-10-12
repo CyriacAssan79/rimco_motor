@@ -8,6 +8,8 @@ import { env } from '@/env';
 import { mockStatusAt } from './mock-status';
 import type { CreateVersionInput } from './live';
 import { calculateClientPriceFcfa } from '@/core/pricing';
+import { getSceneConceptDirection } from '@/core/scenes/concepts';
+import { getScenePreset, inferVehicleCategory } from '@/core/scenes/catalog';
 
 export const MOCK_VIDEO_PATH = 'mock/mock-video.mp4';
 
@@ -27,7 +29,9 @@ export async function createPersistedMockVersion(actor: Actor, input: CreateVers
   if (modelError || !model) throw new HttpError(503, `Aucun modèle par défaut actif n’est configuré pour le niveau ${tier}.`);
   const priceFcfa = calculateClientPriceFcfa(5 * Number(model.price_usd_per_second), env.USD_TO_EUR_RATE, env.EUR_TO_FCFA);
   const fcfaPerSecond = priceFcfa / 5;
-  const brief = buildBrief(input.description || 'Vidéo automobile réaliste et élégante.', { vehicle_asset_id: input.assetId, vehicle_category: input.vehicleCategory, scene_preset_id: input.scenePresetId, vehicle_action: input.vehicleAction, user_direction: input.description, camera_movement: input.cameraMovement, mood: input.mood, location: input.location, setting: input.setting, character: input.character || 'Aucun personnage', lighting: input.lighting, format: input.format, duration_s: input.durationS, complexity: input.complexity });
+  const selectedScene = input.scenePresetId ? getScenePreset(input.scenePresetId) : undefined;
+  const userDirection = [getSceneConceptDirection(selectedScene, input.conceptId), input.description].filter(Boolean).join(' ').slice(0, 500);
+  const brief = buildBrief(userDirection || 'Vidéo automobile réaliste et élégante.', { vehicle_asset_id: input.assetId, vehicle_category: inferVehicleCategory(asset.make, asset.model), scene_preset_id: input.scenePresetId, vehicle_action: selectedScene?.vehicleAction ?? input.vehicleAction, user_direction: userDirection, camera_movement: selectedScene?.cameraMovement ?? input.cameraMovement, mood: selectedScene?.mood ?? input.mood, location: selectedScene?.location ?? input.location, setting: selectedScene?.setting ?? input.setting, character: input.character || selectedScene?.character || 'Aucun personnage', lighting: selectedScene?.lighting ?? input.lighting, format: input.format, duration_s: input.durationS, complexity: input.complexity });
   const prompt = briefToPrompt(brief, 'mock');
   const title = input.title || `${brief.vehicle_description.slice(0, 90)} · Simulation`;
   const { data: video, error: videoError } = await admin.from('videos').insert({ user_id: actor.id, brand_id: actor.brandId, title, department: actor.department, status: 'generating' }).select('id').single();
