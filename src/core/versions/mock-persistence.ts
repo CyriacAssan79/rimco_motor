@@ -10,6 +10,7 @@ import type { CreateVersionInput } from './live';
 import { calculateClientPriceFcfa } from '@/core/pricing';
 import { getSceneConceptDirection } from '@/core/scenes/concepts';
 import { getScenePreset, inferVehicleCategory } from '@/core/scenes/catalog';
+import { reserveGenerationCost, settleUsageCost } from '@/core/billing/ledger';
 
 export const MOCK_VIDEO_PATH = 'mock/mock-video.mp4';
 
@@ -28,7 +29,6 @@ export async function createPersistedMockVersion(actor: Actor, input: CreateVers
   const { data: model, error: modelError } = await admin.from('ai_models').select('id,price_usd_per_second').eq('tier', tier).eq('is_default', true).eq('is_active', true).single();
   if (modelError || !model) throw new HttpError(503, `Aucun modèle par défaut actif n’est configuré pour le niveau ${tier}.`);
   const priceFcfa = calculateClientPriceFcfa(5 * Number(model.price_usd_per_second), env.USD_TO_EUR_RATE, env.EUR_TO_FCFA);
-  const fcfaPerSecond = priceFcfa / 5;
   const selectedScene = input.scenePresetId ? getScenePreset(input.scenePresetId) : undefined;
   const userDirection = [getSceneConceptDirection(selectedScene, input.conceptId), input.description].filter(Boolean).join(' ').slice(0, 500);
   const brief = buildBrief(userDirection || 'Vidéo automobile réaliste et élégante.', { vehicle_asset_id: input.assetId, vehicle_category: inferVehicleCategory(asset.make, asset.model), scene_preset_id: input.scenePresetId, vehicle_action: selectedScene?.vehicleAction ?? input.vehicleAction, user_direction: userDirection, camera_movement: selectedScene?.cameraMovement ?? input.cameraMovement, mood: selectedScene?.mood ?? input.mood, location: selectedScene?.location ?? input.location, setting: selectedScene?.setting ?? input.setting, character: input.character || selectedScene?.character || 'Aucun personnage', lighting: selectedScene?.lighting ?? input.lighting, format: input.format, duration_s: input.durationS, complexity: input.complexity });
@@ -44,18 +44,17 @@ export async function createPersistedMockVersion(actor: Actor, input: CreateVers
     await admin.from('videos').delete().eq('id', video.id);
     throw new HttpError(503, 'Impossible de créer la simulation. Réessayez.');
   }
-  const { data: ledgerId, error: ledgerError } = await admin.rpc('reserve_budget', {
-    p_user_id: actor.id, p_version_id: version.id, p_model_id: model.id, p_seconds: 5,
+  const { data: ledgerId, error: ledgerError } = await reserveGenerationCost(admin, {
+    userId: actor.id, versionId: version.id, modelId: model.id, seconds: 5,
     // Simulation never reaches fal.ai, so it must not reserve provider budget.
-    p_price_usd_second: 0, p_usd_to_eur: env.USD_TO_EUR_RATE,
-    p_eur_to_fcfa: env.EUR_TO_FCFA, p_price_fcfa: priceFcfa,
-    p_department: actor.department, p_applied_fcfa_second: fcfaPerSecond,
+    priceUsdPerSecond: 0, usdToEur: env.USD_TO_EUR_RATE,
+    eurToFcfa: env.EUR_TO_FCFA, priceFcfa, department: actor.department,
   });
   if (ledgerError || !ledgerId) {
     await admin.from('videos').delete().eq('id', video.id);
     throw new HttpError(503, 'Impossible de réserver le suivi de coût simulé. La génération a été annulée.');
   }
-  const { error: settleError } = await admin.rpc('settle_budget', { p_entry_id: ledgerId, p_outcome: 'charged', p_actual_cost_usd: 0, p_usd_to_eur: env.USD_TO_EUR_RATE, p_eur_to_fcfa: env.EUR_TO_FCFA });
+  const { error: settleError } = await settleUsageCost(admin, { entryId: ledgerId, outcome: 'charged', actualCostUsd: 0, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA });
   if (settleError) throw new HttpError(503, 'La simulation est créée, mais son coût doit être réconcilié dans le journal.');
   return { id: version.id, status: 'queued' as const, prompt, estimatedPriceFcfa: priceFcfa, version: version.number };
 }

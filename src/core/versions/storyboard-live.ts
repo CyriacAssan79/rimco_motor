@@ -9,6 +9,7 @@ import { calculateClientPriceFcfa } from '@/core/pricing';
 import { shotToPrompt, type StoryboardShot } from '@/core/storyboard';
 import { assembleShotMontage } from '@/core/postproduction/pipeline';
 import type { CreateVersionInput } from './live';
+import { reserveGenerationCost, settleUsageCost } from '@/core/billing/ledger';
 
 const SHOT_DURATION_SECONDS = 3;
 const SHOT_COUNT = 2;
@@ -67,11 +68,10 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
     throw new HttpError(500, 'Impossible de créer la version de la vidéo. Réessayez.');
   }
 
-  const { data: ledgerId, error: reserveError } = await admin.rpc('reserve_budget', {
-    p_user_id: actor.id, p_version_id: version.id, p_model_id: model.id, p_seconds: SHOT_COUNT * SHOT_DURATION_SECONDS,
-    p_price_usd_second: Number(model.price_usd_per_second), p_usd_to_eur: env.USD_TO_EUR_RATE,
-    p_eur_to_fcfa: env.EUR_TO_FCFA, p_price_fcfa: priceFcfa,
-    p_department: actor.department, p_applied_fcfa_second: priceFcfa / (SHOT_COUNT * SHOT_DURATION_SECONDS),
+  const { data: ledgerId, error: reserveError } = await reserveGenerationCost(admin, {
+    userId: actor.id, versionId: version.id, modelId: model.id, seconds: SHOT_COUNT * SHOT_DURATION_SECONDS,
+    priceUsdPerSecond: Number(model.price_usd_per_second), usdToEur: env.USD_TO_EUR_RATE,
+    eurToFcfa: env.EUR_TO_FCFA, priceFcfa, department: actor.department,
   });
   if (reserveError || !ledgerId) {
     await Promise.all([admin.from('video_versions').delete().eq('id', version.id), admin.from('videos').delete().eq('id', video.id)]);
@@ -85,7 +85,7 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
   const { error: shotsInsertError } = await admin.from('video_shots').insert(shotRows);
   if (shotsInsertError) {
     await Promise.all([
-      admin.rpc('settle_budget', { p_entry_id: ledgerId, p_outcome: 'released', p_actual_cost_usd: 0, p_usd_to_eur: env.USD_TO_EUR_RATE, p_eur_to_fcfa: env.EUR_TO_FCFA }),
+      settleUsageCost(admin, { entryId: ledgerId, outcome: 'released', actualCostUsd: 0, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA }),
       admin.from('video_versions').update({ status: 'failed', error_message: 'Impossible d’enregistrer les plans.' }).eq('id', version.id),
       admin.from('videos').update({ status: 'failed' }).eq('id', video.id),
     ]);
@@ -107,7 +107,7 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
   }
   if (!submitted) {
     await Promise.all([
-      admin.rpc('settle_budget', { p_entry_id: ledgerId, p_outcome: 'released', p_actual_cost_usd: 0, p_usd_to_eur: env.USD_TO_EUR_RATE, p_eur_to_fcfa: env.EUR_TO_FCFA }),
+      settleUsageCost(admin, { entryId: ledgerId, outcome: 'released', actualCostUsd: 0, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA }),
       admin.from('video_versions').update({ status: 'failed', error_message: 'Aucun plan n’a pu démarrer.' }).eq('id', version.id),
       admin.from('videos').update({ status: 'failed' }).eq('id', video.id),
     ]);
@@ -165,9 +165,8 @@ export async function refreshLiveStoryboard(versionId: string, actor: Actor) {
   if (ledger?.status === 'reserved') {
     const outcome = completedShots > 0 ? 'charged' : 'released';
     const actualCostUsd = completedShots * SHOT_DURATION_SECONDS * priceUsdPerSecond;
-    const { error: settleError } = await admin.rpc('settle_budget', {
-      p_entry_id: ledger.id, p_outcome: outcome, p_actual_cost_usd: actualCostUsd,
-      p_usd_to_eur: env.USD_TO_EUR_RATE, p_eur_to_fcfa: env.EUR_TO_FCFA,
+    const { error: settleError } = await settleUsageCost(admin, {
+      entryId: ledger.id, outcome, actualCostUsd, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA,
     });
     if (settleError) throw new HttpError(503, 'La consommation fal doit être réconciliée avant de terminer le montage.');
   }
