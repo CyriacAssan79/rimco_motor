@@ -25,12 +25,12 @@ const iconPaths: Record<string, string> = {
 
 function NavLink({ item, pathname, mobile = false }: { item: (typeof nav)[number]; pathname: string; mobile?: boolean }) {
   const active = pathname === item.href || (item.href !== '/' && pathname.startsWith(item.href));
-  return <Link aria-current={active ? 'page' : undefined} href={item.href} className={`${mobile ? 'shrink-0' : 'w-full'} flex items-center gap-3 rounded-md px-3 py-2.5 text-xs font-medium ${active ? 'bg-[#fae9e8] text-[#b51d19]' : 'text-[#55545a] hover:bg-[#f2f2f3] hover:text-[#17171a]'}`}>
+  return <Link aria-current={active ? 'page' : undefined} href={item.href} className={`${mobile ? 'min-h-11 shrink-0' : 'min-h-11 w-full'} flex items-center gap-3 rounded-md px-3 py-2.5 text-xs font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#c51e1c] ${active ? 'bg-[#fae9e8] text-[#b51d19]' : 'text-[#55545a] hover:bg-[#f2f2f3] hover:text-[#17171a]'}`}>
     <svg aria-hidden="true" viewBox="0 0 24 24" className="size-[17px] shrink-0 fill-none stroke-current" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d={iconPaths[item.icon]} /></svg>{item.label}
   </Link>;
 }
 
-export function AppShell({ children, mode: _mode }: { children: React.ReactNode; mode: 'mock' | 'live' }) {
+export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   if (pathname === '/connexion') return <>{children}</>;
   const page = nav.find((item) => item.href === pathname)?.label ?? 'Studio';

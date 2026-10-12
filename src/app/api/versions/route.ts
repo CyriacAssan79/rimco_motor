@@ -81,7 +81,7 @@ export async function POST(request: Request) {
     const brief = buildBrief(userDirection || 'Vidéo automobile réaliste et élégante.', { vehicle_asset_id: input.assetId, vehicle_category: input.vehicleCategory, scene_preset_id: input.scenePresetId, vehicle_action: selectedScene?.vehicleAction ?? input.vehicleAction, user_direction: userDirection, camera_movement: selectedScene?.cameraMovement ?? input.cameraMovement, mood: selectedScene?.mood ?? input.mood, location: selectedScene?.location ?? input.location, setting: selectedScene?.setting ?? input.setting, character: input.character || selectedScene?.character || 'Aucun personnage', lighting: selectedScene?.lighting ?? input.lighting, format: input.format, duration_s: input.durationS, complexity: input.complexity });
     if (env.NEXT_PUBLIC_SUPABASE_URL) return NextResponse.json(await createPersistedMockVersion(actor, input), { status: 201 });
     const prompt = briefToPrompt(brief, 'mock');
-    const imageUrl = '/mock/vehicle.svg';
+    const imageUrl = '/mock/mock-video.svg';
     const { requestId } = await mockVideoProvider.submit({ prompt, imageUrl, durationS: 5, format: input.format });
     const id = crypto.randomUUID();
     const record = putVersion({ id, videoId: crypto.randomUUID(), title: input.title || undefined, number: 1, userId: actor.id, brief, prompt, status: 'queued', requestId, priceFcfa: estimatePriceFcfa(5, input.tier), createdAt: new Date().toISOString() });

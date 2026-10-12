@@ -1,40 +1,90 @@
 import { expect, test } from '@playwright/test';
 
+const mockWithoutSupabase = process.env.E2E_MOCK_NO_SUPABASE === '1';
 const adminEmail = process.env.E2E_ADMIN_EMAIL ?? 'admin@rimco.test';
 const adminPassword = process.env.E2E_ADMIN_PASSWORD;
-if (!adminPassword) throw new Error('E2E_ADMIN_PASSWORD doit être préparé par le setup global Playwright.');
 const creatorEmail = process.env.E2E_CREATOR_EMAIL ?? 'collaborateur@rimco.test';
-const testUserPassword = adminPassword;
 
-async function signIn(page: import('@playwright/test').Page, email: string, password: string) {
-  await page.goto('/connexion');
-  await page.getByLabel('Adresse e-mail').fill(email);
-  await page.getByLabel('Mot de passe').fill(password);
-  await page.getByRole('button', { name: 'Se connecter' }).click();
-  await expect(page).toHaveURL('/', { timeout: 10_000 });
+if (mockWithoutSupabase) {
+  test('le studio de simulation est utilisable sans compte Supabase', async ({ page }) => {
+    await page.goto('/studio');
+
+    await expect(page.getByRole('heading', { name: 'Créer une vidéo' })).toBeVisible();
+    await expect(page.getByText('Mode simulation', { exact: false })).toBeVisible();
+    await expect(page.getByText('2. Choisissez une scène')).toBeVisible();
+    await expect(page.getByText('3. Choisissez un concept')).toBeVisible();
+    await expect(page.getByRole('button', { name: /Haval H6/ })).toBeVisible();
+    await expect.poll(() => page.getByRole('img', { name: /Illustration de simulation.*Haval H6/ }).evaluate((image: HTMLImageElement) => image.naturalWidth)).toBeGreaterThan(0);
+  });
+
+  test('une génération simulée se consulte et se télécharge depuis la bibliothèque', async ({ page }) => {
+    test.setTimeout(90_000);
+    await page.goto('/studio');
+    const title = `Essai RIMCO ${Date.now()}`;
+
+    const logoToggle = page.getByRole('checkbox', { name: /Ajouter le logo RIMCO/ });
+    await expect(logoToggle).toBeChecked();
+    await logoToggle.uncheck();
+    await expect(logoToggle).not.toBeChecked();
+    await logoToggle.check();
+
+    await page.getByLabel('Titre de la vidéo').fill(title);
+    await page.getByLabel(/Précision complémentaire/).fill('Une lumière naturelle douce sur un boulevard calme.');
+    const createRequest = page.waitForRequest((request) => request.url().endsWith('/api/versions') && request.method() === 'POST');
+    await page.getByRole('button', { name: /Générer ma vidéo/ }).click();
+    expect((await createRequest).postDataJSON()).toMatchObject({ overlayLogo: true, title });
+
+    await expect(page.getByText('Votre vidéo est prête à consulter.')).toBeVisible({ timeout: 65_000 });
+    await page.getByRole('link', { name: 'Voir ma vidéo' }).click();
+    await expect(page.getByRole('heading', { name: title, exact: true })).toBeVisible();
+    await expect(page.locator('video[aria-label^="Aperçu de"]').first()).toBeVisible();
+
+    const download = page.waitForEvent('download');
+    await page.getByRole('link', { name: 'Télécharger le MP4' }).first().click();
+    await expect(await download).toBeTruthy();
+  });
+} else {
+  if (!adminPassword) throw new Error('E2E_ADMIN_PASSWORD doit être préparé par le setup global Playwright.');
+
+  async function signIn(page: import('@playwright/test').Page, email: string, password: string) {
+    await page.goto('/connexion');
+    await page.getByLabel('Adresse e-mail').fill(email);
+    await page.getByLabel('Mot de passe').fill(password);
+    await page.getByRole('button', { name: 'Se connecter' }).click();
+    await expect(page).toHaveURL('/', { timeout: 10_000 });
+  }
+
+  test('connexion administrateur puis accès au studio de création', async ({ page }) => {
+    await signIn(page, adminEmail, adminPassword);
+    await expect(page).toHaveURL('/');
+    await expect(page.getByRole('heading', { name: 'De la demande au MP4, en quelques minutes' })).toBeVisible();
+    await page.getByRole('link', { name: 'Créer une vidéo' }).click();
+    await expect(page.getByRole('heading', { name: 'Créer une vidéo' })).toBeVisible();
+    await expect(page.getByText('1. Choisissez le véhicule')).toBeVisible();
+    await expect(page.getByText('2. Choisissez une scène')).toBeVisible();
+    await expect(page.getByText('3. Choisissez un concept')).toBeVisible();
+  });
+
+  test('collaborateur génère, visionne et télécharge la vidéo simulée', async ({ page }) => {
+    test.setTimeout(90_000);
+    await signIn(page, creatorEmail, adminPassword);
+    await page.goto('/studio');
+    const logoToggle = page.getByRole('checkbox', { name: /Ajouter le logo RIMCO/ });
+    await expect(logoToggle).toBeChecked();
+    await logoToggle.uncheck();
+    await expect(logoToggle).not.toBeChecked();
+    await logoToggle.check();
+    await page.getByLabel('Titre de la vidéo').fill('Essai E2E');
+    await page.getByLabel(/Précision complémentaire/).fill('Une Haval H6 bleue roule doucement dans le Plateau à Abidjan.');
+    const createRequest = page.waitForRequest((request) => request.url().endsWith('/api/versions') && request.method() === 'POST');
+    await page.getByRole('button', { name: /Générer ma vidéo/ }).click();
+    expect((await createRequest).postDataJSON().overlayLogo).toBe(true);
+    await expect(page.getByText('Votre vidéo est prête à consulter.')).toBeVisible({ timeout: 65_000 });
+    await page.getByRole('link', { name: 'Voir ma vidéo' }).click();
+    await page.goto('/bibliotheque');
+    await expect(page.locator('video[aria-label^="Aperçu de"]').first()).toBeVisible();
+    const download = page.waitForEvent('download');
+    await page.getByRole('link', { name: 'Télécharger le MP4' }).first().click();
+    await expect(await download).toBeTruthy();
+  });
 }
-
-test('connexion administrateur puis accès au studio de création',async({page})=>{await signIn(page,adminEmail,adminPassword);await expect(page).toHaveURL('/');await expect(page.getByRole('heading',{name:'De la demande au MP4, en quelques minutes'})).toBeVisible();await page.getByRole('link',{name:'Créer une vidéo'}).click();await expect(page.getByRole('heading',{name:'Créer un montage test'})).toBeVisible();await expect(page.getByLabel('Intention générale')).toBeVisible();await expect(page.getByRole('heading',{name:'Véhicule de référence'})).toBeVisible();await expect(page.getByRole('heading',{name:'Plans de la vidéo'})).toBeVisible()});
-
-test('collaborateur génère, visionne et télécharge la vidéo simulée',async({page})=>{
- test.setTimeout(90_000);
- await signIn(page, creatorEmail, testUserPassword);
- await page.goto('/studio');
- const logoToggle = page.getByRole('checkbox', { name: /Ajouter le logo RIMCO/ });
- await expect(logoToggle).toBeChecked();
- await logoToggle.uncheck();
- await expect(logoToggle).not.toBeChecked();
- await logoToggle.check();
- await page.getByLabel('Intention générale').fill('Un Haval H6 bleu roule doucement dans le Plateau à Abidjan.');
- await expect(page.getByText('Haval H6')).toBeVisible();
- const createRequest = page.waitForRequest((request) => request.url().endsWith('/api/versions') && request.method() === 'POST');
- await page.getByRole('button',{name:/Générer ma vidéo/}).click();
- expect((await createRequest).postDataJSON().overlayLogo).toBe(true);
- await expect(page.getByText('Votre vidéo est prête à consulter.')).toBeVisible({timeout:65_000});
- await page.getByRole('link',{name:'Voir ma vidéo'}).click();
- await page.goto('/bibliotheque');
- await expect(page.locator('video[aria-label^="Aperçu de"]').first()).toBeVisible();
- const download=page.waitForEvent('download');
- await page.getByRole('link',{name:'Télécharger'}).first().click();
- await expect(await download).toBeTruthy();
-});

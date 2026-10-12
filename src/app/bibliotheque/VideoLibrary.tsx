@@ -10,6 +10,12 @@ function formatVideoPrice(video: Video) {
   const amount = [video.priceFcfa, video.estimatedPriceFcfa, video.price_fcfa].find((value): value is number => typeof value === 'number');
   return amount === undefined ? 'Montant indisponible' : `${new Intl.NumberFormat('fr-FR').format(amount)} FCFA`;
 }
+function formatVideoDate(value?: string) {
+  if (!value) return 'Date indisponible';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Date indisponible';
+  return new Intl.DateTimeFormat('fr-FR', { dateStyle: 'short', timeStyle: 'short', timeZone: 'Africa/Abidjan' }).format(date);
+}
 const isVideoInProgress = (status: string) => ['queued', 'generating', 'postprocessing'].includes(status);
 
 export function VideoLibrary() {
@@ -101,8 +107,8 @@ export function VideoLibrary() {
 
   return <>
     <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-      <div className="flex gap-1 overflow-x-auto border border-[#e2e2e5] bg-white p-1">{tabs.map(([value, label]) => <button key={value} onClick={() => setFilter(value)} className={`whitespace-nowrap px-3 py-2 text-xs font-semibold ${filter === value ? 'bg-[#fae9e8] text-[#9c2822]' : 'text-[#626269] hover:bg-[#f4f4f5]'}`}>{label}</button>)}</div>
-      <input aria-label="Rechercher une vidéo" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Rechercher…" className="w-full border border-[#e2e2e5] bg-white px-4 py-2.5 text-xs outline-none focus:border-[#c51e1c] sm:w-64" />
+      <div className="flex gap-1 overflow-x-auto border border-[#e2e2e5] bg-white p-1">{tabs.map(([value, label]) => <button type="button" key={value} onClick={() => setFilter(value)} aria-pressed={filter === value} className={`min-h-11 whitespace-nowrap px-3 py-2 text-xs font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#c51e1c] ${filter === value ? 'bg-[#fae9e8] text-[#9c2822]' : 'text-[#626269] hover:bg-[#f4f4f5]'}`}>{label}</button>)}</div>
+      <input aria-label="Rechercher une vidéo" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Rechercher…" className="min-h-11 w-full border border-[#e2e2e5] bg-white px-4 py-2.5 text-xs outline-none focus:border-[#c51e1c] sm:w-64" />
     </div>
     {filtered.length > 0 && <div className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-3 border-y border-[#e2e2e5] bg-white px-4 py-3">
       <label className="inline-flex min-h-11 cursor-pointer items-center gap-2 text-xs font-semibold text-[#333338]">
@@ -118,7 +124,7 @@ export function VideoLibrary() {
     </div>}
     {error && <p role="alert" className="mb-5 border border-[#f0c9c6] bg-[#fae9e7] p-4 text-sm text-[#9d352e]">{error}</p>}
     {notice && <p role="status" className="mb-5 border border-[#d7e7da] bg-[#f2f8f3] p-4 text-sm text-[#315c39]">{notice}</p>}
-    {filtered.length === 0 ? <div className="border border-dashed border-[#d2d2d6] bg-white px-6 py-16 text-center"><svg aria-hidden="true" viewBox="0 0 24 24" className="mx-auto size-8 fill-none stroke-[#c51e1c]" strokeWidth="1.5"><path d="M4 5h16v14H4zM10 9l5 3-5 3z" /></svg><h2 className="mt-4 text-sm font-semibold">Aucune vidéo dans cette vue</h2><p className="mx-auto mt-2 max-w-md text-xs leading-5 text-[#626269]">Les vidéos générées apparaîtront ici avec leur aperçu, leur statut et leur prix.</p><Link href="/studio" className="mt-5 inline-flex rounded-sm bg-[#c51e1c] px-4 py-2.5 text-xs font-semibold text-white hover:bg-[#a71715]">Créer une vidéo</Link></div> : <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+    {filtered.length === 0 ? <div className="border border-dashed border-[#d2d2d6] bg-white px-6 py-16 text-center"><svg aria-hidden="true" viewBox="0 0 24 24" className="mx-auto size-8 fill-none stroke-[#c51e1c]" strokeWidth="1.5"><path d="M4 5h16v14H4zM10 9l5 3-5 3z" /></svg><h2 className="mt-4 text-sm font-semibold">Aucune vidéo dans cette vue</h2><p className="mx-auto mt-2 max-w-md text-xs leading-5 text-[#626269]">Les vidéos générées apparaîtront ici avec leur aperçu, leur statut et leur prix.</p><Link href="/studio" className="mt-5 inline-flex min-h-11 items-center rounded-sm bg-[#c51e1c] px-4 py-2.5 text-xs font-semibold text-white hover:bg-[#a71715]">Créer une vidéo</Link></div> : <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
       {filtered.map((video) => <article key={video.videoId ?? video.id} className="overflow-hidden border border-[#e2e2e5] bg-white">
         <div className="flex min-h-11 items-center justify-between border-b border-[#e2e2e5] px-4">
           <label className={`inline-flex min-h-11 items-center gap-2 text-xs font-medium ${isVideoInProgress(video.status) ? 'cursor-not-allowed text-[#8b8b91]' : 'cursor-pointer text-[#333338]'}`}>
@@ -127,8 +133,8 @@ export function VideoLibrary() {
           </label>
         </div>
         {video.previewUrl ? <video controls preload="metadata" src={video.previewUrl} className="aspect-video w-full bg-[#232326]" aria-label={`Aperçu de ${video.title ?? 'la vidéo'}`} /> : <div className="grid aspect-video place-items-center bg-[#eeeeef] text-[#8b8b91"><svg aria-hidden="true" viewBox="0 0 24 24" className="size-9 fill-none stroke-current" strokeWidth="1.5"><path d="M4 5h16v14H4zM10 9l5 3-5 3z" /></svg></div>}
-        <div className="p-4"><div className="flex items-center justify-between gap-3"><StatusPill status={labels[video.status] ?? video.status} /><span className="text-xs font-semibold tabular-nums">{formatVideoPrice(video)}</span></div><h3 className="mt-3 truncate text-sm font-semibold">{video.title ?? `${video.make ?? 'Nouvelle'} ${video.model ?? 'vidéo'}`}</h3><p className="mt-1 text-[11px] text-[#77777d]">{video.createdAt ?? video.created_at ?? 'Aujourd’hui'} · {video.durationSeconds ?? 5} s</p>
-          {video.status === 'ready' && video.videoUrl ? <a href={video.videoUrl} download className="mt-4 inline-flex rounded-sm bg-[#c51e1c] px-3.5 py-2.5 text-xs font-semibold text-white hover:bg-[#a71715]">Télécharger le MP4</a> : video.status === 'generating' ? <p className="mt-4 text-xs text-[#626269]">Génération en cours. Mise à jour automatique.</p> : null}
+        <div className="p-4"><div className="flex items-center justify-between gap-3"><StatusPill status={labels[video.status] ?? video.status} /><span className="text-xs font-semibold tabular-nums">{formatVideoPrice(video)}</span></div><h3 className="mt-3 truncate text-sm font-semibold">{video.title ?? `${video.make ?? 'Nouvelle'} ${video.model ?? 'vidéo'}`}</h3><p className="mt-1 text-xs text-[#77777d]">{formatVideoDate(video.createdAt ?? video.created_at)} · {video.durationSeconds ?? 5} s</p>
+          {video.status === 'ready' && video.videoUrl ? <a href={video.videoUrl} download className="mt-4 inline-flex min-h-11 items-center rounded-sm bg-[#c51e1c] px-3.5 py-2.5 text-xs font-semibold text-white hover:bg-[#a71715] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#c51e1c]">Télécharger le MP4</a> : video.status === 'generating' ? <p className="mt-4 text-xs text-[#626269]">Génération en cours. Mise à jour automatique.</p> : null}
         </div>
       </article>)}
     </div>}
