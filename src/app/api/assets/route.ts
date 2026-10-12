@@ -10,9 +10,9 @@ export async function GET(request: Request) {
     const actor = await getActor();
     if (env.PROVIDERS_MODE === 'mock' && !env.NEXT_PUBLIC_SUPABASE_URL) {
       const fixtures = [
-        { id: 'mock-haval-h6', kind: 'vehicle', make: 'Haval', model: 'H6', color: 'Bleu nuit', angle: 'Avant trois-quarts', variant: 'GT', previewUrl: '/mock/vehicle.svg', status: 'validée' },
-        { id: 'mock-tank-300', kind: 'vehicle', make: 'GWM', model: 'Tank 300', color: 'Blanc', angle: 'Profil', variant: 'Urban', previewUrl: '/mock/vehicle.svg', status: 'validée' },
-        { id: 'mock-kia-sportage', kind: 'vehicle', make: 'Kia', model: 'Sportage', color: 'Gris', angle: 'Avant', variant: 'EX', previewUrl: '/mock/vehicle.svg', status: 'validée' },
+        { id: 'mock-haval-h6', kind: 'vehicle', make: 'Haval', model: 'H6', color: 'Bleu nuit', angle: 'Avant trois-quarts', variant: 'GT', previewUrl: '/mock/mock-video.svg', status: 'validée' },
+        { id: 'mock-tank-300', kind: 'vehicle', make: 'GWM', model: 'Tank 300', color: 'Blanc', angle: 'Profil', variant: 'Urban', previewUrl: '/mock/mock-video.svg', status: 'validée' },
+        { id: 'mock-kia-sportage', kind: 'vehicle', make: 'Kia', model: 'Sportage', color: 'Gris', angle: 'Avant', variant: 'EX', previewUrl: '/mock/mock-video.svg', status: 'validée' },
       ];
       const search = new URL(request.url).searchParams;
       const kind = search.get('kind');

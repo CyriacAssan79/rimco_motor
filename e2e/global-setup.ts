@@ -3,6 +3,12 @@ import { isLocalSupabaseUrl } from './local-supabase';
 
 export default async function globalSetup() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  if (process.env.E2E_MOCK_NO_SUPABASE === '1') {
+    if (url || process.env.PROVIDERS_MODE === 'live') {
+      throw new Error('Le mode E2E_MOCK_NO_SUPABASE refuse les services Supabase distants et le mode live.');
+    }
+    return;
+  }
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.SUPABASE_SECRET_KEY;
   if (!url || !isLocalSupabaseUrl(url)) {
     throw new Error('Les tests E2E exigent une URL Supabase locale en HTTP (localhost, 127.0.0.1 ou ::1). Aucune donnée distante ne sera modifiée.');
