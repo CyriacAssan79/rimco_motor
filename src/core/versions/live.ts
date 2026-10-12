@@ -13,14 +13,14 @@ import { HttpError } from '@/core/auth/guards';
 import type { z } from 'zod';
 import { requestSchema } from './request-schema';
 import { beginPostproduction, retryPostproduction } from '@/core/postproduction/pipeline';
-import { getScenePreset } from '@/core/scenes/catalog';
+import { getScenePreset, inferVehicleCategory } from '@/core/scenes/catalog';
 import { calculateClientPriceFcfa } from '@/core/pricing';
-import { createLiveStoryboard, refreshLiveStoryboard } from './storyboard-live';
+import { refreshLiveStoryboard } from './storyboard-live';
+import { getSceneConceptDirection } from '@/core/scenes/concepts';
 
 export type CreateVersionInput = z.infer<typeof requestSchema>;
 
 export async function createLiveVersion(actor: Actor, input: CreateVersionInput, options?: { modelId?: string; reuse?: { brief: Brief; prompt: string } }) {
-  if (input.storyboard) return createLiveStoryboard(actor, input as CreateVersionInput & { storyboard: import('@/core/storyboard').StoryboardShot[] });
   if (input.tier === 'test' && actor.role !== 'admin') throw new HttpError(403, 'Le niveau Test est réservé à l’administrateur.');
   if (!actor.brandId) throw new HttpError(403, 'Aucune marque n’est associée à votre profil.');
 
@@ -56,7 +56,10 @@ export async function createLiveVersion(actor: Actor, input: CreateVersionInput,
   if (imageError || !image?.signedUrl) throw new HttpError(422, 'Impossible de préparer la photo sélectionnée.');
   const vehicleDescription = [asset.make, asset.model, asset.color].filter((value): value is string => typeof value === 'string' && value.trim().length > 0).join(' ');
   if (input.scenePresetId && !getScenePreset(input.scenePresetId)) throw new HttpError(422, 'La scène sélectionnée est introuvable.');
-  const briefOptions = { vehicle_asset_id: asset.id, vehicle_description: vehicleDescription || 'Véhicule strictement identique à la photo de référence', vehicle_category: input.vehicleCategory, scene_preset_id: input.scenePresetId, vehicle_action: input.vehicleAction, user_direction: input.description, location: input.location, setting: input.setting, character: input.character || 'Aucun personnage', lighting: input.lighting, camera_movement: input.cameraMovement, mood: input.mood, format: input.format, duration_s: input.durationS, complexity: input.complexity };
+  const selectedScene = input.scenePresetId ? getScenePreset(input.scenePresetId) : undefined;
+  const conceptDirection = getSceneConceptDirection(selectedScene, input.conceptId);
+  const userDirection = [conceptDirection, input.description].filter(Boolean).join(' ').slice(0, 500);
+  const briefOptions = { vehicle_asset_id: asset.id, vehicle_description: vehicleDescription || 'Véhicule strictement identique à la photo de référence', vehicle_category: inferVehicleCategory(asset.make, asset.model), scene_preset_id: input.scenePresetId, vehicle_action: selectedScene?.vehicleAction ?? input.vehicleAction, user_direction: userDirection, location: selectedScene?.location ?? input.location, setting: selectedScene?.setting ?? input.setting, character: input.character || selectedScene?.character || 'Aucun personnage', lighting: selectedScene?.lighting ?? input.lighting, camera_movement: selectedScene?.cameraMovement ?? input.cameraMovement, mood: selectedScene?.mood ?? input.mood, format: input.format, duration_s: input.durationS, complexity: input.complexity };
   const llmBriefOptions = Object.fromEntries(Object.entries(briefOptions).map(([key, value]) => [key, String(value)]));
   const initialBrief = options?.reuse?.brief ?? buildBrief(input.description || 'Vidéo automobile réaliste et élégante.', briefOptions);
   if (initialBrief.vehicle_asset_id !== asset.id || initialBrief.format !== input.format) throw new HttpError(422, 'Le brief commun ne correspond pas à la photo ou au format sélectionné.');

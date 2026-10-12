@@ -11,6 +11,7 @@ import { createPersistedMockVersion } from '@/core/versions/mock-persistence';
 import { createStorageAdminClient } from '@/core/storage/supabase';
 import { createSignedVideoDownloadUrl } from '@/core/storage/signed-video';
 import { getScenePreset } from '@/core/scenes/catalog';
+import { getSceneConceptDirection } from '@/core/scenes/concepts';
 import { z } from 'zod';
 import { deleteVersionsByVideoIds } from '@/core/versions/store';
 
@@ -72,10 +73,12 @@ export async function POST(request: Request) {
   try {
     const actor = await getActor();
     const input = requestSchema.parse(await request.json());
-    if (env.PROVIDERS_MODE === 'mock' && input.durationS !== 5 && !input.storyboard) throw new HttpError(422, 'Les durées longues sont disponibles uniquement sur un déploiement connecté à fal.ai.');
+    if (env.PROVIDERS_MODE === 'mock' && input.durationS !== 5) throw new HttpError(422, 'Les durées longues sont disponibles uniquement sur un déploiement connecté à fal.ai.');
     if (input.scenePresetId && !getScenePreset(input.scenePresetId)) throw new HttpError(422, 'La scène sélectionnée est introuvable.');
+    const selectedScene = input.scenePresetId ? getScenePreset(input.scenePresetId) : undefined;
+    const userDirection = [getSceneConceptDirection(selectedScene, input.conceptId), input.description].filter(Boolean).join(' ').slice(0, 500);
     if (env.PROVIDERS_MODE === 'live') return NextResponse.json(await createLiveVersion(actor, input, { modelId: input.modelId }), { status: 201 });
-    const brief = buildBrief(input.description || 'Vidéo automobile réaliste et élégante.', { vehicle_asset_id: input.assetId, vehicle_category: input.vehicleCategory, scene_preset_id: input.scenePresetId, vehicle_action: input.vehicleAction, user_direction: input.description, camera_movement: input.cameraMovement, mood: input.mood, location: input.location, setting: input.setting, character: input.character || 'Aucun personnage', lighting: input.lighting, format: input.format, duration_s: input.durationS, complexity: input.complexity });
+    const brief = buildBrief(userDirection || 'Vidéo automobile réaliste et élégante.', { vehicle_asset_id: input.assetId, vehicle_category: input.vehicleCategory, scene_preset_id: input.scenePresetId, vehicle_action: selectedScene?.vehicleAction ?? input.vehicleAction, user_direction: userDirection, camera_movement: selectedScene?.cameraMovement ?? input.cameraMovement, mood: selectedScene?.mood ?? input.mood, location: selectedScene?.location ?? input.location, setting: selectedScene?.setting ?? input.setting, character: input.character || selectedScene?.character || 'Aucun personnage', lighting: selectedScene?.lighting ?? input.lighting, format: input.format, duration_s: input.durationS, complexity: input.complexity });
     if (env.NEXT_PUBLIC_SUPABASE_URL) return NextResponse.json(await createPersistedMockVersion(actor, input), { status: 201 });
     const prompt = briefToPrompt(brief, 'mock');
     const imageUrl = '/mock/vehicle.svg';
