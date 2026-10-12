@@ -25,7 +25,7 @@ export function makeFinalVideoArgs(input: FinalVideoArgs) {
     const logoIndex = input.audioFile ? 2 : 1;
     args.push(
       '-filter_complex',
-      `[${logoIndex}:v:0][0:v:0]scale2ref=w=main_w*0.14:h=-1[logo][base];[base][logo]overlay=x=main_w*0.04:y=main_h*0.04:eof_action=repeat[vout]`,
+      `[${logoIndex}:v:0]format=rgba[logo_rgba];[logo_rgba][0:v:0]scale2ref=w=main_w*0.18:h=-1[logo][base];[base][logo]overlay=x=main_w*0.035:y=main_h*0.035:format=auto:eof_action=repeat[vout]`,
       '-map', '[vout]', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p',
     );
   }
@@ -43,7 +43,7 @@ export function makeShotMontageArgs(input: MontageArgs) {
   if (input.overlayLogo) {
     args.push(
       '-filter_complex',
-      `${concat};[2:v:0][base]scale2ref=w=main_w*0.14:h=-1[logo][video];[video][logo]overlay=x=main_w*0.04:y=main_h*0.04:eof_action=repeat[vout]`,
+      `${concat};[2:v:0]format=rgba[logo_rgba];[logo_rgba][base]scale2ref=w=main_w*0.18:h=-1[logo][video];[video][logo]overlay=x=main_w*0.035:y=main_h*0.035:format=auto:eof_action=repeat[vout]`,
       '-map', '[vout]',
     );
   } else args.push('-filter_complex', concat, '-map', '[vout]');
