@@ -23,6 +23,7 @@
 - Seedance 2.5 (`bytedance/seedance-2.5/image-to-video`) est disponible en Premium et sélectionnable dans le studio; Veo 3.1 Fast reste le modèle Premium par défaut. Seedance produit 5 secondes en 720p, ratio choisi explicitement et audio natif désactivé. Le coût de référence retenu est 0,473 USD/s pour 16:9/9:16/1:1, soit environ 2,37 USD pour 5 secondes; il dépend de la résolution et de l’aire générée.
 - Les migrations `0005_seedance_kling_o3.sql` et `supabase/setup.sql` désactivent l’ancien enregistrement Kling 2.6 sans l’effacer, pour préserver les références d’historique. Les enregistrements Kling O3 Pro et Seedance 2.5 sont idempotents. Aucun appel payant ni déploiement n’a été lancé pour cette intégration.
 - Endpoints, paramètres et prix vérifiés dans la documentation officielle fal: [Kling O3 Pro image-to-video](https://fal.ai/models/fal-ai/kling-video/o3/pro/image-to-video/api) et [Seedance 2.5 image-to-video](https://fal.ai/models/bytedance/seedance-2.5/image-to-video/api). Les prix peuvent évoluer; le plafond de dépense est configuré directement dans fal.ai.
+- Le routage est déterministe et partagé par l'interface, l'API et le traitement live : Standard utilise Wan 3.0 à 5 s puis Kling O3 Pro à 10/15 s; Premium utilise Veo 3.1 Fast à 5 s puis Seedance 2.5 à 10/15/20/30 s. La migration `0012_generation_model_routing.sql` et la fin de `supabase/setup.sql` réappliquent ces règles sans supprimer les références historiques.
 
 ## Sélecteur de scènes (2026-10-08)
 
