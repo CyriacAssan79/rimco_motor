@@ -6,6 +6,7 @@ import Image from 'next/image';
 import { formatFcfa } from '@/core/pricing';
 import { getScenePresets, getScenePreset, inferVehicleCategory, type ScenePreset } from '@/core/scenes/catalog';
 import { getSceneConcepts } from '@/core/scenes/concepts';
+import { getRouteForGeneration, getRoutedDurations } from '@/core/providers/model-routing';
 
 type Format = '16:9' | '9:16' | '1:1' | '4:5';
 type Asset = { id: string; make?: string; model?: string; color?: string; previewUrl?: string | null };
@@ -50,19 +51,19 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
   const concepts = selectedScene ? getSceneConcepts(selectedScene) : [];
   const selectedConcept = concepts.find((concept) => concept.id === conceptId) ?? concepts[0];
   const compatibleModels = availableModels.filter((model) => model.tier === tier);
-  const targetFamily = tier === 'standard' ? durationS === 5 ? 'wan' : 'kling' : durationS === 5 ? 'veo' : 'seedance';
-  const routedModel = compatibleModels.find((model) => model.adapterFamily === targetFamily && model.durations.includes(durationS));
+  const route = getRouteForGeneration(tier, durationS);
+  const routedModel = compatibleModels.find((model) => model.adapterFamily === route?.adapterFamily && model.durations.includes(durationS));
   const selectedModel = routedModel;
   const estimatedPrice = selectedModel?.estimatedPricesFcfa?.[String(durationS)];
   const priceLabel = mode === 'live' && estimatedPrice ? `≈ ${formatFcfa(estimatedPrice)}` : mode === 'mock' ? 'Simulation' : '—';
-  const durationOptions = mode === 'mock' ? [5] : tier === 'standard' ? [5, 10, 15] : [5, 10, 15, 20, 30];
+  const durationOptions = mode === 'mock' ? [5] : getRoutedDurations(tier);
 
   useEffect(() => {
     if (selectedModel && !selectedModel.formats.includes(format)) setFormat(selectedModel.formats[0] ?? '16:9');
   }, [selectedModel, format]);
 
   useEffect(() => {
-    const allowed = mode === 'mock' ? [5] : tier === 'standard' ? [5, 10, 15] : [5, 10, 15, 20, 30];
+    const allowed = mode === 'mock' ? [5] : getRoutedDurations(tier);
     if (!allowed.includes(durationS)) setDurationS(allowed[0]);
   }, [durationS, mode, tier]);
 

@@ -18,6 +18,7 @@ import { calculateClientPriceFcfa } from '@/core/pricing';
 import { refreshLiveStoryboard } from './storyboard-live';
 import { getSceneConceptDirection } from '@/core/scenes/concepts';
 import { reserveGenerationCost, reserveLlmCost, settleUsageCost } from '@/core/billing/ledger';
+import { getRouteForGeneration } from '@/core/providers/model-routing';
 
 export type CreateVersionInput = z.infer<typeof requestSchema>;
 
@@ -28,9 +29,9 @@ export async function createLiveVersion(actor: Actor, input: CreateVersionInput,
   const authenticated = await createSupabaseServerClient();
   const admin = createStorageAdminClient();
   const expectedTier = input.tier;
-  const expectedEndpoint = input.tier === 'standard'
-    ? input.durationS === 5 ? WAN_ENDPOINT : KLING_ENDPOINT
-    : input.durationS === 5 ? VEO_ENDPOINT : SEEDANCE_ENDPOINT;
+  const route = input.tier === 'standard' || input.tier === 'premium' ? getRouteForGeneration(input.tier, input.durationS) : null;
+  if (!route) throw new HttpError(422, 'Cette combinaison de niveau et de durée n’est pas disponible.');
+  const expectedEndpoint = route.endpoint;
   const [{ data: asset, error: assetError }, { data: model, error: modelError }] = await Promise.all([
     authenticated.from('assets').select('id,kind,path,make,model,color,status,brand_id').eq('id', input.assetId).single(),
     admin.from('ai_models').select('id,name,tier,fal_endpoint_id,adapter_family,mode,price_usd_per_second,allowed_durations,allowed_formats,is_active,is_default').eq(options?.modelId ? 'id' : 'fal_endpoint_id', options?.modelId ?? expectedEndpoint).eq('is_active', true).single(),
@@ -48,9 +49,10 @@ export async function createLiveVersion(actor: Actor, input: CreateVersionInput,
   if (!endpointMatches) throw new HttpError(503, 'L’identifiant d’endpoint ne correspond pas à l’adaptateur vidéo activé.');
   if (model.fal_endpoint_id !== expectedEndpoint) throw new HttpError(422, 'Le modèle ne correspond pas au niveau et à la durée demandés.');
   if (options?.modelId && model.tier !== expectedTier) throw new HttpError(422, 'Le niveau demandé ne correspond pas au modèle sélectionné.');
-  const sourceDurationS = model.adapter_family === 'veo' ? 6 : input.durationS;
-  const storedDurations = model.adapter_family === 'veo' ? [5, 6] : model.allowed_durations ?? [];
-  if (!storedDurations.includes(input.durationS) || model.adapter_family === 'kling' && input.durationS > 15 || model.adapter_family === 'seedance' && input.durationS > 30 || model.adapter_family === 'wan' && input.durationS !== 5) throw new HttpError(422, 'La durée choisie n’est pas disponible pour ce modèle.');
+  const sourceDurationS = route.sourceDuration;
+  const storedDurations = model.allowed_durations ?? [];
+  const durationSupported = storedDurations.includes(input.durationS) || route.adapterFamily === 'veo' && storedDurations.includes(sourceDurationS);
+  if (!durationSupported) throw new HttpError(422, 'La durée choisie n’est pas disponible pour ce modèle.');
   if (!model.allowed_formats?.includes(input.format)) throw new HttpError(422, `Le modèle ne prend pas en charge le format ${input.format}.`);
 
   const { data: image, error: imageError } = await admin.storage.from('assets').createSignedUrl(asset.path, 3600);
