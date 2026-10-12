@@ -17,6 +17,7 @@ import { getScenePreset, inferVehicleCategory } from '@/core/scenes/catalog';
 import { calculateClientPriceFcfa } from '@/core/pricing';
 import { refreshLiveStoryboard } from './storyboard-live';
 import { getSceneConceptDirection } from '@/core/scenes/concepts';
+import { reserveGenerationCost, reserveLlmCost, settleUsageCost } from '@/core/billing/ledger';
 
 export type CreateVersionInput = z.infer<typeof requestSchema>;
 
@@ -65,8 +66,6 @@ export async function createLiveVersion(actor: Actor, input: CreateVersionInput,
   if (initialBrief.vehicle_asset_id !== asset.id || initialBrief.format !== input.format) throw new HttpError(422, 'Le brief commun ne correspond pas à la photo ou au format sélectionné.');
   const estimatedProviderCostUsd = sourceDurationS * Number(model.price_usd_per_second);
   const priceFcfa = calculateClientPriceFcfa(estimatedProviderCostUsd, env.USD_TO_EUR_RATE, env.EUR_TO_FCFA);
-  const fcfaPerSecond = priceFcfa / input.durationS;
-
   const videoTitle = input.title || `${asset.make ?? ''} ${asset.model ?? 'Véhicule'} · Nouvelle création`.trim();
   const { data: video, error: videoError } = await admin.from('videos').insert({ user_id: actor.id, brand_id: actor.brandId, title: videoTitle, department: actor.department, status: 'generating' }).select('id').single();
   if (videoError || !video) throw new HttpError(500, 'Impossible de créer la vidéo. Réessayez.');
@@ -75,11 +74,10 @@ export async function createLiveVersion(actor: Actor, input: CreateVersionInput,
     await admin.from('videos').delete().eq('id', video.id);
     throw new HttpError(500, 'Impossible de créer la version de la vidéo. Réessayez.');
   }
-  const { data: ledgerId, error: reserveError } = await admin.rpc('reserve_budget', {
-    p_user_id: actor.id, p_version_id: version.id, p_model_id: model.id, p_seconds: sourceDurationS,
-    p_price_usd_second: Number(model.price_usd_per_second), p_usd_to_eur: env.USD_TO_EUR_RATE,
-    p_eur_to_fcfa: env.EUR_TO_FCFA, p_price_fcfa: priceFcfa,
-    p_department: actor.department, p_applied_fcfa_second: fcfaPerSecond,
+  const { data: ledgerId, error: reserveError } = await reserveGenerationCost(admin, {
+    userId: actor.id, versionId: version.id, modelId: model.id, seconds: sourceDurationS,
+    priceUsdPerSecond: Number(model.price_usd_per_second), usdToEur: env.USD_TO_EUR_RATE,
+    eurToFcfa: env.EUR_TO_FCFA, priceFcfa, department: actor.department,
   });
   if (reserveError || !ledgerId) {
     await Promise.all([admin.from('video_versions').delete().eq('id', version.id), admin.from('videos').delete().eq('id', video.id)]);
@@ -95,14 +93,13 @@ export async function createLiveVersion(actor: Actor, input: CreateVersionInput,
   } else {
   let llmCallCompleted = false;
   let llmReportedCostUsd: number | null = null;
-  const { data: llmLedgerId, error: llmReserveError } = await admin.rpc('reserve_llm_budget', {
-    p_user_id: actor.id, p_version_id: version.id, p_max_cost_usd: llmReserveUsd,
-    p_usd_to_eur: env.USD_TO_EUR_RATE, p_eur_to_fcfa: env.EUR_TO_FCFA,
-    p_department: actor.department,
+  const { data: llmLedgerId, error: llmReserveError } = await reserveLlmCost(admin, {
+    userId: actor.id, versionId: version.id, maxCostUsd: llmReserveUsd,
+    usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA, department: actor.department,
   });
   if (llmReserveError || !llmLedgerId) {
     await Promise.all([
-      admin.rpc('settle_budget', { p_entry_id: ledgerId, p_outcome: 'released', p_actual_cost_usd: 0, p_usd_to_eur: env.USD_TO_EUR_RATE, p_eur_to_fcfa: env.EUR_TO_FCFA }),
+      settleUsageCost(admin, { entryId: ledgerId, outcome: 'released', actualCostUsd: 0, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA }),
       admin.from('video_versions').update({ status: 'failed', error_message: 'Le brief LLM n’a pas pu être réservé.' }).eq('id', version.id),
       admin.from('videos').update({ status: 'failed' }).eq('id', video.id),
     ]);
@@ -116,7 +113,7 @@ export async function createLiveVersion(actor: Actor, input: CreateVersionInput,
     brief = generated.brief as Brief;
     if (!model.allowed_formats?.includes(brief.format)) throw new HttpError(422, `Le modèle ne prend pas en charge le format ${brief.format}.`);
     prompt = briefToPrompt(brief, model.adapter_family);
-    const { error: settleError } = await admin.rpc('settle_budget', { p_entry_id: llmLedgerId, p_outcome: 'charged', p_actual_cost_usd: generated.costUsd ?? llmReserveUsd, p_usd_to_eur: env.USD_TO_EUR_RATE, p_eur_to_fcfa: env.EUR_TO_FCFA });
+    const { error: settleError } = await settleUsageCost(admin, { entryId: llmLedgerId, outcome: 'charged', actualCostUsd: generated.costUsd ?? llmReserveUsd, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA });
     if (settleError) throw new HttpError(503, 'Le coût du brief LLM doit être réconcilié avant de lancer la vidéo.');
     const { error: briefUpdateError } = await admin.from('video_versions').update({ brief_json: { ...brief, overlayLogo: input.overlayLogo }, generated_prompt: prompt }).eq('id', version.id);
     if (briefUpdateError) throw new HttpError(503, 'Le brief est facturé mais n’a pas pu être enregistré. Réessayez depuis l’administration.');
@@ -126,16 +123,16 @@ export async function createLiveVersion(actor: Actor, input: CreateVersionInput,
       const completedRequests = briefError instanceof FalLlmBriefError ? briefError.completedRequests : 0;
       const reportedCostUsd = llmReportedCostUsd ?? (briefError instanceof FalLlmBriefError ? briefError.reportedCostUsd : null);
       const completed = llmCallCompleted || completedRequests > 0;
-      await admin.rpc('settle_budget', {
-        p_entry_id: llmLedgerId,
-        p_outcome: completed ? 'charged' : 'released',
-        p_actual_cost_usd: completed ? reportedCostUsd ?? llmReserveUsd : 0,
-        p_usd_to_eur: env.USD_TO_EUR_RATE,
-        p_eur_to_fcfa: env.EUR_TO_FCFA,
+      await settleUsageCost(admin, {
+        entryId: llmLedgerId,
+        outcome: completed ? 'charged' : 'released',
+        actualCostUsd: completed ? reportedCostUsd ?? llmReserveUsd : 0,
+        usdToEur: env.USD_TO_EUR_RATE,
+        eurToFcfa: env.EUR_TO_FCFA,
       });
     }
     await Promise.all([
-      admin.rpc('settle_budget', { p_entry_id: ledgerId, p_outcome: 'released', p_actual_cost_usd: 0, p_usd_to_eur: env.USD_TO_EUR_RATE, p_eur_to_fcfa: env.EUR_TO_FCFA }),
+      settleUsageCost(admin, { entryId: ledgerId, outcome: 'released', actualCostUsd: 0, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA }),
       admin.from('video_versions').update({ status: 'failed', error_message: message }).eq('id', version.id),
       admin.from('videos').update({ status: 'failed' }).eq('id', video.id),
     ]);
@@ -149,7 +146,7 @@ export async function createLiveVersion(actor: Actor, input: CreateVersionInput,
     ({ requestId } = await provider.submit({ prompt, imageUrl: image.signedUrl, durationS: sourceDurationS as 5 | 6 | 10 | 15 | 20 | 30, format: input.format, endUserId: actor.id }));
   } catch {
     await Promise.all([
-      admin.rpc('settle_budget', { p_entry_id: ledgerId, p_outcome: 'released', p_actual_cost_usd: 0, p_usd_to_eur: env.USD_TO_EUR_RATE, p_eur_to_fcfa: env.EUR_TO_FCFA }),
+      settleUsageCost(admin, { entryId: ledgerId, outcome: 'released', actualCostUsd: 0, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA }),
       admin.from('video_versions').update({ status: 'failed', error_message: 'Impossible de soumettre la génération au fournisseur.' }).eq('id', version.id),
       admin.from('videos').update({ status: 'failed' }).eq('id', video.id),
     ]);
@@ -215,14 +212,14 @@ export async function refreshLiveVersion(versionId: string, actor: Actor) {
   if (status.status === 'ready') {
     const { data: ledger } = await admin.from('usage_ledger').select('id,cost_usd').eq('version_id', versionId).eq('status', 'reserved').maybeSingle();
     if (ledger) {
-      const { error: settleError } = await admin.rpc('settle_budget', { p_entry_id: ledger.id, p_outcome: 'charged', p_actual_cost_usd: ledger.cost_usd, p_usd_to_eur: env.USD_TO_EUR_RATE, p_eur_to_fcfa: env.EUR_TO_FCFA });
+      const { error: settleError } = await settleUsageCost(admin, { entryId: ledger.id, outcome: 'charged', actualCostUsd: ledger.cost_usd, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA });
       if (settleError) throw new HttpError(503, 'La vidéo est générée mais la clôture du budget doit être réconciliée par l’administrateur.');
     }
   }
   if (status.status === 'failed') {
     const { data: ledger } = await admin.from('usage_ledger').select('id').eq('version_id', versionId).eq('status', 'reserved').maybeSingle();
     if (ledger) {
-      const { error: settleError } = await admin.rpc('settle_budget', { p_entry_id: ledger.id, p_outcome: 'released', p_actual_cost_usd: 0, p_usd_to_eur: env.USD_TO_EUR_RATE, p_eur_to_fcfa: env.EUR_TO_FCFA });
+      const { error: settleError } = await settleUsageCost(admin, { entryId: ledger.id, outcome: 'released', actualCostUsd: 0, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA });
       if (settleError) throw new HttpError(503, 'La réservation de budget doit être réconciliée par l’administrateur.');
     }
   }
