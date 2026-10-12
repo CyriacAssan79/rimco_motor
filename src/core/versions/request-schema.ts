@@ -1,6 +1,5 @@
 import { z } from 'zod';
 import { vehicleCategories } from '@/core/scenes/catalog';
-import { storyboardSchema } from '@/core/storyboard';
 export const requestSchema = z.object({
   description: z.string().trim().max(500).default(''),
   title: z.string().trim().max(120).default(''),
@@ -16,10 +15,10 @@ export const requestSchema = z.object({
   mood: z.string().trim().max(160).default('Moderne, naturel et rassurant'),
   vehicleCategory: z.enum(vehicleCategories).default('autre'),
   scenePresetId: z.string().trim().max(100).default(''),
+  conceptId: z.enum(['signature', 'mouvement', 'ambiance']).default('signature'),
   format: z.enum(['16:9','9:16','1:1','4:5']).default('16:9'),
   tier: z.enum(['standard','premium','test']).default('standard'),
   durationS: z.union([z.literal(5), z.literal(6), z.literal(10), z.literal(15), z.literal(20), z.literal(30)]).default(5),
   complexity: z.enum(['simple','balanced','rich']).default('simple'),
-  storyboard: storyboardSchema.optional(),
   modelId: z.string().uuid().optional(),
 });
