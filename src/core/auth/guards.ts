@@ -1,5 +1,6 @@
 import { createSupabaseServerClient } from '@/core/supabase/server';
 import { NextResponse } from 'next/server';
+import { redirect } from 'next/navigation';
 import { env } from '@/env';
 
 export type Role = 'collaborateur' | 'valideur' | 'admin';
@@ -24,6 +25,22 @@ export async function requireRole(...roles: Role[]): Promise<Actor> {
   const actor = await getActor();
   if (!roles.includes(actor.role)) throw new HttpError(403, 'Vous n’avez pas les droits nécessaires pour cette action.');
   return actor;
+}
+
+/** Guard dedicated to server-rendered pages: unauthorized users are redirected
+ * instead of surfacing a generic Next.js server error page. */
+export async function requirePageRole(...roles: Role[]): Promise<Actor> {
+  try {
+    const actor = await getActor();
+    if (!roles.includes(actor.role)) redirect('/');
+    return actor;
+  } catch (error) {
+    if (error instanceof HttpError) {
+      if (error.status === 401) redirect('/connexion');
+      redirect('/');
+    }
+    throw error;
+  }
 }
 export function errorResponse(error: unknown) {
   if (error instanceof HttpError) return NextResponse.json({ error: error.message }, { status: error.status });
