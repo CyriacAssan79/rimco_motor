@@ -231,7 +231,9 @@ begin
     or new.submitted_by is distinct from old.submitted_by or new.created_at is distinct from old.created_at then
     raise exception using errcode='42501', message='Champs de validation non modifiables';
   end if;
-  if old.status <> 'pending' or new.status not in ('approved','rejected') or new.reviewed_by <> auth.uid() or new.reviewed_at is null then
+  if old.status <> 'pending' or new.status not in ('approved','rejected')
+    or (current_setting('request.jwt.claim.role', true) <> 'service_role' and new.reviewed_by <> auth.uid())
+    or new.reviewed_at is null then
     raise exception using errcode='42501', message='Transition de validation non autorisée';
   end if;
   if new.status='rejected' and length(trim(coalesce(new.reason,'')))=0 then
