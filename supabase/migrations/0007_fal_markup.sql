@@ -1,4 +1,4 @@
--- Apply a 30% markup to the provider charge when a generation reservation is settled.
+-- Apply a 20% markup to the combined provider charge when a generation reservation is settled.
 -- This changes the customer-facing price only; provider costs and the budget cap remain intact.
 create or replace function public.settle_budget(p_entry_id uuid,p_outcome text,p_actual_cost_usd numeric,p_usd_to_eur numeric,p_eur_to_fcfa numeric,p_cap_eur numeric)
 returns void language plpgsql security definer set search_path = '' as $$
@@ -27,7 +27,7 @@ begin
   if coalesce((select sum(l.cost_eur) from public.usage_ledger l where l.status in ('reserved','charged') and l.id<>p_entry_id),0)+final_eur > p_cap_eur then
     raise exception using errcode='P0001', message='Le coût réel dépasserait le plafond autorisé';
   end if;
-  client_price_fcfa := case when final_usd > 0 then ceil(final_eur * p_eur_to_fcfa * 1.30) else entry.price_fcfa end;
+  client_price_fcfa := case when final_usd > 0 then ceil(final_eur * p_eur_to_fcfa * 1.20) else entry.price_fcfa end;
   update public.usage_ledger
     set status='charged', cost_usd=final_usd, cost_eur=final_eur,
         cost_real_fcfa=final_eur*p_eur_to_fcfa,

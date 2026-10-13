@@ -6,7 +6,9 @@ import { createSupabaseBrowserClient } from '@/core/supabase/browser';
 
 type Asset = {
   id: string;
-  kind: 'vehicle' | 'logo' | 'audio';
+  kind: 'vehicle' | 'logo' | 'audio' | 'place' | 'decor' | 'wardrobe' | 'badge';
+  title?: string;
+  category?: string;
   make?: string;
   model?: string;
   color?: string;
@@ -20,6 +22,10 @@ type Asset = {
 
 const kinds: Array<[Asset['kind'], string]> = [
   ['vehicle', 'Véhicule'],
+  ['place', 'Lieu'],
+  ['decor', 'Décor'],
+  ['wardrobe', 'Tenue'],
+  ['badge', 'Badge'],
   ['logo', 'Logo'],
   ['audio', 'Audio'],
 ];
@@ -87,7 +93,7 @@ export function MediaLibrary() {
         ? { make: make.trim(), model: model.trim(), color: color.trim(), angle: '3/4 avant' }
         : kind === 'logo'
           ? { variant: 'rouge' }
-          : {};
+          : { title: file.name.replace(/\.[^.]+$/, ''), category: kind };
       const saved = await fetch('/api/assets', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },

@@ -1,3 +1,4 @@
 import {PageHeading} from '@/components/shell';
 import {CostDashboard} from './CostDashboard';
-export default function CostsPage(){return <><PageHeading eyebrow="Suivi des facturations" title="Montants facturés" description="Consultez les montants facturés en FCFA et exportez l’historique des générations."/><CostDashboard/></>}
+import { requireRole } from '@/core/auth/guards';
+export default async function CostsPage(){await requireRole('admin'); return <><PageHeading eyebrow="Suivi de consommation" title="Suivi de consommation" description="Pilotez les montants, les plafonds et l’historique des générations."/><CostDashboard/></>}

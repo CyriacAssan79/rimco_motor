@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { errorResponse, getActor } from '@/core/auth/guards';
 import { env } from '@/env';
 import { createStorageAdminClient } from '@/core/storage/supabase';
-const schema = z.object({ fileName: z.string().trim().min(1).max(160), contentType: z.enum(['image/jpeg','image/png','image/webp','audio/mpeg','audio/wav','audio/mp4']), kind: z.enum(['vehicle','logo','audio']) }).refine((v) => v.kind === 'audio' ? v.contentType.startsWith('audio/') : v.contentType.startsWith('image/'), { message: 'Le type de fichier ne correspond pas au média.' });
+const schema = z.object({ fileName: z.string().trim().min(1).max(160), contentType: z.enum(['image/jpeg','image/png','image/webp','audio/mpeg','audio/wav','audio/mp4']), kind: z.enum(['vehicle','logo','audio','place','decor','wardrobe','badge']) }).refine((v) => v.kind === 'audio' ? v.contentType.startsWith('audio/') : v.contentType.startsWith('image/'), { message: 'Le type de fichier ne correspond pas au média.' });
 export async function POST(request: Request) {
   try {
     const actor = await getActor();

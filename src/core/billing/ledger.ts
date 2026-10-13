@@ -1,4 +1,5 @@
 import type { createStorageAdminClient } from '@/core/storage/supabase';
+import { calculateClientPriceFcfa } from '@/core/pricing';
 
 type AdminClient = ReturnType<typeof createStorageAdminClient>;
 type Outcome = 'charged' | 'released';
@@ -86,6 +87,8 @@ export async function settleUsageCost(admin: AdminClient, input: {
   actualCostUsd: number;
   usdToEur: number;
   eurToFcfa: number;
+  /** LLM preparation is tracked for operations but is included in the video total at read time. */
+  billable?: boolean;
 }): Promise<{ error: Error | null }> {
   ensurePositiveFinite(input.usdToEur, 'taux USD/EUR');
   ensurePositiveFinite(input.eurToFcfa, 'taux EUR/FCFA');
@@ -101,8 +104,8 @@ export async function settleUsageCost(admin: AdminClient, input: {
   const patch: Record<string, number | string> = { status: input.outcome };
   if (input.outcome === 'charged') {
     const costEur = input.actualCostUsd * input.usdToEur;
-    const priceFcfa = input.actualCostUsd > 0
-      ? Math.ceil(costEur * input.eurToFcfa * 1.3)
+    const priceFcfa = input.billable === false ? 0 : input.actualCostUsd > 0
+      ? calculateClientPriceFcfa(input.actualCostUsd, input.usdToEur, input.eurToFcfa)
       : Number(entry.price_fcfa);
     patch.cost_usd = input.actualCostUsd;
     patch.cost_eur = costEur;

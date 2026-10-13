@@ -3,18 +3,21 @@ import type { ScenePreset } from './catalog';
 export const sceneConceptStyles = [
   {
     id: 'signature',
-    title: 'Signature RIMCO',
-    direction: 'Film automobile de signature : révéler progressivement le véhicule dans son environnement, avec un mouvement de caméra fluide et une image finale forte.',
+    title: 'Publicité · révéler le véhicule',
+    purpose: 'Pour une campagne, une annonce ou un film de marque',
+    direction: 'Publicité automobile : créer une découverte progressive et désirable du véhicule, avec une entrée claire, un mouvement de caméra fluide et une image finale forte qui peut porter le message de marque.',
   },
   {
     id: 'mouvement',
-    title: 'En mouvement',
-    direction: 'Film automobile vivant : accompagner le déplacement réaliste du véhicule avec une caméra stable, puis terminer sur une composition lisible qui le met en valeur.',
+    title: 'Démonstration · montrer l’usage',
+    purpose: 'Pour présenter la conduite, la robustesse ou un usage concret',
+    direction: 'Démonstration automobile : rendre l’usage immédiatement compréhensible en accompagnant le déplacement réaliste du véhicule avec une caméra stable, un rythme lisible et une fin qui montre clairement sa posture et sa capacité.',
   },
   {
     id: 'ambiance',
-    title: 'L’instant',
-    direction: 'Film d’ambiance automobile : installer d’abord le lieu choisi, puis révéler naturellement le véhicule avec une lumière et un rythme cohérents avec la scène.',
+    title: 'Présentation · valoriser le design',
+    purpose: 'Pour une fiche produit, un showroom ou une présentation interne',
+    direction: 'Présentation produit : laisser le lieu et la lumière installer le contexte, puis observer calmement la silhouette, les finitions et les proportions du véhicule avec un rythme posé et une composition très propre.',
   },
 ] as const;
 
@@ -23,11 +26,7 @@ export type SceneConceptId = typeof sceneConceptStyles[number]['id'];
 export function getSceneConcepts(scene: ScenePreset) {
   return sceneConceptStyles.map((concept) => ({
     ...concept,
-    summary: concept.id === 'signature'
-      ? `Découverte maîtrisée · ${scene.label}`
-      : concept.id === 'mouvement'
-        ? `Le véhicule traverse la scène · ${scene.label}`
-        : `Lumière et atmosphère · ${scene.label}`,
+    summary: `${concept.purpose}. Scène : ${scene.label}.`,
     direction: `${concept.direction} Scène choisie : ${scene.label}. ${scene.setting}`,
   }));
 }
