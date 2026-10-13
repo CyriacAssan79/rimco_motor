@@ -8,12 +8,14 @@ import { aggregateGenerationCost } from '@/core/billing/aggregate';
 export async function GET() {
   try {
     const actor = await getActor();
+    if (actor.role !== 'admin') throw new HttpError(403, 'Le suivi de consommation est réservé à l’administration.');
+    const role = actor.role as string;
     if (env.PROVIDERS_MODE === 'mock' && !env.NEXT_PUBLIC_SUPABASE_URL) return NextResponse.json({ rows: allVersions().filter((v) => actor.role === 'admin' || v.userId === actor.id).map((v) => ({ version_id: v.id, video_id: v.videoId, title: v.title ?? v.brief.vehicle_description, kind: 'generation', price_fcfa: v.priceFcfa, cost_real_fcfa: 0, cost_eur: 0, department: actor.department, model_name: 'Simulation', seconds: 5, status: v.status, created_at: v.createdAt })) });
     if (env.PROVIDERS_MODE === 'mock' && env.NEXT_PUBLIC_SUPABASE_URL) {
       const admin = createStorageAdminClient();
       let mockQuery = admin.from('videos').select('id,user_id,title,status,department,created_at,video_versions(id,number,status,brief_json,created_at,usage_ledger(kind,ai_model_id,seconds,cost_usd,price_fcfa,status))').order('created_at', { ascending: false });
-      if (actor.role === 'collaborateur') mockQuery = mockQuery.eq('user_id', actor.id);
-      if (actor.role === 'valideur') {
+      if (role === 'collaborateur') mockQuery = mockQuery.eq('user_id', actor.id);
+      if (role === 'valideur') {
         if (!actor.brandId) return NextResponse.json({ rows: [] });
         mockQuery = mockQuery.eq('brand_id', actor.brandId).eq('department', actor.department).eq('status', 'review');
       }
@@ -32,7 +34,7 @@ export async function GET() {
     }
     const authenticated = await createSupabaseServerClient();
     let versionIds: string[] | null = null;
-    if (actor.role === 'valideur') {
+    if (role === 'valideur') {
       if (!actor.brandId) return NextResponse.json({ rows: [] });
       const { data, error } = await authenticated.from('videos').select('id').eq('brand_id', actor.brandId).eq('department', actor.department).eq('status', 'review');
       if (error) throw new HttpError(503, 'Impossible de charger les vidéos en validation.');
@@ -40,7 +42,7 @@ export async function GET() {
     }
     const admin = createStorageAdminClient();
     let query = admin.from('usage_ledger').select('id,version_id,user_id,kind,ai_model_id,seconds,cost_usd,price_fcfa,status,created_at,video_versions(video_id,created_at,videos(title))').eq('kind', 'generation').order('created_at', { ascending: false });
-    if (actor.role === 'collaborateur') query = query.eq('user_id', actor.id);
+    if (role === 'collaborateur') query = query.eq('user_id', actor.id);
     if (versionIds) {
       if (!versionIds.length) return NextResponse.json({ rows: [] });
       const { data: versions, error } = await admin.from('video_versions').select('id').in('video_id', versionIds);

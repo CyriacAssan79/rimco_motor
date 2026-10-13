@@ -184,6 +184,7 @@ export async function refreshLiveVersion(versionId: string, actor: Actor) {
       const { error: readyError } = await admin.from('videos').update({ status: 'ready' }).eq('id', version.video_id);
       if (readyError) throw new HttpError(503, 'Le fichier final est prêt; son état doit être réconcilié.');
       video.status = 'ready';
+      await notifyVersion(admin, video.user_id, versionId, 'ready', 'Votre vidéo est prête à être consultée.');
     }
     const approvedFinal = (video?.status === 'approved' || video?.status === 'ready' && ownsVideo) && version.final_path;
     const validatorPreview = video?.status === 'review' && (actor.role === 'admin' || actor.role === 'valideur' && video.brand_id === actor.brandId && video.department === actor.department);
@@ -246,12 +247,18 @@ export async function refreshLiveVersion(versionId: string, actor: Actor) {
       await Promise.all([
         admin.from('video_versions').update({ status: 'failed', error_message: message }).eq('id', versionId),
         admin.from('videos').update({ status: 'failed' }).eq('id', version.video_id),
+        notifyVersion(admin, video.user_id, versionId, 'failed', message),
       ]);
       return { id: versionId, status: 'failed' as const, error: message };
     }
   }
-  if (status.status === 'failed') await admin.from('videos').update({ status: 'failed' }).eq('id', version.video_id);
+  if (status.status === 'failed') await Promise.all([admin.from('videos').update({ status: 'failed' }).eq('id', version.video_id), notifyVersion(admin, video.user_id, versionId, 'failed', status.error ?? 'La génération a échoué.')]);
   return { id: versionId, status: status.status, error: status.error };
+}
+
+async function notifyVersion(admin: ReturnType<typeof createStorageAdminClient>, userId: string, versionId: string, type: 'ready' | 'failed' | 'cancelled', message: string) {
+  const { error } = await admin.from('notifications').insert({ user_id: userId, version_id: versionId, type, message });
+  if (error && !error.message.includes('notifications')) console.error('Notification vidéo non enregistrée:', error.message);
 }
 async function readBoundedVideo(response: Response, maxBytes: number): Promise<Buffer> {
   if (!response.body) throw new HttpError(502, 'Le fournisseur n’a retourné aucun fichier vidéo.');

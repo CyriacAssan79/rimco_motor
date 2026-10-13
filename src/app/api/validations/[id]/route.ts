@@ -1,0 +1,28 @@
+import { NextResponse } from 'next/server';
+import { z } from 'zod';
+import { errorResponse, getActor, HttpError } from '@/core/auth/guards';
+import { createStorageAdminClient } from '@/core/storage/supabase';
+
+const reviewSchema = z.object({ status: z.enum(['approved', 'rejected']), reason: z.string().trim().max(1000).optional() }).superRefine((value, ctx) => {
+  if (value.status === 'rejected' && !value.reason) ctx.addIssue({ code: 'custom', path: ['reason'], message: 'Un motif est obligatoire en cas de refus.' });
+});
+
+export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
+  try {
+    const actor = await getActor();
+    if (actor.role !== 'valideur' && actor.role !== 'admin') throw new HttpError(403, 'Cette action est réservée aux valideurs et administrateurs.');
+    const input = reviewSchema.parse(await request.json());
+    const { id } = await context.params;
+    const admin = createStorageAdminClient();
+    const { data: validation, error } = await admin.from('validations').select('id,video_id,status,video:videos!inner(brand_id,department)').eq('id', id).single();
+    if (error || !validation) throw new HttpError(404, 'Demande de validation introuvable.');
+    const video = Array.isArray(validation.video) ? validation.video[0] : validation.video;
+    if (actor.role === 'valideur' && (!video || video.brand_id !== actor.brandId || video.department !== actor.department)) throw new HttpError(403, 'Cette vidéo ne fait pas partie de votre périmètre.');
+    if (validation.status !== 'pending') throw new HttpError(409, 'Cette demande a déjà été traitée.');
+    const now = new Date().toISOString();
+    const { data, error: updateError } = await admin.from('validations').update({ status: input.status, reason: input.status === 'rejected' ? input.reason : null, reviewed_by: actor.id, reviewed_at: now }).eq('id', id).eq('status', 'pending').select('id,status,reason').single();
+    if (updateError) throw updateError;
+    await admin.from('videos').update({ status: input.status === 'approved' ? 'approved' : 'rejected', updated_at: now }).eq('id', validation.video_id);
+    return NextResponse.json(data);
+  } catch (error) { return errorResponse(error); }
+}

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { StatusPill } from '@/components/shell';
 
-type Video = { id: string; videoId?: string; title?: string; make?: string; model?: string; status: string; durationSeconds?: number; createdAt?: string; created_at?: string; estimatedPriceFcfa?: number; price_fcfa?: number; priceFcfa?: number; videoUrl?: string | null; previewUrl?: string | null; finalUrl?: string };
+type Video = { id: string; videoId?: string; title?: string; make?: string; model?: string; status: string; durationSeconds?: number; createdAt?: string; created_at?: string; estimatedPriceFcfa?: number; price_fcfa?: number; priceFcfa?: number; videoUrl?: string | null; previewUrl?: string | null; finalUrl?: string; validationId?: string | null; validationStatus?: string | null; version?: number; department?: string; userId?: string };
 
 function formatVideoPrice(video: Video) {
   const amount = [video.priceFcfa, video.estimatedPriceFcfa, video.price_fcfa].find((value): value is number => typeof value === 'number');
@@ -26,12 +26,14 @@ export function VideoLibrary() {
   const [notice, setNotice] = useState('');
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [deleting, setDeleting] = useState(false);
+  const [selectedVideo, setSelectedVideo] = useState<Video | null>(null);
 
   const loadVideos = useCallback(async () => {
     const response = await fetch('/api/versions');
     const data = await response.json();
     if (!response.ok) throw new Error(data.error ?? 'Impossible de charger la bibliothèque.');
     setVideos(data.versions ?? []);
+    setSelectedVideo((current) => current ? (data.versions ?? []).find((video: Video) => (video.videoId ?? video.id) === (current.videoId ?? current.id)) ?? null : null);
     const visibleIds = new Set((data.versions ?? []).map((video: Video) => video.videoId ?? video.id));
     setSelectedIds((current) => current.filter((id) => visibleIds.has(id)));
   }, []);
@@ -53,8 +55,8 @@ export function VideoLibrary() {
   const selectedVideos = videos.filter((video) => selectedIds.includes(video.videoId ?? video.id));
   const selectableVisibleIds = filtered.filter((video) => !isVideoInProgress(video.status)).map((video) => video.videoId ?? video.id);
   const allVisibleSelected = selectableVisibleIds.length > 0 && selectableVisibleIds.every((id) => selectedIds.includes(id));
-  const tabs = [['all', 'Toutes'], ['ready', 'Prêtes'], ['generating', 'En cours'], ['failed', 'Échec']];
-  const labels: Record<string, string> = { ready: 'Prête', review: 'Prête', generating: 'Génération', queued: 'Génération', failed: 'Échec', rejected: 'Échec', draft: 'Brouillon' };
+  const tabs = [['all', 'Tous les statuts'], ['ready', 'Prêtes'], ['review', 'En validation'], ['rejected', 'Refusées'], ['generating', 'En cours']];
+  const labels: Record<string, string> = { ready: 'Validée', review: 'En validation', generating: 'Génération', queued: 'Génération', failed: 'Échec', rejected: 'Refusée', draft: 'Brouillon', cancelled: 'Annulée' };
 
   function toggleSelected(id: string) {
     setSelectedIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
@@ -105,6 +107,15 @@ export function VideoLibrary() {
     }
   }
 
+  async function submitForValidation(video: Video) {
+    setError('');
+    const response = await fetch('/api/validations', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ versionId: video.id }) });
+    const data = await response.json();
+    if (!response.ok) { setError(data.error ?? 'Impossible d’envoyer la vidéo en validation.'); return; }
+    setNotice('Vidéo envoyée en validation.');
+    await loadVideos();
+  }
+
   return <>
     <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
       <div className="flex gap-1 overflow-x-auto border border-[#e2e2e5] bg-white p-1">{tabs.map(([value, label]) => <button type="button" key={value} onClick={() => setFilter(value)} aria-pressed={filter === value} className={`min-h-11 whitespace-nowrap px-3 py-2 text-xs font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#c51e1c] ${filter === value ? 'bg-[#fae9e8] text-[#9c2822]' : 'text-[#626269] hover:bg-[#f4f4f5]'}`}>{label}</button>)}</div>
@@ -125,7 +136,7 @@ export function VideoLibrary() {
     {error && <p role="alert" className="mb-5 border border-[#f0c9c6] bg-[#fae9e7] p-4 text-sm text-[#9d352e]">{error}</p>}
     {notice && <p role="status" className="mb-5 border border-[#d7e7da] bg-[#f2f8f3] p-4 text-sm text-[#315c39]">{notice}</p>}
     {filtered.length === 0 ? <div className="border border-dashed border-[#d2d2d6] bg-white px-6 py-16 text-center"><svg aria-hidden="true" viewBox="0 0 24 24" className="mx-auto size-8 fill-none stroke-[#c51e1c]" strokeWidth="1.5"><path d="M4 5h16v14H4zM10 9l5 3-5 3z" /></svg><h2 className="mt-4 text-sm font-semibold">Aucune vidéo dans cette vue</h2><p className="mx-auto mt-2 max-w-md text-xs leading-5 text-[#626269]">Les vidéos générées apparaîtront ici avec leur aperçu, leur statut et leur prix.</p><Link href="/studio" className="mt-5 inline-flex min-h-11 items-center rounded-sm bg-[#c51e1c] px-4 py-2.5 text-xs font-semibold text-white hover:bg-[#a71715]">Créer une vidéo</Link></div> : <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-      {filtered.map((video) => <article key={video.videoId ?? video.id} className="overflow-hidden border border-[#e2e2e5] bg-white">
+      {filtered.map((video) => <article key={video.videoId ?? video.id} onClick={() => setSelectedVideo(video)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelectedVideo(video); } }} tabIndex={0} role="button" className={`cursor-pointer overflow-hidden border bg-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#c51e1c] ${selectedVideo?.id === video.id ? 'border-[#c51e1c]' : 'border-[#e2e2e5]'}`}>
         <div className="flex min-h-11 items-center justify-between border-b border-[#e2e2e5] px-4">
           <label className={`inline-flex min-h-11 items-center gap-2 text-xs font-medium ${isVideoInProgress(video.status) ? 'cursor-not-allowed text-[#8b8b91]' : 'cursor-pointer text-[#333338]'}`}>
             <input type="checkbox" checked={selectedIds.includes(video.videoId ?? video.id)} disabled={isVideoInProgress(video.status)} onChange={() => toggleSelected(video.videoId ?? video.id)} aria-label={`Sélectionner ${video.title ?? 'la vidéo'}`} className="size-4 accent-[#c51e1c] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#c51e1c] disabled:cursor-not-allowed" />
@@ -134,9 +145,10 @@ export function VideoLibrary() {
         </div>
         {video.previewUrl ? <video controls preload="metadata" src={video.previewUrl} className="aspect-video w-full bg-[#232326]" aria-label={`Aperçu de ${video.title ?? 'la vidéo'}`} /> : <div className="grid aspect-video place-items-center bg-[#eeeeef] text-[#8b8b91"><svg aria-hidden="true" viewBox="0 0 24 24" className="size-9 fill-none stroke-current" strokeWidth="1.5"><path d="M4 5h16v14H4zM10 9l5 3-5 3z" /></svg></div>}
         <div className="p-4"><div className="flex items-center justify-between gap-3"><StatusPill status={labels[video.status] ?? video.status} /><span className="text-xs font-semibold tabular-nums">{formatVideoPrice(video)}</span></div><h3 className="mt-3 truncate text-sm font-semibold">{video.title ?? `${video.make ?? 'Nouvelle'} ${video.model ?? 'vidéo'}`}</h3><p className="mt-1 text-xs text-[#77777d]">{formatVideoDate(video.createdAt ?? video.created_at)} · {video.durationSeconds ?? 5} s</p>
-          {video.status === 'ready' && video.videoUrl ? <a href={video.videoUrl} download className="mt-4 inline-flex min-h-11 items-center rounded-sm bg-[#c51e1c] px-3.5 py-2.5 text-xs font-semibold text-white hover:bg-[#a71715] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#c51e1c]">Télécharger le MP4</a> : video.status === 'generating' ? <p className="mt-4 text-xs text-[#626269]">Génération en cours. Mise à jour automatique.</p> : null}
+          {video.status === 'ready' && video.videoUrl ? <div className="mt-4 flex flex-wrap gap-2"><a href={video.videoUrl} download onClick={(event) => event.stopPropagation()} className="inline-flex min-h-11 items-center rounded-sm bg-[#c51e1c] px-3.5 py-2.5 text-xs font-semibold text-white hover:bg-[#a71715] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#c51e1c]">Télécharger le MP4</a><button type="button" onClick={(event) => { event.stopPropagation(); void submitForValidation(video); }} className="inline-flex min-h-11 items-center rounded-sm border border-[#e2e2e5] px-3.5 py-2.5 text-xs font-semibold">Envoyer en validation</button></div> : video.status === 'generating' ? <p className="mt-4 text-xs text-[#626269]">Génération en cours. Mise à jour automatique.</p> : null}
         </div>
       </article>)}
     </div>}
+    {selectedVideo && <aside className="border border-[#e2e2e5] bg-white p-5" aria-label="Détails de la vidéo sélectionnée"><div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-[10px] font-bold uppercase tracking-[.16em] text-[#c51e1c]">Détail de la vidéo</p><h2 className="mt-1 text-lg font-semibold">{selectedVideo.title ?? 'Vidéo sans titre'}</h2></div><span className="text-xs text-[#626269]">V{selectedVideo.version ?? 1} · {selectedVideo.durationSeconds ?? 5} s</span></div>{selectedVideo.previewUrl && <video controls preload="metadata" src={selectedVideo.previewUrl} className="mt-4 aspect-video max-h-[420px] w-full bg-[#232326]" />}{selectedVideo.videoUrl && <a href={selectedVideo.videoUrl} download className="mt-4 inline-flex min-h-11 items-center rounded-sm bg-[#c51e1c] px-4 py-2.5 text-xs font-semibold text-white">Télécharger MP4</a>}</aside>}
   </>;
 }

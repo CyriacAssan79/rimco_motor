@@ -1,3 +1,4 @@
 import {PageHeading} from '@/components/shell';
 import {MediaLibrary} from './MediaLibrary';
-export default function MediaPage(){return <><PageHeading eyebrow="Assets de marque" title="Médiathèque" description="Véhicules, logos et pistes audio de la production RIMCO. Les originaux restent privés et chaque nouveau média est vérifié avant usage."/><MediaLibrary/></>}
+import { requireRole } from '@/core/auth/guards';
+export default async function MediaPage(){await requireRole('collaborateur','admin'); return <><PageHeading eyebrow="Assets de marque" title="Médiathèque assets" description="La base d’images que l’IA utilise pour créer des vidéos fidèles à RIMCO."/><MediaLibrary/></>}

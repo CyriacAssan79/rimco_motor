@@ -31,7 +31,7 @@ export async function GET(request: Request) {
       return NextResponse.json({ versions });
     }
     const admin = createStorageAdminClient();
-    let query = admin.from('videos').select('id,user_id,title,status,department,brand_id,created_at,video_versions(id,number,status,generation_seconds,final_path,raw_path,provider_request_id,brief_json,generated_prompt,created_at,validations(status),usage_ledger(kind,ai_model_id,seconds,cost_usd,price_fcfa,status))').order('created_at', { ascending: false });
+    let query = admin.from('videos').select('id,user_id,title,status,department,brand_id,created_at,video_versions(id,number,status,generation_seconds,final_path,raw_path,provider_request_id,brief_json,generated_prompt,created_at,validations(id,status),usage_ledger(kind,ai_model_id,seconds,cost_usd,price_fcfa,status))').order('created_at', { ascending: false });
     if (actor.role === 'collaborateur') query = query.eq('user_id', actor.id);
     if (actor.role === 'valideur') {
       if (!actor.brandId) return NextResponse.json({ versions: [] });
@@ -64,8 +64,8 @@ export async function GET(request: Request) {
         }
       }
       if ((video.status === 'approved' || video.status === 'ready' && isOwner) && isPersistedMock) videoUrl = previewUrl;
-      const status = video.status === 'approved' ? 'ready' : video.status === 'rejected' ? 'rejected' : video.status === 'review' ? 'review' : video.status === 'ready' ? 'ready' : latest?.status === 'failed' ? 'failed' : latest?.status === 'queued' || latest?.status === 'generating' || latest?.status === 'postprocessing' ? 'generating' : 'draft';
-      return { id: latest?.id ?? video.id, videoId: video.id, title: video.title, status, durationSeconds: Number(latest?.generation_seconds ?? generationCost?.seconds ?? 5), versionStatus: latest?.status ?? null, priceFcfa: generationCost?.priceFcfa ?? (typeof mockMetadata.priceFcfa === 'number' ? mockMetadata.priceFcfa : null), validationStatus: validationRows[0]?.status ?? null, prompt: latest?.generated_prompt ?? null, videoUrl, previewUrl, createdAt: video.created_at };
+      const status = video.status === 'approved' ? 'ready' : video.status === 'rejected' ? 'rejected' : video.status === 'review' ? 'review' : video.status === 'cancelled' ? 'cancelled' : video.status === 'ready' ? 'ready' : latest?.status === 'failed' ? 'failed' : latest?.status === 'cancelled' ? 'cancelled' : latest?.status === 'queued' || latest?.status === 'generating' || latest?.status === 'postprocessing' ? 'generating' : 'draft';
+      return { id: latest?.id ?? video.id, videoId: video.id, title: video.title, status, durationSeconds: Number(latest?.generation_seconds ?? generationCost?.seconds ?? 5), version: latest?.number ?? 1, versionStatus: latest?.status ?? null, priceFcfa: generationCost?.priceFcfa ?? (typeof mockMetadata.priceFcfa === 'number' ? mockMetadata.priceFcfa : null), validationId: validationRows[0]?.id ?? null, validationStatus: validationRows[0]?.status ?? null, prompt: latest?.generated_prompt ?? null, videoUrl, previewUrl, createdAt: video.created_at, department: video.department, userId: video.user_id };
     }));
     return NextResponse.json({ versions: requestedStatus ? versions.filter((version) => version.status === requestedStatus) : versions });
   } catch (error) { return errorResponse(error); }
