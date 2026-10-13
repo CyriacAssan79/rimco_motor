@@ -19,7 +19,7 @@ export type AggregatedGenerationCost = {
 /**
  * Combines the LLM brief reservation and the Fal video reservation into the
  * single amount shown to the team. Released reservations never appear in the
- * customer total; the provider estimate is converted once and the 20% margin
+ * customer total; the provider estimate is converted once and the 30% markup
  * is applied once to the combined amount.
  */
 export function aggregateGenerationCost(
