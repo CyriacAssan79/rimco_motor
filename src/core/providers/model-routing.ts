@@ -8,6 +8,18 @@ export const MODEL_ENDPOINTS = {
   seedance: 'bytedance/seedance-2.5/image-to-video',
 } as const;
 
+/** Matrice métier verrouillée : l’interface et l’API doivent suivre cette table. */
+export const LOCKED_MODEL_POLICY = [
+  { tier: 'standard', duration: 5, model: 'Wan 3.0' },
+  { tier: 'standard', duration: 10, model: 'Kling O3 Pro' },
+  { tier: 'standard', duration: 15, model: 'Kling O3 Pro' },
+  { tier: 'premium', duration: 5, model: 'Veo 3.1 Fast' },
+  { tier: 'premium', duration: 10, model: 'Seedance 2.5' },
+  { tier: 'premium', duration: 15, model: 'Seedance 2.5' },
+  { tier: 'premium', duration: 20, model: 'Seedance 2.5' },
+  { tier: 'premium', duration: 30, model: 'Seedance 2.5' },
+] as const;
+
 type Route = {
   tier: GenerationTier;
   adapterFamily: AdapterFamily;
