@@ -231,7 +231,9 @@ begin
     or new.submitted_by is distinct from old.submitted_by or new.created_at is distinct from old.created_at then
     raise exception using errcode='42501', message='Champs de validation non modifiables';
   end if;
-  if old.status <> 'pending' or new.status not in ('approved','rejected') or new.reviewed_by <> auth.uid() or new.reviewed_at is null then
+  if old.status <> 'pending' or new.status not in ('approved','rejected')
+    or (current_setting('request.jwt.claim.role', true) <> 'service_role' and new.reviewed_by <> auth.uid())
+    or new.reviewed_at is null then
     raise exception using errcode='42501', message='Transition de validation non autorisée';
   end if;
   if new.status='rejected' and length(trim(coalesce(new.reason,'')))=0 then
@@ -352,7 +354,7 @@ on conflict(name) do update set tier=excluded.tier,fal_endpoint_id=excluded.fal_
   allowed_durations=excluded.allowed_durations,allowed_formats=excluded.allowed_formats,
   is_active=excluded.is_active,is_default=excluded.is_default;
 alter table public.videos drop constraint if exists videos_status_check;
-alter table public.videos add constraint videos_status_check check (status in ('draft','generating','ready','review','approved','rejected','failed'));
+alter table public.videos add constraint videos_status_check check (status in ('draft','generating','ready','review','approved','rejected','failed','cancelled'));
 
 drop policy if exists rimco_storage_read on storage.objects;
 create policy rimco_storage_read on storage.objects for select to authenticated using(
@@ -362,7 +364,7 @@ create policy rimco_storage_read on storage.objects for select to authenticated 
   (bucket_id in ('assets','audio') and (storage.foldername(name))[1]=auth.uid()::text) or
   (bucket_id='assets' and exists(select 1 from public.assets a where a.path=name and a.status='validée')) or
   (bucket_id='audio' and exists(select 1 from public.assets a where a.path=name and a.kind='audio' and a.status='validée')) or
-  (bucket_id='videos' and exists(select 1 from public.videos v join public.video_versions vv on vv.video_id=v.id where v.user_id=auth.uid() and v.status in ('ready','review','approved') and vv.final_path=name)) or
+  (bucket_id='videos' and exists(select 1 from public.videos v join public.video_versions vv on vv.video_id=v.id where v.user_id=auth.uid() and v.status in ('approved','review') and vv.final_path=name)) or
   (bucket_id='videos' and exists(select 1 from public.profiles p join public.videos v on v.brand_id=p.brand_id and v.department=p.department and v.status='review' join public.video_versions vv on vv.video_id=v.id where p.id=auth.uid() and p.role='valideur' and p.is_active and vv.final_path=name))
 );
 -- Seed de démonstration idempotent. Endpoints et tarifs contrôlés dans la documentation fal.ai.
@@ -403,7 +405,7 @@ on conflict(name) do update set tier=excluded.tier,fal_endpoint_id=excluded.fal_
   is_active=excluded.is_active,is_default=excluded.is_default;
 update public.ai_models set is_default=false
 where tier='premium' and fal_endpoint_id='bytedance/seedance-2.5/image-to-video';
--- Apply a 20% markup to the combined provider charge when a generation reservation is settled.
+-- Apply a 30% markup to the combined provider charge when a generation reservation is settled.
 -- This changes the customer-facing price only; provider costs and the budget cap remain intact.
 create or replace function public.settle_budget(p_entry_id uuid,p_outcome text,p_actual_cost_usd numeric,p_usd_to_eur numeric,p_eur_to_fcfa numeric,p_cap_eur numeric)
 returns void language plpgsql security definer set search_path = '' as $$
@@ -432,7 +434,7 @@ begin
   if coalesce((select sum(l.cost_eur) from public.usage_ledger l where l.status in ('reserved','charged') and l.id<>p_entry_id),0)+final_eur > p_cap_eur then
     raise exception using errcode='P0001', message='Le coût réel dépasserait le plafond autorisé';
   end if;
-  client_price_fcfa := case when final_usd > 0 then ceil(final_eur * p_eur_to_fcfa * 1.20) else entry.price_fcfa end;
+  client_price_fcfa := case when final_usd > 0 then ceil(final_eur * p_eur_to_fcfa * 1.30) else entry.price_fcfa end;
   update public.usage_ledger
     set status='charged', cost_usd=final_usd, cost_eur=final_eur,
         cost_real_fcfa=final_eur*p_eur_to_fcfa,
@@ -574,7 +576,7 @@ begin
   end if;
   final_usd := p_actual_cost_usd;
   final_eur := final_usd * p_usd_to_eur;
-  client_price_fcfa := case when final_usd > 0 then ceil(final_eur * p_eur_to_fcfa * 1.20) else entry.price_fcfa end;
+  client_price_fcfa := case when final_usd > 0 then ceil(final_eur * p_eur_to_fcfa * 1.30) else entry.price_fcfa end;
   update public.usage_ledger
     set status='charged', cost_usd=final_usd, cost_eur=final_eur,
         cost_real_fcfa=final_eur*p_eur_to_fcfa,
@@ -603,4 +605,24 @@ update public.ai_models
 set tier='premium', allowed_durations='{10,15,20,30}', is_active=true, is_default=false
 where fal_endpoint_id='bytedance/seedance-2.5/image-to-video';
 
+-- Canonical final state. This block intentionally runs last so the one-shot setup
+-- remains idempotent even when it is applied over an older beta schema.
+alter table public.videos drop constraint if exists videos_status_check;
+alter table public.videos add constraint videos_status_check check (status in ('draft','generating','ready','review','approved','rejected','failed','cancelled'));
+alter table public.video_versions drop constraint if exists video_versions_status_check;
+alter table public.video_versions add constraint video_versions_status_check check (status in ('queued','generating','postprocessing','ready','failed','cancelled'));
+alter table public.assets drop constraint if exists assets_kind_check;
+alter table public.assets add constraint assets_kind_check check (kind in ('vehicle','logo','audio','place','decor','wardrobe','badge'));
+create unique index if not exists notifications_user_version_type_idx
+  on public.notifications(user_id, version_id, type)
+  where version_id is not null;
+
 notify pgrst, 'reload schema';
+
+-- Migration 0017 : matrice vidéo verrouillée (idempotent).
+update public.ai_models set is_active = false, is_default = false
+where fal_endpoint_id not in ('alibaba/wan-3.0/image-to-video','fal-ai/kling-video/o3/pro/image-to-video','fal-ai/veo3.1/fast/image-to-video','bytedance/seedance-2.5/image-to-video');
+update public.ai_models set is_active=true,is_default=false,tier='standard',allowed_durations='{5}',allowed_formats='{16:9,9:16,1:1}' where fal_endpoint_id='alibaba/wan-3.0/image-to-video';
+update public.ai_models set is_active=true,is_default=true,tier='standard',allowed_durations='{10,15}',allowed_formats='{16:9,9:16,1:1}' where fal_endpoint_id='fal-ai/kling-video/o3/pro/image-to-video';
+update public.ai_models set is_active=true,is_default=true,tier='premium',allowed_durations='{6}',allowed_formats='{16:9,9:16}' where fal_endpoint_id='fal-ai/veo3.1/fast/image-to-video';
+update public.ai_models set is_active=true,is_default=false,tier='premium',allowed_durations='{10,15,20,30}',allowed_formats='{16:9,9:16,1:1}' where fal_endpoint_id='bytedance/seedance-2.5/image-to-video';

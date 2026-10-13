@@ -8,7 +8,7 @@ describe('aggregateGenerationCost', () => {
       { kind: 'generation', ai_model_id: null, seconds: 1, cost_usd: 0.5, price_fcfa: 0, status: 'charged' },
     ], 0.9, 655.957);
 
-    expect(result).toEqual({ costUsd: 2.5, priceFcfa: 1772, seconds: 10, status: 'charged' });
+    expect(result).toEqual({ costUsd: 2.5, priceFcfa: 1919, seconds: 10, status: 'charged' });
   });
 
   it('does not expose released reservations', () => {

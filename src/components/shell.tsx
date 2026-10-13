@@ -43,6 +43,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [actor, setActor] = useState<{ role: Role; name?: string; department?: string } | null>(null);
   const [pendingCount, setPendingCount] = useState(0);
+  const [notifications, setNotifications] = useState<Array<{ id: string; message: string; read_at?: string | null; created_at: string }>>([]);
+  const [showNotifications, setShowNotifications] = useState(false);
   useEffect(() => {
     let active = true;
     fetch('/api/me').then(async (response) => response.ok ? response.json() : null).then((data) => {
@@ -50,6 +52,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     }).catch(() => undefined);
     fetch('/api/versions?status=review').then(async (response) => response.ok ? response.json() : null).then((data) => {
       if (active && data) setPendingCount(Array.isArray(data.versions) ? data.versions.length : 0);
+    }).catch(() => undefined);
+    fetch('/api/notifications').then(async (response) => response.ok ? response.json() : null).then((data) => {
+      if (active && data) setNotifications(Array.isArray(data.notifications) ? data.notifications : []);
     }).catch(() => undefined);
     return () => { active = false; };
   }, [pathname]);
@@ -67,7 +72,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <div className="mt-auto border-t border-[var(--border)] pt-4"><p className="text-sm font-semibold">{actor?.name ?? 'Votre espace'}</p><p className="mt-1 text-xs text-[#77777d]">{roleLabel}{actor?.department ? ` · ${actor.department}` : ''}</p><button type="button" className="mt-3 text-xs text-[#77777d] underline underline-offset-4">Quitter</button></div>
     </aside>
     <div className="lg:pl-[232px]">
-      <header className="sticky top-0 z-10 flex h-[62px] items-center border-b border-[var(--border)] bg-white px-5 md:px-8"><div className="text-xs text-[#77777d]">RIMCO Motors <span className="px-2 text-[#c5c5ca]">/</span><span className="font-semibold text-[#242428]">{page}</span></div></header>
+      <header className="sticky top-0 z-10 flex h-[62px] items-center justify-between border-b border-[var(--border)] bg-white px-5 md:px-8"><div className="text-xs text-[#77777d]">RIMCO Motors <span className="px-2 text-[#c5c5ca]">/</span><span className="font-semibold text-[#242428]">{page}</span></div><div className="relative"><button type="button" aria-label="Notifications" aria-expanded={showNotifications} onClick={async () => { setShowNotifications((value) => !value); if (notifications.some((item) => !item.read_at)) { await fetch('/api/notifications', { method: 'PATCH' }).catch(() => undefined); setNotifications((items) => items.map((item) => ({ ...item, read_at: item.read_at ?? new Date().toISOString() }))); } }} className="relative grid size-9 place-items-center rounded-full border border-[var(--border)] text-[#55545a] hover:bg-[#f5f5f3]"><span aria-hidden="true">♢</span>{notifications.some((item) => !item.read_at) && <span className="absolute -right-0.5 -top-0.5 size-2 rounded-full bg-[var(--brand-red)]" />}</button>{showNotifications && <div className="absolute right-0 top-11 z-30 w-80 rounded-xl border border-[var(--border)] bg-white p-3 shadow-xl"><p className="px-2 pb-2 text-xs font-semibold">Notifications</p>{notifications.length === 0 ? <p className="px-2 py-4 text-xs text-[#77777d]">Aucune notification.</p> : <ul className="max-h-72 space-y-1 overflow-auto">{notifications.map((item) => <li key={item.id} className="rounded-lg bg-[#f8f7f4] px-3 py-2 text-xs text-[#55545a]">{item.message}<span className="mt-1 block text-[10px] text-[#96928c]">{new Date(item.created_at).toLocaleString('fr-FR')}</span></li>)}</ul>}</div>}</div></header>
       <nav aria-label="Navigation principale" className="flex gap-1 overflow-x-auto border-b border-[var(--border)] bg-white px-3 py-2 lg:hidden">{visibleNav.map((item) => <NavLink key={item.href} item={item} pathname={pathname} mobile badge={item.badge ? pendingCount : undefined} />)}</nav>
       <main id="main" className="mx-auto max-w-[1440px] p-5 md:px-8 md:py-8">{children}</main>
     </div>

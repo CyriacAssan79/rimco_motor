@@ -257,7 +257,7 @@ export async function refreshLiveVersion(versionId: string, actor: Actor) {
 }
 
 async function notifyVersion(admin: ReturnType<typeof createStorageAdminClient>, userId: string, versionId: string, type: 'ready' | 'failed' | 'cancelled', message: string) {
-  const { error } = await admin.from('notifications').insert({ user_id: userId, version_id: versionId, type, message });
+  const { error } = await admin.from('notifications').upsert({ user_id: userId, version_id: versionId, type, message }, { onConflict: 'user_id,version_id,type', ignoreDuplicates: true });
   if (error && !error.message.includes('notifications')) console.error('Notification vidéo non enregistrée:', error.message);
 }
 async function readBoundedVideo(response: Response, maxBytes: number): Promise<Buffer> {

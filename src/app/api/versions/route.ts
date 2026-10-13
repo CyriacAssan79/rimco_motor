@@ -59,11 +59,11 @@ export async function GET(request: Request) {
         const storage = admin.storage.from('videos');
         const { data: signed } = await storage.createSignedUrl(path, 3600);
         previewUrl = signed?.signedUrl ?? null;
-        if (video.status === 'approved' || video.status === 'ready' && isOwner) {
+        if (video.status === 'approved') {
           videoUrl = await createSignedVideoDownloadUrl((storagePath, expiresIn, options) => storage.createSignedUrl(storagePath, expiresIn, options), path);
         }
       }
-      if ((video.status === 'approved' || video.status === 'ready' && isOwner) && isPersistedMock) videoUrl = previewUrl;
+      if (video.status === 'approved' && isPersistedMock) videoUrl = previewUrl;
       const status = video.status === 'approved' ? 'ready' : video.status === 'rejected' ? 'rejected' : video.status === 'review' ? 'review' : video.status === 'cancelled' ? 'cancelled' : video.status === 'ready' ? 'ready' : latest?.status === 'failed' ? 'failed' : latest?.status === 'cancelled' ? 'cancelled' : latest?.status === 'queued' || latest?.status === 'generating' || latest?.status === 'postprocessing' ? 'generating' : 'draft';
       return { id: latest?.id ?? video.id, videoId: video.id, title: video.title, status, durationSeconds: Number(latest?.generation_seconds ?? generationCost?.seconds ?? 5), version: latest?.number ?? 1, versionStatus: latest?.status ?? null, priceFcfa: generationCost?.priceFcfa ?? (typeof mockMetadata.priceFcfa === 'number' ? mockMetadata.priceFcfa : null), validationId: validationRows[0]?.id ?? null, validationStatus: validationRows[0]?.status ?? null, prompt: latest?.generated_prompt ?? null, videoUrl, previewUrl, createdAt: video.created_at, department: video.department, userId: video.user_id };
     }));

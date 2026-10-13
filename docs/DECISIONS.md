@@ -1,5 +1,7 @@
 # Décisions
 
+- Mise à jour du 13 octobre 2026 : l'écran administrateur affiche uniquement le montant total en FCFA, calculé sur les réservations LLM + Fal combinées avec une majoration de 30 %. Le téléchargement des vidéos est limité au statut approuvé. Les notifications sont internes, visibles dans l'en-tête et dédupliquées; le webhook Fal reste désactivé jusqu'à validation dédiée. La médiathèque applique les filtres de marque/catégorie et masque les contrôles de validation aux collaborateurs. `supabase/setup.sql` se termine par une normalisation idempotente de l'état final.
+
 - Dépôt initial vide : initialisation directe d'une application Next.js App Router avec TypeScript et mode mock par défaut.
 - Périmètre V1 confirmé par le responsable : générer une vidéo, la consulter et télécharger son MP4. L’approbation des vidéos et leur édition après génération sont exclues.
 - Appels réels Playground fal : Kling 2.6 Pro a renvoyé un MP4 de 5 s (0,35 USD observé); OpenRouter avec Claude Sonnet 5.5 a généré le brief pour 0,002926 USD. Claude exige `reasoning: true`; l'adaptateur l'envoie désormais. Le parcours live de l'application n'est pas encore vérifié. Détails et compteur dans `docs/FAL_VALIDATION.md`. Révoquer la clé partagée dans le chat après validation.

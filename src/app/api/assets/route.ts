@@ -28,7 +28,10 @@ export async function GET(request: Request) {
     const requestedStatus = search.get('status');
     if (requestedKind) query = query.eq('kind', requestedKind);
     if (requestedStatus) query = query.eq('status', requestedStatus);
-    if (actor.role !== 'admin' && !requestedKind && !requestedStatus) query = query.or(`and(kind.eq.vehicle,status.eq.validée),created_by.eq.${actor.id}`);
+    if (actor.role !== 'admin') {
+      if (!actor.brandId) return NextResponse.json({ assets: [] });
+      query = query.or(`and(brand_id.eq.${actor.brandId},status.eq.validée),created_by.eq.${actor.id}`);
+    }
     const { data, error } = await query;
     if (error) throw error;
     const assets = await Promise.all((data ?? []).map(async (asset) => {

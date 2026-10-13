@@ -31,7 +31,7 @@ export async function POST(_request: Request, context: { params: Promise<{ id: s
     if (versionUpdateError) throw versionUpdateError;
     await admin.from('videos').update({ status: 'cancelled', updated_at: now }).eq('id', version.video_id);
     await admin.from('usage_ledger').update({ status: 'released' }).eq('version_id', id).eq('status', 'reserved');
-    await admin.from('notifications').insert({ user_id: video.user_id, version_id: id, type: 'cancelled', message: 'La génération a été annulée.' });
+    await admin.from('notifications').upsert({ user_id: video.user_id, version_id: id, type: 'cancelled', message: 'La génération a été annulée.' }, { onConflict: 'user_id,version_id,type', ignoreDuplicates: true });
     return NextResponse.json({ id, status: 'cancelled' });
   } catch (error) { return errorResponse(error); }
 }

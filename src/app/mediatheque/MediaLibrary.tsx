@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import Image from 'next/image';
 import { createSupabaseBrowserClient } from '@/core/supabase/browser';
 
@@ -30,6 +30,10 @@ const kinds: Array<[Asset['kind'], string]> = [
   ['audio', 'Audio'],
 ];
 
+function labelForKind(kind: Asset['kind']): string {
+  return kinds.find(([value]) => value === kind)?.[1] ?? 'Média';
+}
+
 export function MediaLibrary() {
   const [assets, setAssets] = useState<Asset[]>([]);
   const [filter, setFilter] = useState<'all' | Asset['kind']>('all');
@@ -43,11 +47,12 @@ export function MediaLibrary() {
   const [color, setColor] = useState('');
   const [rejecting, setRejecting] = useState('');
   const [reason, setReason] = useState('');
+  const [isAdmin, setIsAdmin] = useState(false);
 
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true);
     try {
-      const response = await fetch('/api/assets');
+      const response = await fetch(`/api/assets${filter !== 'all' ? `?kind=${encodeURIComponent(filter)}` : ''}`);
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? 'Impossible de charger la médiathèque.');
       setAssets(data.assets ?? []);
@@ -56,11 +61,12 @@ export function MediaLibrary() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [filter]);
 
   useEffect(() => {
-    void load();
+    void fetch('/api/me').then((response) => response.ok ? response.json() : null).then((data) => setIsAdmin(data?.actor?.role === 'admin')).catch(() => setIsAdmin(false));
   }, []);
+  useEffect(() => { void load(); }, [load]);
 
   async function upload(file: File) {
     setBusy(true);
@@ -199,11 +205,11 @@ export function MediaLibrary() {
             <article key={asset.id} className="overflow-hidden rounded-2xl border border-black/[.055] bg-white">
               <AssetPreview asset={asset} />
               <div className="p-4">
-                <p className="text-[9px] font-bold uppercase tracking-[.18em] text-[#ad3d34]">{asset.kind === 'vehicle' ? 'Photo véhicule' : asset.kind === 'logo' ? 'Logo RIMCO' : 'Piste audio'}</p>
-                <h3 className="mt-1.5 text-sm font-semibold">{asset.kind === 'vehicle' ? `${asset.make ?? 'Véhicule'} ${asset.model ?? ''}` : asset.kind === 'logo' ? `Logo · ${asset.variant ?? 'rouge'}` : 'Piste audio'}</h3>
-                <p className="mt-1 text-xs text-[#918c85]">{asset.color ?? asset.angle ?? asset.variant ?? 'RIMCO Motors'}</p>
+                <p className="text-[9px] font-bold uppercase tracking-[.18em] text-[#ad3d34]">{labelForKind(asset.kind)}</p>
+                <h3 className="mt-1.5 text-sm font-semibold">{asset.kind === 'vehicle' ? `${asset.make ?? 'Véhicule'} ${asset.model ?? ''}` : asset.title ?? labelForKind(asset.kind)}</h3>
+                <p className="mt-1 text-xs text-[#918c85]">{asset.category ?? asset.color ?? asset.angle ?? asset.variant ?? 'RIMCO Motors'}</p>
                 {asset.status === 'rejetée' && asset.review_reason && <p className="mt-2 text-xs text-[#831810]">Motif : {asset.review_reason}</p>}
-                {asset.status === 'en_attente' && (
+                {isAdmin && asset.status === 'en_attente' && (
                   <ReviewControls
                     asset={asset}
                     rejecting={rejecting}

@@ -43,7 +43,7 @@ describe('usage cost ledger', () => {
     });
   });
 
-  it('settles an entry once using an atomic reserved-status update and the 20% markup', async () => {
+  it('settles an entry once using an atomic reserved-status update and the 30% markup', async () => {
     const mock = createAdminMock({ ledger: { id: 'entry-1', status: 'reserved', seconds: 10, price_fcfa: 3711 } });
     mock.query.maybeSingle.mockResolvedValueOnce({ data: mock.admin ? { id: 'entry-1', status: 'reserved', seconds: 10, price_fcfa: 3711 } : null, error: null });
     mock.query.maybeSingle.mockResolvedValueOnce({ data: { id: 'entry-1' }, error: null });
@@ -51,7 +51,7 @@ describe('usage cost ledger', () => {
       entryId: 'entry-1', outcome: 'charged', actualCostUsd: 1, usdToEur: 0.9, eurToFcfa: 655.957,
     });
     expect(result.error).toBeNull();
-    expect(mock.updates[0]).toMatchObject({ status: 'charged', cost_usd: 1, cost_eur: 0.9, price_fcfa: 709, applied_fcfa_per_second: 70.9 });
+    expect(mock.updates[0]).toMatchObject({ status: 'charged', cost_usd: 1, cost_eur: 0.9, price_fcfa: 768, applied_fcfa_per_second: 76.8 });
     expect(mock.query.eq).toHaveBeenCalledWith('status', 'reserved');
   });
 
