@@ -2,7 +2,9 @@ import { createServerClient } from '@supabase/ssr';
 import { NextResponse, type NextRequest } from 'next/server';
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
-  if (pathname === '/connexion' || pathname.startsWith('/api/')) return NextResponse.next();
+  // Les ressources de marque sont publiques : elles doivent rester disponibles
+  // sur la page de connexion, avant toute session Supabase.
+  if (pathname === '/connexion' || pathname.startsWith('/api/') || pathname.startsWith('/brand/')) return NextResponse.next();
 
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
