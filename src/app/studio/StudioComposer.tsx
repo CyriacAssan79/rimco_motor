@@ -4,8 +4,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { formatFcfa } from '@/core/pricing';
-import { getScenePresets, getScenePreset, inferVehicleCategory, type ScenePreset } from '@/core/scenes/catalog';
-import { getSceneConcepts } from '@/core/scenes/concepts';
+import { getScenePresets, getScenePreset, inferVehicleCategory } from '@/core/scenes/catalog';
 import { getRouteForGeneration, getRoutedDurations } from '@/core/providers/model-routing';
 
 type Format = '16:9' | '9:16' | '1:1' | '4:5';
@@ -22,7 +21,6 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
   const [availableModels, setAvailableModels] = useState<Model[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsError, setModelsError] = useState('');
-  const [modelsRetry, setModelsRetry] = useState(0);
   const [assets, setAssets] = useState<Asset[]>([]);
   const [assetsLoading, setAssetsLoading] = useState(true);
   const [assetsError, setAssetsError] = useState('');
@@ -32,7 +30,7 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
   const [overlayLogo, setOverlayLogo] = useState(true);
   const [scenePresetId, setScenePresetId] = useState('');
   const [conceptId, setConceptId] = useState('signature');
-  const [complexity, setComplexity] = useState<'simple' | 'balanced' | 'rich'>('simple');
+  const complexity = 'balanced';
   const [tier, setTier] = useState<'standard' | 'premium'>('standard');
   const [durationS, setDurationS] = useState(5);
   const [additionalDirection, setAdditionalDirection] = useState('');
@@ -49,8 +47,6 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
   const universalScenes = allScenes.filter((scene) => scene.category === 'autre' && !relevantScenes.some((recommended) => recommended.id === scene.id));
   const sceneChoices = [...relevantScenes, ...universalScenes].slice(0, 8);
   const selectedScene = getScenePreset(scenePresetId) ?? relevantScenes[0];
-  const concepts = selectedScene ? getSceneConcepts(selectedScene) : [];
-  const selectedConcept = concepts.find((concept) => concept.id === conceptId) ?? concepts[0];
   const compatibleModels = availableModels.filter((model) => model.tier === tier);
   const route = getRouteForGeneration(tier, durationS);
   const routedModel = compatibleModels.find((model) => model.adapterFamily === route?.adapterFamily && model.durations.includes(durationS));
@@ -59,6 +55,9 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
   const priceLabel = mode === 'live' && estimatedPrice ? `≈ ${formatFcfa(estimatedPrice)}` : mode === 'mock' ? 'Simulation' : '—';
   const durationOptions = mode === 'mock' ? [5] : getRoutedDurations(tier);
   const generationActive = Boolean(job && !['ready', 'failed'].includes(job.status));
+  const locationChoices = Array.from(new Map(sceneChoices.map((scene) => [scene.location, scene])).values());
+  const decorChoices = Array.from(new Map(sceneChoices.map((scene) => [scene.setting, scene])).values());
+  const lightingChoices = Array.from(new Map(sceneChoices.map((scene) => [scene.lighting, scene])).values());
 
   useEffect(() => {
     if (selectedModel && !selectedModel.formats.includes(format)) setFormat(selectedModel.formats[0] ?? '16:9');
@@ -91,7 +90,7 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
       })
       .finally(() => { if (active) setModelsLoading(false); });
     return () => { active = false; };
-  }, [mode, modelsRetry]);
+  }, [mode]);
 
   useEffect(() => {
     let active = true;
@@ -164,85 +163,61 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
   }
 
   return (
-    <div className="grid min-w-0 gap-6 xl:grid-cols-[minmax(0,1fr)_350px]">
-      <form onSubmit={submit} className="min-w-0 space-y-6 rounded-md border border-black/[.055] bg-white p-6 md:p-8">
-        <section>
-          <h2 className="text-sm font-semibold">1. Choisissez le véhicule</h2>
-          <p className="mt-1 text-xs text-[#99958e]">Sa photo sert de référence pendant toute la vidéo.</p>
-          <div className="mt-3 grid gap-2 sm:grid-cols-2">
-            {assets.map((asset) => (
-              <button type="button" key={asset.id} onClick={() => setAssetId(asset.id)} aria-pressed={asset.id === assetId} className={`flex min-h-16 items-center gap-3 rounded-md border p-3 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#c51e1c] ${asset.id === assetId ? 'border-[#c51e1c] bg-[#fcf6f4]' : 'border-[#eceae6]'}`}>
-                <span className="grid size-12 shrink-0 place-items-center overflow-hidden bg-[#f1f1f2]">
-                  {asset.previewUrl ? <Image src={asset.previewUrl} alt={mode === 'mock' ? `Illustration de simulation · ${asset.make ?? 'Véhicule'} ${asset.model ?? ''}` : `${asset.make ?? 'Véhicule'} ${asset.model ?? ''}`} width={48} height={48} unoptimized className="size-full object-cover" /> : <span aria-hidden="true" className="text-xl text-[#831810]">◈</span>}
-                </span>
-                <span><b className="block text-xs">{asset.make} {asset.model}</b><small className="mt-1 block text-[10px] text-[#99958e]">{asset.color ?? 'Photo validée'}</small></span>
-              </button>
-            ))}
+    <form onSubmit={submit} className="grid min-w-0 items-start gap-5 xl:grid-cols-[minmax(0,1fr)_300px]">
+      <div className="min-w-0 space-y-5">
+        <section className="overflow-hidden rounded-md border border-black/[.055] bg-white">
+          <div className="min-h-[250px] p-5 md:min-h-[320px] md:p-7">
+            <div className="flex items-center justify-between gap-3">
+              <span className="rounded-full bg-[#f2f1ef] px-3 py-1 text-[11px] text-[#77736d]">Décrivez la vidéo que vous voulez, je m’occupe du reste.</span>
+              <span className="hidden text-[10px] font-semibold uppercase tracking-[.12em] text-[#aaa59d] md:inline">Brief de création</span>
+            </div>
+            {additionalDirection.trim() && <p className="mt-6 max-w-2xl whitespace-pre-wrap text-sm leading-6 text-[#4d4a45]">{additionalDirection.trim()}</p>}
           </div>
-          {assetsError && <div role="alert" className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-md bg-red-50 p-3 text-sm text-red-700"><span>{assetsError}</span><button type="button" onClick={() => setAssetsRetry((value) => value + 1)} className="min-h-11 rounded-md border border-red-200 bg-white px-3 font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#c51e1c]">Réessayer</button></div>}
-          {assetsLoading && <p role="status" className="mt-3 rounded-md bg-[#f8f7f4] px-3 py-3 text-sm text-[#716d66]">Chargement des véhicules validés…</p>}
-          {!assetsLoading && !assetsError && !assets.length && <Link href="/mediatheque" className="mt-3 flex min-h-16 items-center justify-center rounded-md border border-dashed border-[#dad7d1] bg-[#fcfcfb] px-4 py-6 text-sm text-[#817d76]">＋ Ajoutez et faites valider votre première photo</Link>}
-          {assets.length > 0 && <Link href="/mediatheque" className="mt-2 inline-flex min-h-11 items-center text-xs font-semibold text-[#ae332b] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#c51e1c]">Ajouter un autre véhicule ↗</Link>}
-        </section>
-
-        <section className="space-y-4 border-t border-[#eeeae4] pt-5">
-          <label className="grid gap-2 text-xs font-semibold">Titre de la vidéo<input value={title} onChange={(event) => setTitle(event.target.value)} maxLength={120} placeholder="Ex. Starlight EV · lancement Abidjan" className="rounded-md border border-[#e9e7e2] bg-white px-3 py-3 text-sm font-normal outline-none focus:border-[#c51e1c]" /><span className="font-normal text-[#88847d]">Ce titre apparaîtra dans la Bibliothèque et le suivi de facturation.</span></label>
-          <fieldset>
-            <legend className="text-sm font-semibold">2. Choisissez une scène</legend>
-            <p className="mt-1 text-xs text-[#88847d]">Choisissez le contexte. Le Studio construira ensuite les plans et le mouvement autour de votre véhicule.</p>
-            <div className="mt-3 grid gap-2 sm:grid-cols-2">{sceneChoices.map((scene: ScenePreset) => <button type="button" key={scene.id} onClick={() => { setScenePresetId(scene.id); setConceptId('signature'); }} aria-pressed={scene.id === selectedScene?.id} className={`min-h-20 cursor-pointer rounded-md border p-3 text-left transition-colors duration-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#c51e1c] ${scene.id === selectedScene?.id ? 'border-[#c51e1c] bg-[#fcf1f0]' : 'border-[#e2e2e5] bg-white hover:border-[#c51e1c]'}`}><b className={`block text-xs ${scene.id === selectedScene?.id ? 'text-[#a71917]' : 'text-[#45454b]'}`}>{scene.label}</b><span className="mt-1 block text-[10px] font-semibold uppercase tracking-[.08em] text-[#a47731]">{scene.bestFor}</span><span className="mt-1 block text-xs leading-4 text-[#716d66]">{scene.description}</span></button>)}</div>
-          </fieldset>
-
-          <fieldset>
-            <legend className="text-sm font-semibold">3. Choisissez un concept</legend>
-            <p className="mt-1 text-xs text-[#88847d]">Choisissez l’objectif de la vidéo. Le Studio transforme ce choix en rythme, caméra et temps forts automatiquement.</p>
-            <div className="mt-3 grid gap-2 lg:grid-cols-3">{concepts.map((concept) => <button type="button" key={concept.id} onClick={() => setConceptId(concept.id)} aria-pressed={concept.id === selectedConcept?.id} className={`min-h-28 cursor-pointer rounded-md border p-3 text-left transition-colors duration-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#c51e1c] ${concept.id === selectedConcept?.id ? 'border-[#c51e1c] bg-[#fcf6f4]' : 'border-[#e2e2e5] bg-white hover:border-[#c51e1c]'}`}><b className="block text-xs">{concept.title}</b><span className="mt-2 block text-xs font-semibold text-[#a47731]">{concept.purpose}</span><span className="mt-1 block text-xs leading-5 text-[#716d66]">{concept.summary}</span></button>)}</div>
-          </fieldset>
-
-          <label className="flex cursor-pointer items-start gap-3 rounded-md border border-[#e9e7e2] bg-[#fcfcfb] p-3 text-xs">
-            <input type="checkbox" checked={overlayLogo} onChange={(event) => setOverlayLogo(event.target.checked)} className="mt-0.5 size-4 accent-[#c51e1c]" />
-            <span><b className="block">Ajouter le logo RIMCO</b><span className="mt-1 block font-normal text-[#88847d]">Incrusté en haut à gauche après la génération, sans appel IA ni tokens supplémentaires.</span></span>
-          </label>
-          <label className="grid gap-2 text-xs font-semibold">Précision complémentaire <span className="font-normal text-[#88847d]">Facultative · ajoutez une seule consigne si nécessaire</span>
-            <textarea value={additionalDirection} onChange={(event) => setAdditionalDirection(event.target.value)} maxLength={240} rows={2} placeholder="Ex. Montrer les feux qui s’allument à la tombée du jour." className="w-full resize-y rounded-md border border-[#e9e7e2] bg-[#fcfcfb] p-3 text-sm font-normal leading-6 outline-none focus:border-[#c51e1c]" />
-          </label>
-          <div className="grid gap-4 sm:grid-cols-2"><label className="grid min-w-0 gap-2 text-xs font-semibold">Personnage<select value={character} onChange={(event) => setCharacter(event.target.value)} className="min-h-11 w-full min-w-0 rounded-md border border-[#e9e7e2] bg-white px-3 py-3 text-sm font-normal">{characterOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
-            <fieldset><legend className="mb-1 text-xs font-semibold">Liberté créative</legend><p className="mb-2 text-[11px] font-normal leading-4 text-[#88847d]">Ce réglage indique ce que le Studio ajoute autour de votre scène : plans, rythme et mouvements. Le véhicule, sa couleur et le lieu restent respectés.</p><div className="grid gap-2">{([{ value: 'simple', label: 'Suivre ma consigne', description: 'Le Studio reste très précis : une action simple, une caméra stable et un décor discret. Idéal pour vérifier un véhicule.' }, { value: 'balanced', label: 'Mise en scène guidée (recommandé)', description: 'Le Studio ajoute quelques temps forts et un mouvement de caméra plus travaillé, sans changer votre idée.' }, { value: 'rich', label: 'Proposition créative', description: 'Le Studio interprète davantage votre scène : rythme, lumière et détails de décor sont plus présents, tout en gardant le véhicule fidèle.' }] as const).map((option) => <button type="button" key={option.value} onClick={() => setComplexity(option.value)} aria-pressed={complexity === option.value} className={`cursor-pointer rounded-md border p-2.5 text-left transition-colors duration-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#c51e1c] ${complexity === option.value ? 'border-[#c51e1c] bg-[#fcf1f0]' : 'border-[#e2e2e5] text-[#55545a] hover:border-[#c51e1c]'}`}><b className={`block text-xs ${complexity === option.value ? 'text-[#a71917]' : ''}`}>{option.label}</b><span className="mt-1 block text-[11px] font-normal leading-4 text-[#716d66]">{option.description}</span></button>)}</div></fieldset>
+          <div className="border-t border-[#eeeae4] p-4 md:p-5">
+            <textarea value={additionalDirection} onChange={(event) => setAdditionalDirection(event.target.value)} maxLength={240} rows={3} placeholder="Décrivez votre vidéo…" aria-label="Description de la vidéo" className="w-full resize-y rounded-md border border-[#e9e7e2] bg-[#fcfcfb] p-3 text-sm leading-6 outline-none focus:border-[#c51e1c]" />
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+              <button type="button" onClick={() => setAdditionalDirection('Une vidéo publicitaire automobile élégante, avec une mise en valeur progressive du véhicule.')} className="text-xs font-semibold text-[#c51e1c] underline underline-offset-4">Insérer un exemple</button>
+              <button type="button" onClick={() => document.getElementById('generation-options')?.scrollIntoView({ behavior: 'smooth', block: 'start' })} className="rounded-md bg-[#c51e1c] px-4 py-2.5 text-xs font-semibold text-white transition hover:bg-[#a71715]">Envoyer la description ↑</button>
+            </div>
           </div>
         </section>
 
-        <section className="space-y-4 border-t border-[#eeeae4] pt-5">
-          <h2 className="text-sm font-semibold">4. Réglez la génération</h2>
-          <fieldset><legend className="mb-2 text-xs font-semibold">Niveau</legend><div className="grid gap-2 sm:grid-cols-2">{([{ value: 'standard', title: 'Standard', detail: 'Génération efficace pour les essais' }, { value: 'premium', title: 'Premium', detail: 'Rendu cinématique et options longues' }] as const).map((option) => <button type="button" key={option.value} onClick={() => { setTier(option.value); setDurationS(5); }} aria-pressed={tier === option.value} className={`cursor-pointer rounded-md border p-3 text-left transition-colors duration-200 ${tier === option.value ? 'border-[#c51e1c] bg-[#fcf6f4]' : 'border-[#e2e2e5] hover:border-[#c51e1c]'}`}><b className="block text-xs">{option.title}</b><span className="mt-1 block text-xs text-[#716d66]">{option.detail}</span></button>)}</div></fieldset>
-          <fieldset><legend className="mb-2 text-xs font-semibold">Durée</legend><div className="flex flex-wrap gap-2">{durationOptions.map((seconds) => <button type="button" key={seconds} onClick={() => setDurationS(seconds)} aria-pressed={durationS === seconds} className={`min-h-11 cursor-pointer rounded-md border px-3 py-2 text-xs transition-colors duration-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#c51e1c] ${durationS === seconds ? 'border-[#c51e1c] bg-[#fcf1f0] text-[#a71917]' : 'border-[#e2e2e5] text-[#55545a] hover:border-[#c51e1c]'}`}>{seconds} s</button>)}</div></fieldset>
-          {mode === 'live' && <div className="rounded-md bg-[#f8f7f4] px-3 py-2.5 text-xs text-[#716d66]">{modelsLoading ? <p role="status">Chargement des modèles…</p> : modelsError ? <div role="alert" className="flex flex-wrap items-center justify-between gap-3"><span>{modelsError}</span><button type="button" onClick={() => setModelsRetry((value) => value + 1)} className="min-h-11 rounded-md border border-[#d7d4ce] bg-white px-3 font-semibold text-[#29292e] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#c51e1c]">Réessayer</button></div> : !availableModels.length ? <p>Aucun modèle actif ne prend actuellement en charge cette génération. Contactez l’administrateur.</p> : <p>Modèle prévu : <b>{routedModel?.name ?? 'Aucun modèle compatible avec cette durée'}</b> · clip continu de {durationS} secondes.</p>}</div>}
-          <fieldset><legend className="mb-2 text-xs font-semibold">Format</legend><div className="flex flex-wrap gap-2">{(mode === 'live' ? selectedModel?.formats ?? ['16:9', '9:16'] : ['16:9', '9:16', '1:1', '4:5']).map((value) => <button type="button" key={value} onClick={() => setFormat(value as Format)} aria-pressed={format === value} className={`min-h-11 rounded-md border px-3 py-2 text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#c51e1c] ${format === value ? 'border-[#c51e1c] bg-[#fcf4f2] text-[#a62b24]' : 'border-[#e9e7e2] text-[#79756f]'}`}>{value}</button>)}</div></fieldset>
-          {mode === 'mock' && <p className="sm:col-span-2 rounded-md bg-[#fbf6ed] p-3 text-xs text-[#765d39]">La simulation valide le parcours sans contacter fal.ai ni produire de vraie vidéo.</p>}
-          <p className="text-xs text-[#716d66]">Le modèle respecte la photo du véhicule. Les mouvements, le rythme et les temps forts sont construits automatiquement dans un seul plan continu.</p>
-          {error && <p role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>}
-          <button disabled={busy || generationActive || !assetId || mode === 'live' && (!routedModel || !estimatedPrice)} aria-describedby={generationActive ? 'generation-lock-message' : undefined} className="w-full rounded-md bg-[#c51e1c] py-3.5 text-sm font-semibold text-white transition hover:bg-[#a71715] disabled:cursor-not-allowed disabled:opacity-50">{busy ? 'Préparation…' : generationActive ? 'Génération en cours…' : `Générer ma vidéo · ${priceLabel}`}</button>
-          {generationActive && <p id="generation-lock-message" role="status" className="rounded-md bg-[#fbf6ed] p-3 text-xs leading-5 text-[#765d39]">Une génération est déjà en cours. Le bouton sera réactivé lorsque la vidéo sera prête ou si la génération échoue.</p>}
-        </section>
-      </form>
+        {job && <section className="rounded-md border border-black/[.055] bg-white p-5"><div className="flex items-center justify-between"><h2 className="text-sm font-semibold">État de la vidéo</h2><span className="text-[10px] font-semibold uppercase text-[#a47731]">{job.status === 'ready' ? 'Prête' : job.status === 'failed' ? 'Échec' : 'En cours'}</span></div><p className="mt-2 text-xs leading-5 text-[#88847d]">{job.status === 'ready' ? 'Votre vidéo est prête à consulter.' : job.status === 'failed' ? job.error ?? 'La génération a échoué. Vous pouvez relancer une nouvelle vidéo.' : 'Actualisation automatique toutes les 10 secondes.'}</p>{job.prompt && <details className="mt-4 border-t border-[#eeeae4] pt-3"><summary className="cursor-pointer text-xs font-semibold text-[#716d66]">Voir le prompt généré</summary><p className="mt-2 whitespace-pre-wrap text-xs leading-5 text-[#77736d]">{job.prompt}</p></details>}{job.status === 'ready' && <Link href="/bibliotheque" className="mt-4 block rounded-lg bg-[#c51e1c] px-3 py-2.5 text-center text-xs font-semibold text-white">Voir ma vidéo →</Link>}</section>}
+      </div>
 
-      <aside className="min-w-0 space-y-4">
-        <section className="rounded-md border border-[#e2e2e5] bg-white p-6 text-[#161619]">
-          <p className="text-[10px] font-bold uppercase tracking-[.18em] text-[#c51e1c]">Résumé du montage</p>
-          <div className="mt-5 grid aspect-video place-items-center overflow-hidden border border-[#e2e2e5] bg-[#f1f1f2]">{selectedAsset?.previewUrl ? <Image src={selectedAsset.previewUrl} alt={mode === 'mock' ? 'Illustration de démonstration — le rendu réel suivra la photo du véhicule envoyée à Fal' : `Aperçu de ${selectedAsset.make ?? ''} ${selectedAsset.model ?? ''}`} width={640} height={360} unoptimized className="size-full object-cover" /> : <span className="text-4xl text-[#c51e1c]" aria-hidden="true">▷</span>}</div>
-          <h3 className="mt-4 text-sm font-semibold">{selectedAsset ? `${selectedAsset.make ?? 'Véhicule'} ${selectedAsset.model ?? ''}` : 'Choisissez un véhicule'}</h3>
-          <div className="mt-4 space-y-2 border-t border-[#e2e2e5] pt-4 text-xs">
-            {title.trim() && <div><span className="text-[#77736d]">Titre</span><br /><b>{title.trim()}</b></div>}
-            <div><span className="text-[#77736d]">Scène choisie</span><br /><b>{selectedScene?.label ?? 'Choisissez une scène'}</b></div>
-            <div><span className="text-[#77736d]">Concept</span><br /><b>{selectedConcept?.title}</b></div>
-            {mode === 'live' && selectedModel && <div><span className="text-[#77736d]">Modèle prévu</span><br /><b>{selectedModel.name}</b></div>}
-            <div className="flex justify-between border-t border-[#eeeae4] pt-3"><span className="text-[#77736d]">Clip continu</span><b>{durationS} secondes</b></div>
-            <div className="flex justify-between"><span className="text-[#77736d]">Montant probable</span><b>{priceLabel}</b></div>
-            {mode === 'live' && <p className="text-[10px] leading-4 text-[#88847d]">Estimation indicative, selon le modèle et sa durée. Le montant final peut varier.</p>}
+      <aside id="generation-options" className="min-w-0 space-y-3 xl:sticky xl:top-5">
+        <section className="rounded-md border border-[#e2e2e5] bg-white p-4 text-[#161619]">
+          <div className="flex items-center justify-between gap-2"><h2 className="font-display text-sm font-semibold uppercase tracking-[.04em]">Votre vidéo</h2><span className="rounded-full bg-[#f2f1ef] px-2 py-1 text-[9px] text-[#88847d]">{title.trim() ? 'Prête à lancer' : 'Description à saisir'}</span></div>
+          <label className="mt-4 grid gap-1.5 text-[11px] font-semibold">Titre de la vidéo<input value={title} onChange={(event) => setTitle(event.target.value)} maxLength={120} placeholder="Ex. Starlight EV · lancement Abidjan" className="min-h-10 rounded-md border border-[#e9e7e2] bg-white px-3 py-2 text-xs font-normal outline-none focus:border-[#c51e1c]" /></label>
+          <label className="mt-4 grid gap-1.5 text-[11px] font-semibold">Véhicule<select value={assetId} onChange={(event) => { const nextAsset = assets.find((asset) => asset.id === event.target.value); setAssetId(event.target.value); const nextScene = getScenePresets(inferVehicleCategory(nextAsset?.make, nextAsset?.model))[0]; if (nextScene) setScenePresetId(nextScene.id); }} disabled={assetsLoading || !assets.length} className="min-h-10 rounded-md border border-[#e9e7e2] bg-white px-3 py-2 text-xs font-normal outline-none focus:border-[#c51e1c]"><option value="">{assetsLoading ? 'Chargement…' : 'Choisissez un véhicule'}</option>{assets.map((asset) => <option key={asset.id} value={asset.id}>{asset.make} {asset.model}</option>)}</select></label>
+          {selectedAsset && <div className="mt-3 flex items-center gap-3 rounded-md bg-[#f8f7f4] p-2"><span className="grid size-12 shrink-0 place-items-center overflow-hidden bg-[#ededeb]">{selectedAsset.previewUrl ? <Image src={selectedAsset.previewUrl} alt={`${selectedAsset.make ?? 'Véhicule'} ${selectedAsset.model ?? ''}`} width={48} height={48} unoptimized className="size-full object-cover" /> : <span className="text-xl text-[#831810]" aria-hidden="true">◈</span>}</span><span className="min-w-0"><b className="block truncate text-xs">{selectedAsset.make} {selectedAsset.model}</b><small className="mt-1 block truncate text-[10px] text-[#99958e]">{selectedAsset.color ?? 'Photo validée'}</small></span></div>}
+          {assetsError && <div role="alert" className="mt-3 rounded-md bg-red-50 p-3 text-xs text-red-700">{assetsError}<button type="button" onClick={() => setAssetsRetry((value) => value + 1)} className="ml-2 font-semibold underline">Réessayer</button></div>}
+          {!assetsLoading && !assetsError && !assets.length && <Link href="/mediatheque" className="mt-3 block rounded-md border border-dashed border-[#dad7d1] p-3 text-center text-xs text-[#817d76]">＋ Ajouter une photo validée</Link>}
+        </section>
+
+        <section className="rounded-md border border-[#e2e2e5] bg-white p-4">
+          <div className="space-y-4">
+            <fieldset><legend className="mb-2 text-[11px] font-semibold">Lieu</legend><div className="flex flex-wrap gap-1.5">{locationChoices.map((scene) => <button type="button" key={scene.location} onClick={() => { setScenePresetId(scene.id); setConceptId('signature'); }} aria-pressed={scene.id === selectedScene?.id} className={`rounded-full border px-2.5 py-1.5 text-[10px] transition ${scene.location === selectedScene?.location ? 'border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]' : 'border-[#e5e2dd] text-[#77736d] hover:border-[#c51e1c]'}`}>{scene.label.split(' · ')[0]}</button>)}</div></fieldset>
+            <fieldset><legend className="mb-2 text-[11px] font-semibold">Décor</legend><div className="grid gap-1.5">{decorChoices.slice(0, 5).map((scene) => <button type="button" key={scene.setting} onClick={() => setScenePresetId(scene.id)} aria-pressed={scene.setting === selectedScene?.setting} className={`rounded-md border px-2.5 py-2 text-left text-[10px] transition ${scene.setting === selectedScene?.setting ? 'border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]' : 'border-[#e5e2dd] text-[#77736d] hover:border-[#c51e1c]'}`}>{scene.label}</button>)}</div></fieldset>
+            <fieldset><legend className="mb-2 text-[11px] font-semibold">Personnage</legend><div className="flex flex-wrap gap-1.5">{characterOptions.map((option) => <button type="button" key={option.value || 'none'} onClick={() => setCharacter(option.value)} aria-pressed={character === option.value} className={`rounded-full border px-2.5 py-1.5 text-[10px] transition ${character === option.value ? 'border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]' : 'border-[#e5e2dd] text-[#77736d] hover:border-[#c51e1c]'}`}>{option.value ? option.label.replace('Une ', '') : 'Aucun'}</button>)}</div></fieldset>
+            <fieldset><legend className="mb-2 text-[11px] font-semibold">Lumière</legend><div className="flex flex-wrap gap-1.5">{lightingChoices.map((scene) => <button type="button" key={scene.lighting} onClick={() => setScenePresetId(scene.id)} aria-pressed={scene.lighting === selectedScene?.lighting} className={`rounded-full border px-2.5 py-1.5 text-[10px] transition ${scene.lighting === selectedScene?.lighting ? 'border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]' : 'border-[#e5e2dd] text-[#77736d] hover:border-[#c51e1c]'}`}>{scene.lighting.includes('fin de journée') ? 'Fin de journée' : scene.lighting.includes('Nuit') || scene.lighting.includes('nuit') ? 'Nuit' : 'Matin'}</button>)}</div></fieldset>
           </div>
         </section>
-        {job && <section className="rounded-md border border-black/[.055] bg-white p-5"><div className="flex items-center justify-between"><h3 className="text-sm font-semibold">État de la vidéo</h3><span className="text-[10px] font-semibold uppercase text-[#a47731]">{job.status === 'ready' ? 'Prête' : job.status === 'failed' ? 'Échec' : 'En cours'}</span></div><p className="mt-2 text-xs text-[#88847d]">{job.status === 'ready' ? 'Votre vidéo est prête à consulter.' : job.status === 'failed' ? job.error ?? 'La génération a échoué. Vous pouvez relancer une nouvelle vidéo.' : 'Une génération est déjà en cours. Le Studio actualise son état automatiquement toutes les 10 secondes.'}</p>{job.prompt && <details className="mt-4 border-t border-[#eeeae4] pt-3"><summary className="cursor-pointer text-xs font-semibold text-[#716d66]">Voir le prompt généré</summary><p className="mt-2 whitespace-pre-wrap text-xs leading-5 text-[#77736d]">{job.prompt}</p></details>}{job.status === 'ready' && <Link href="/bibliotheque" className="mt-4 block rounded-lg bg-[#c51e1c] px-3 py-2.5 text-center text-xs font-semibold text-white">Voir ma vidéo →</Link>}</section>}
-        <section className="rounded-md border border-[#eee3d2] bg-[#fbf6ed] p-5"><p className="text-xs font-semibold text-[#765d39]">Fidélité au véhicule</p><p className="mt-2 text-xs leading-5 text-[#8d806b]">La photo fixe le modèle, la couleur et les proportions. Pour un premier essai, gardez une scène simple et sans figurant.</p></section>
+
+        <section className="rounded-md border border-[#e2e2e5] bg-white p-4">
+          <fieldset><legend className="mb-2 text-[11px] font-semibold">Format</legend><div className="flex flex-wrap gap-1.5">{(mode === 'live' ? selectedModel?.formats ?? ['16:9', '9:16'] : ['16:9', '9:16', '1:1', '4:5']).map((value) => <button type="button" key={value} onClick={() => setFormat(value as Format)} aria-pressed={format === value} className={`rounded-full border px-2.5 py-1.5 text-[10px] ${format === value ? 'border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]' : 'border-[#e5e2dd] text-[#77736d]'}`}>{value}</button>)}</div></fieldset>
+          <fieldset className="mt-4"><legend className="mb-2 text-[11px] font-semibold">Durée</legend><div className="flex flex-wrap gap-1.5">{durationOptions.map((seconds) => <button type="button" key={seconds} onClick={() => setDurationS(seconds)} aria-pressed={durationS === seconds} className={`rounded-full border px-2.5 py-1.5 text-[10px] ${durationS === seconds ? 'border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]' : 'border-[#e5e2dd] text-[#77736d]'}`}>{seconds} s</button>)}</div></fieldset>
+          <fieldset className="mt-4"><legend className="mb-2 text-[11px] font-semibold">Niveau de génération</legend><div className="flex gap-1.5">{([{ value: 'standard', label: 'Standard' }, { value: 'premium', label: 'Premium' }] as const).map((option) => <button type="button" key={option.value} onClick={() => { setTier(option.value); setDurationS(5); }} aria-pressed={tier === option.value} className={`flex-1 rounded-full border px-2.5 py-1.5 text-[10px] ${tier === option.value ? 'border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]' : 'border-[#e5e2dd] text-[#77736d]'}`}>{option.label}</button>)}</div></fieldset>
+          <label className="mt-4 flex items-center justify-between gap-3 border-t border-[#eeeae4] pt-4 text-[11px] font-semibold"><span>Ajouter le logo RIMCO<small className="mt-1 block text-[10px] font-normal text-[#88847d]">Incrusté après la génération</small></span><input type="checkbox" checked={overlayLogo} onChange={(event) => setOverlayLogo(event.target.checked)} className="size-4 accent-[#c51e1c]" /></label>
+          {mode === 'live' && <div className="mt-4 rounded-md bg-[#f8f7f4] px-3 py-2.5 text-[10px] text-[#716d66]">{modelsLoading ? <p role="status">Chargement des modèles…</p> : modelsError ? <p role="alert">{modelsError}</p> : <p>Modèle prévu : <b>{routedModel?.name ?? 'Aucun modèle compatible'}</b></p>}</div>}
+          {mode === 'mock' && <p className="mt-4 rounded-md bg-[#fbf6ed] p-3 text-[10px] leading-4 text-[#765d39]">Simulation active : aucune vidéo payante ne sera générée.</p>}
+          {error && <p role="alert" className="mt-4 rounded-md bg-red-50 p-3 text-xs text-red-700">{error}</p>}
+          <div className="mt-4 border-t border-[#eeeae4] pt-4"><p className="text-[10px] text-[#88847d]">Estimation avant lancement</p><p className="mt-1 text-sm font-semibold">{priceLabel} <span className="text-[10px] font-normal text-[#88847d]">par génération · {durationS} s</span></p></div>
+          <button disabled={busy || generationActive || !assetId || mode === 'live' && (!routedModel || !estimatedPrice)} aria-describedby={generationActive ? 'generation-lock-message' : undefined} className="mt-4 w-full rounded-md bg-[#c51e1c] py-3 text-xs font-semibold text-white transition hover:bg-[#a71715] disabled:cursor-not-allowed disabled:opacity-50">{busy ? 'Préparation…' : generationActive ? 'Génération en cours…' : 'Lancer la vidéo'}</button>
+          {generationActive && <p id="generation-lock-message" role="status" className="mt-3 rounded-md bg-[#fbf6ed] p-3 text-[10px] leading-4 text-[#765d39]">Une génération est déjà en cours. Le bouton sera réactivé lorsque la vidéo sera prête.</p>}
+        </section>
+        <p className="px-1 text-[10px] leading-4 text-[#88847d]">La photo du véhicule reste la référence. Le Studio déduit automatiquement le concept, le rythme et les mouvements à partir de votre brief et de vos choix.</p>
       </aside>
-    </div>
+    </form>
   );
 }
