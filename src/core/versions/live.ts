@@ -13,6 +13,7 @@ import { HttpError } from '@/core/auth/guards';
 import type { z } from 'zod';
 import { requestSchema } from './request-schema';
 import { beginPostproduction, retryPostproduction } from '@/core/postproduction/pipeline';
+import { approveCompletedAdminVideo } from '@/core/versions/approval';
 import { getScenePreset, inferVehicleCategory } from '@/core/scenes/catalog';
 import { calculateClientPriceFcfa } from '@/core/pricing';
 import { refreshLiveStoryboard } from './storyboard-live';
@@ -181,9 +182,14 @@ export async function refreshLiveVersion(versionId: string, actor: Actor) {
   if (version.status === 'failed') return { id: versionId, status: version.status };
   if (version.status === 'ready') {
     if (video.status === 'generating' && version.final_path) {
-      const { error: readyError } = await admin.from('videos').update({ status: 'ready' }).eq('id', version.video_id);
-      if (readyError) throw new HttpError(503, 'Le fichier final est prêt; son état doit être réconcilié.');
-      video.status = 'ready';
+      if (actor.role === 'admin') {
+        await approveCompletedAdminVideo(admin, actor, { videoId: version.video_id, versionId });
+        video.status = 'approved';
+      } else {
+        const { error: readyError } = await admin.from('videos').update({ status: 'ready' }).eq('id', version.video_id);
+        if (readyError) throw new HttpError(503, 'Le fichier final est prêt; son état doit être réconcilié.');
+        video.status = 'ready';
+      }
       await notifyVersion(admin, video.user_id, versionId, 'ready', 'Votre vidéo est prête à être consultée.');
     }
     const approvedFinal = (video?.status === 'approved' || video?.status === 'ready' && ownsVideo) && version.final_path;
@@ -240,6 +246,9 @@ export async function refreshLiveVersion(versionId: string, actor: Actor) {
     if (!claimedVersion) return { id: versionId, status: 'postprocessing' as const };
     try {
       const processed = await beginPostproduction(versionId);
+      if (processed.status === 'ready' && actor.role === 'admin') {
+        await approveCompletedAdminVideo(admin, actor, { videoId: version.video_id, versionId });
+      }
       const canDownload = ownsVideo || actor.role === 'admin';
       return { id: versionId, status: processed.status, videoUrl: canDownload ? await signedVideoUrl(admin, processed.finalPath) : undefined };
     } catch (postprodError) {

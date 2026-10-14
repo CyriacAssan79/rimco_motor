@@ -11,6 +11,7 @@ import { calculateClientPriceFcfa } from '@/core/pricing';
 import { getSceneConceptDirection } from '@/core/scenes/concepts';
 import { getScenePreset, inferVehicleCategory } from '@/core/scenes/catalog';
 import { reserveGenerationCost, settleUsageCost } from '@/core/billing/ledger';
+import { approveCompletedAdminVideo } from '@/core/versions/approval';
 
 export const MOCK_VIDEO_PATH = 'mock/mock-video.mp4';
 
@@ -71,16 +72,25 @@ export async function refreshPersistedMockVersion(versionId: string, actor: Acto
   const canReview = actor.role === 'valideur' && video?.status === 'review' && video.brand_id === actor.brandId && video.department === actor.department;
   if (!video || !owns && !canReview && actor.role !== 'admin') throw new HttpError(404, 'Cette version est introuvable.');
   if (version.status === 'failed') return { id: versionId, status: 'failed' as const };
-  if (version.status === 'ready') return { id: versionId, status: 'ready' as const, videoUrl: '/mock/mock-video.mp4' };
+  if (version.status === 'ready') {
+    if (actor.role === 'admin' && video.status !== 'approved') {
+      await approveCompletedAdminVideo(admin, actor, { videoId: video.id, versionId });
+    }
+    return { id: versionId, status: 'ready' as const, videoUrl: '/mock/mock-video.mp4' };
+  }
 
   const status = mockStatusAt(version.created_at);
   const updates: { status: string; raw_path?: string } = { status };
   if (status === 'ready') updates.raw_path = MOCK_VIDEO_PATH;
   const { error: updateError } = await admin.from('video_versions').update(updates).eq('id', versionId);
   if (updateError) throw new HttpError(503, 'Impossible d’enregistrer l’état de la simulation.');
-  if (status === 'ready' && video.status !== 'ready') {
-    const { error: videoError } = await admin.from('videos').update({ status: 'ready' }).eq('id', video.id);
-    if (videoError) throw new HttpError(503, 'La génération est prête; son état doit être réconcilié.');
+  if (status === 'ready' && video.status !== 'ready' && video.status !== 'approved') {
+    if (actor.role === 'admin') {
+      await approveCompletedAdminVideo(admin, actor, { videoId: video.id, versionId });
+    } else {
+      const { error: videoError } = await admin.from('videos').update({ status: 'ready' }).eq('id', video.id);
+      if (videoError) throw new HttpError(503, 'La génération est prête; son état doit être réconcilié.');
+    }
   }
   return { id: versionId, status, ...(status === 'ready' ? { videoUrl: '/mock/mock-video.mp4' } : {}) };
 }
