@@ -18,7 +18,7 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
     if (!current || current.userId !== actor.id && actor.role !== 'admin') throw new HttpError(404, 'Cette version est introuvable.');
     if (current.status === 'ready' || current.status === 'failed') return NextResponse.json({ id, status: current.status, videoUrl: current.status === 'ready' ? current.videoUrl : undefined, error: current.error });
     const result = await mockVideoProvider.status(current.requestId);
-    const updated = putVersion({ ...current, status: result.status, ...(result.videoUrl ? { videoUrl: result.videoUrl } : {}), ...(result.error ? { error: result.error } : {}) });
+    const updated = putVersion({ ...current, status: result.status, ...(result.status === 'ready' && actor.role === 'admin' ? { reviewStatus: 'approved' as const } : {}), ...(result.videoUrl ? { videoUrl: result.videoUrl } : {}), ...(result.error ? { error: result.error } : {}) });
     return NextResponse.json({ id, status: updated.status, videoUrl: updated.status === 'ready' ? updated.videoUrl : undefined, error: updated.error });
   } catch (error) { return errorResponse(error); }
 }
