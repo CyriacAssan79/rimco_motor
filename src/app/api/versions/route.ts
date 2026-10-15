@@ -15,8 +15,20 @@ import { getSceneConceptDirection } from '@/core/scenes/concepts';
 import { z } from 'zod';
 import { deleteVersionsByVideoIds } from '@/core/versions/store';
 import { aggregateGenerationCost } from '@/core/billing/aggregate';
+import { storyboardSchema, validateStoryboard } from '@/core/storyboard';
+import { createLiveStoryboard } from '@/core/versions/storyboard-live';
+import { getStoryboardModeRoute } from '@/core/providers/storyboard-routing';
 
 const deleteSchema = z.object({ videoIds: z.array(z.string().uuid()).min(1).max(50) }).strict().refine((input) => new Set(input.videoIds).size === input.videoIds.length, { message: 'La sélection contient des doublons.' });
+const multiClipSchema = requestSchema.extend({
+  workflow: z.literal('multi_clip'),
+  storyMode: z.enum(['standard', 'pro', 'premium']),
+  finalDurationSeconds: z.union([z.literal(15), z.literal(20)]),
+  purpose: z.enum(['presentation', 'advertising']),
+  vehicleDossierId: z.string().uuid(),
+  placeIds: z.array(z.string().uuid()).max(12).default([]),
+  storyboard: storyboardSchema,
+}).strict();
 
 export async function GET(request: Request) {
   try {
@@ -26,12 +38,12 @@ export async function GET(request: Request) {
       const records = allVersions().filter((item) => item.userId === actor.id || actor.role === 'admin');
       const versions = records.map((latest) => {
         const status = latest.reviewStatus === 'approved' ? 'ready' : latest.reviewStatus === 'rejected' ? 'rejected' : latest.reviewStatus === 'pending' ? 'review' : latest.status;
-        return { id: latest.id, videoId: latest.videoId, title: latest.title ?? latest.brief.vehicle_description, status, durationSeconds: latest.brief.duration_s, priceFcfa: latest.priceFcfa, prompt: latest.prompt, previewUrl: latest.status === 'ready' ? latest.videoUrl : undefined, videoUrl: latest.status === 'ready' ? latest.videoUrl : undefined, createdAt: latest.createdAt };
+        return { id: latest.id, videoId: latest.videoId, title: latest.title ?? latest.brief.vehicle_description, status, tier: latest.tier ?? 'standard', durationSeconds: latest.brief.duration_s, priceFcfa: latest.priceFcfa, prompt: latest.prompt, previewUrl: latest.status === 'ready' ? latest.videoUrl : undefined, videoUrl: latest.status === 'ready' ? latest.videoUrl : undefined, createdAt: latest.createdAt };
       }).filter((item) => !requestedStatus || item.status === requestedStatus);
       return NextResponse.json({ versions });
     }
     const admin = createStorageAdminClient();
-    let query = admin.from('videos').select('id,user_id,title,status,department,brand_id,created_at,video_versions(id,number,status,generation_seconds,final_path,raw_path,provider_request_id,brief_json,generated_prompt,created_at,validations(id,status),usage_ledger(kind,ai_model_id,seconds,cost_usd,price_fcfa,status))').order('created_at', { ascending: false });
+    let query = admin.from('videos').select('id,user_id,title,status,department,brand_id,created_at,video_versions(id,number,status,generation_seconds,final_path,raw_path,provider_request_id,brief_json,generated_prompt,created_at,validations(id,status),model:ai_models(name,tier),usage_ledger(kind,ai_model_id,seconds,cost_usd,price_fcfa,status))').order('created_at', { ascending: false });
     if (actor.role === 'collaborateur') query = query.eq('user_id', actor.id);
     if (actor.role === 'valideur') {
       if (!actor.brandId) return NextResponse.json({ versions: [] });
@@ -50,6 +62,8 @@ export async function GET(request: Request) {
       const canPreviewReady = video.status === 'approved' || video.status === 'ready' && (isOwner || actor.role === 'admin');
       const canPreview = canPreviewReady || canPreviewReview || video.status === 'review' && isOwner;
       const briefData = latest?.brief_json && typeof latest.brief_json === 'object' ? latest.brief_json as Record<string, unknown> : {};
+      const model = Array.isArray(latest?.model) ? latest.model[0] : latest?.model;
+      const generationTier = model?.tier === 'pro' || model?.tier === 'premium' || model?.tier === 'test' ? model.tier : 'standard';
       const mockMetadata = briefData.mock_metadata && typeof briefData.mock_metadata === 'object' ? briefData.mock_metadata as Record<string, unknown> : {};
       const isPersistedMock = latest?.provider_request_id?.startsWith('mock:') ?? false;
       let videoUrl: string | null = null;
@@ -79,7 +93,7 @@ export async function GET(request: Request) {
       }
       if (video.status === 'approved' && isPersistedMock && previewUrl) videoUrl = previewUrl;
       const status = video.status === 'approved' ? 'ready' : video.status === 'rejected' ? 'rejected' : video.status === 'review' ? 'review' : video.status === 'cancelled' ? 'cancelled' : video.status === 'ready' ? 'ready' : latest?.status === 'failed' ? 'failed' : latest?.status === 'cancelled' ? 'cancelled' : latest?.status === 'queued' || latest?.status === 'generating' || latest?.status === 'postprocessing' ? 'generating' : 'draft';
-      return { id: latest?.id ?? video.id, videoId: video.id, title: video.title, status, format: typeof briefData.format === 'string' ? briefData.format : '16:9', durationSeconds: Number(latest?.generation_seconds ?? generationCost?.seconds ?? 5), version: latest?.number ?? 1, versionStatus: latest?.status ?? null, priceFcfa: generationCost?.priceFcfa ?? (typeof mockMetadata.priceFcfa === 'number' ? mockMetadata.priceFcfa : null), validationId: validationRows[0]?.id ?? null, validationStatus: validationRows[0]?.status ?? null, prompt: latest?.generated_prompt ?? null, videoUrl, previewUrl, previewSource, createdAt: video.created_at, department: video.department, userId: video.user_id };
+      return { id: latest?.id ?? video.id, videoId: video.id, title: video.title, status, workflow: briefData.multiClipMode === true ? 'multi_clip' : 'single', tier: generationTier, modelName: model?.name ?? null, format: typeof briefData.format === 'string' ? briefData.format : '16:9', durationSeconds: Number(latest?.generation_seconds ?? generationCost?.seconds ?? 5), version: latest?.number ?? 1, versionStatus: latest?.status ?? null, priceFcfa: generationCost?.priceFcfa ?? (typeof mockMetadata.priceFcfa === 'number' ? mockMetadata.priceFcfa : null), validationId: validationRows[0]?.id ?? null, validationStatus: validationRows[0]?.status ?? null, prompt: latest?.generated_prompt ?? null, videoUrl, previewUrl, previewSource, createdAt: video.created_at, department: video.department, userId: video.user_id };
     }));
     return NextResponse.json({ versions: requestedStatus ? versions.filter((version) => version.status === requestedStatus) : versions });
   } catch (error) { return errorResponse(error); }
@@ -87,7 +101,17 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const actor = await getActor();
-    const input = requestSchema.parse(await request.json());
+    const payload = await request.json();
+    if (payload && typeof payload === 'object' && 'workflow' in payload && payload.workflow === 'multi_clip') {
+      const multi = multiClipSchema.parse(payload);
+      validateStoryboard(multi.storyboard, multi.finalDurationSeconds, getStoryboardModeRoute(multi.storyMode).adapterFamily);
+      if (multi.format !== '16:9' || multi.audioAssetId) throw new HttpError(422, 'Le storyboard multi-plans utilise le format horizontal 16:9, sans audio.');
+      if (env.PROVIDERS_MODE === 'mock') {
+        return NextResponse.json({ id: crypto.randomUUID(), status: 'ready', videoUrl: '/mock/mock-video.mp4', prompt: 'Simulation du storyboard multi-plans.', completedShots: multi.storyboard.length, totalShots: multi.storyboard.length, estimatedPriceFcfa: 0 }, { status: 201 });
+      }
+      return NextResponse.json(await createLiveStoryboard(actor, multi), { status: 201 });
+    }
+    const input = requestSchema.parse(payload);
     if (env.PROVIDERS_MODE === 'mock' && input.durationS !== 5) throw new HttpError(422, 'Les durées longues sont disponibles uniquement sur un déploiement connecté à fal.ai.');
     if (input.scenePresetId && !getScenePreset(input.scenePresetId)) throw new HttpError(422, 'La scène sélectionnée est introuvable.');
     const selectedScene = input.scenePresetId ? getScenePreset(input.scenePresetId) : undefined;
@@ -99,7 +123,7 @@ export async function POST(request: Request) {
     const imageUrl = '/mock/mock-video.svg';
     const { requestId } = await mockVideoProvider.submit({ prompt, imageUrl, durationS: 5, format: input.format });
     const id = crypto.randomUUID();
-    const record = putVersion({ id, videoId: crypto.randomUUID(), title: input.title || undefined, number: 1, userId: actor.id, brief, prompt, status: 'queued', requestId, priceFcfa: estimatePriceFcfa(5, input.tier), createdAt: new Date().toISOString() });
+    const record = putVersion({ id, videoId: crypto.randomUUID(), title: input.title || undefined, number: 1, userId: actor.id, brief, prompt, status: 'queued', requestId, priceFcfa: estimatePriceFcfa(5, input.tier), tier: input.tier, createdAt: new Date().toISOString() });
     return NextResponse.json({ id: record.id, status: record.status, prompt, estimatedPriceFcfa: record.priceFcfa, version: 1 }, { status: 201 });
   } catch (error) { return errorResponse(error); }
 }

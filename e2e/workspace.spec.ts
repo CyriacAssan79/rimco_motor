@@ -57,17 +57,17 @@ if (mockWithoutSupabase) {
   test('connexion administrateur puis accès au studio de création', async ({ page }) => {
     await signIn(page, adminEmail, adminPassword);
     await expect(page).toHaveURL('/');
-    await expect(page.getByRole('heading', { name: 'De la demande au MP4, en quelques minutes' })).toBeVisible();
-    await page.getByRole('link', { name: 'Créer une vidéo' }).click();
+    await expect(page.getByRole('heading', { name: /^Bonjour / })).toBeVisible();
+    await page.getByRole('link', { name: 'Créer la vidéo' }).click();
     await expect(page.getByRole('heading', { name: 'Créer une vidéo' })).toBeVisible();
-    await expect(page.getByText('1. Choisissez le véhicule')).toBeVisible();
-    await expect(page.getByText('2. Choisissez une scène')).toBeVisible();
-    await expect(page.getByText('3. Choisissez un concept')).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Votre vidéo' })).toBeVisible();
+    await expect(page.getByLabel('Véhicule')).toBeVisible();
+    await expect(page.getByText('Workflow multi-plans')).toBeVisible();
   });
 
-  test('collaborateur génère, visionne et télécharge la vidéo simulée', async ({ page }) => {
+  test('administrateur génère, visionne et télécharge la vidéo simulée', async ({ page }) => {
     test.setTimeout(90_000);
-    await signIn(page, creatorEmail, adminPassword);
+    await signIn(page, adminEmail, adminPassword);
     await page.goto('/studio');
     const logoToggle = page.getByRole('checkbox', { name: /Ajouter le logo RIMCO/ });
     await expect(logoToggle).toBeChecked();
@@ -75,9 +75,9 @@ if (mockWithoutSupabase) {
     await expect(logoToggle).not.toBeChecked();
     await logoToggle.check();
     await page.getByLabel('Titre de la vidéo').fill('Essai E2E');
-    await page.getByLabel(/Précision complémentaire/).fill('Une Haval H6 bleue roule doucement dans le Plateau à Abidjan.');
+    await page.getByLabel('Description de la vidéo').fill('Une Haval H6 bleue roule doucement dans le Plateau à Abidjan.');
     const createRequest = page.waitForRequest((request) => request.url().endsWith('/api/versions') && request.method() === 'POST');
-    await page.getByRole('button', { name: /Générer ma vidéo/ }).click();
+    await page.getByRole('button', { name: 'Lancer la vidéo' }).click();
     expect((await createRequest).postDataJSON().overlayLogo).toBe(true);
     await expect(page.getByText('Votre vidéo est prête à consulter.')).toBeVisible({ timeout: 65_000 });
     await page.getByRole('link', { name: 'Voir ma vidéo' }).click();
