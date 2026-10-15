@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { StatusPill } from '@/components/shell';
 import type { Role } from '@/core/auth/guards';
 
-type Video = { id: string; videoId?: string; title?: string; make?: string; model?: string; status: string; durationSeconds?: number; createdAt?: string; created_at?: string; estimatedPriceFcfa?: number; price_fcfa?: number; priceFcfa?: number; videoUrl?: string | null; previewUrl?: string | null; finalUrl?: string; validationId?: string | null; validationStatus?: string | null; version?: number; department?: string; userId?: string };
+type Video = { id: string; videoId?: string; title?: string; make?: string; model?: string; status: string; format?: string; durationSeconds?: number; createdAt?: string; created_at?: string; estimatedPriceFcfa?: number; price_fcfa?: number; priceFcfa?: number; videoUrl?: string | null; previewUrl?: string | null; finalUrl?: string; validationId?: string | null; validationStatus?: string | null; version?: number; department?: string; userId?: string };
 
 function formatVideoPrice(video: Video) {
   const amount = [video.priceFcfa, video.estimatedPriceFcfa, video.price_fcfa].find((value): value is number => typeof value === 'number');
@@ -18,6 +18,7 @@ function formatVideoDate(value?: string) {
   return new Intl.DateTimeFormat('fr-FR', { dateStyle: 'short', timeStyle: 'short', timeZone: 'Africa/Abidjan' }).format(date);
 }
 const isVideoInProgress = (status: string) => ['queued', 'generating', 'postprocessing'].includes(status);
+const videoAspectClass = (format?: string) => format === '9:16' ? 'aspect-[9/16]' : format === '1:1' ? 'aspect-square' : format === '4:5' ? 'aspect-[4/5]' : 'aspect-video';
 
 export function VideoLibrary({ role }: { role: Role }) {
   const [videos, setVideos] = useState<Video[]>([]);
@@ -144,12 +145,12 @@ export function VideoLibrary({ role }: { role: Role }) {
             {isVideoInProgress(video.status) ? 'Génération en cours' : 'Sélectionner'}
           </label>
         </div>
-        {video.previewUrl ? <video controls preload="metadata" src={video.previewUrl} className="aspect-video w-full bg-[#232326]" aria-label={`Aperçu de ${video.title ?? 'la vidéo'}`} /> : <div className="grid aspect-video place-items-center bg-[#eeeeef] text-[#8b8b91"><svg aria-hidden="true" viewBox="0 0 24 24" className="size-9 fill-none stroke-current" strokeWidth="1.5"><path d="M4 5h16v14H4zM10 9l5 3-5 3z" /></svg></div>}
+        {video.previewUrl ? <video controls preload="metadata" src={video.previewUrl} className={`${videoAspectClass(video.format)} w-full bg-[#232326] object-contain`} aria-label={`Aperçu de ${video.title ?? 'la vidéo'}`} /> : <div className={`grid ${videoAspectClass(video.format)} place-items-center bg-[#eeeeef] text-[#8b8b91]`}><svg aria-hidden="true" viewBox="0 0 24 24" className="size-9 fill-none stroke-current" strokeWidth="1.5"><path d="M4 5h16v14H4zM10 9l5 3-5 3z" /></svg></div>}
         <div className="p-4"><div className="flex items-center justify-between gap-3"><StatusPill status={labels[video.status] ?? video.status} /><span className="text-xs font-semibold tabular-nums">{formatVideoPrice(video)}</span></div><h3 className="mt-3 truncate text-sm font-semibold">{video.title ?? `${video.make ?? 'Nouvelle'} ${video.model ?? 'vidéo'}`}</h3><p className="mt-1 text-xs text-[#77777d]">{formatVideoDate(video.createdAt ?? video.created_at)} · {video.durationSeconds ?? 5} s</p>
           {video.status === 'ready' && video.videoUrl ? <div className="mt-4 flex flex-wrap gap-2"><a href={video.videoUrl} download onClick={(event) => event.stopPropagation()} className="inline-flex min-h-11 items-center rounded-sm bg-[#c51e1c] px-3.5 py-2.5 text-xs font-semibold text-white hover:bg-[#a71715] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#c51e1c]">Télécharger le MP4</a>{role === 'collaborateur' && <button type="button" onClick={(event) => { event.stopPropagation(); void submitForValidation(video); }} className="inline-flex min-h-11 items-center rounded-sm border border-[#e2e2e5] px-3.5 py-2.5 text-xs font-semibold">Envoyer en validation</button>}</div> : video.status === 'generating' ? <p className="mt-4 text-xs text-[#626269]">Génération en cours. Mise à jour automatique.</p> : null}
         </div>
       </article>)}
     </div>}
-    {selectedVideo && <aside className="border border-[#e2e2e5] bg-white p-5" aria-label="Détails de la vidéo sélectionnée"><div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-[10px] font-bold uppercase tracking-[.16em] text-[#c51e1c]">Détail de la vidéo</p><h2 className="mt-1 text-lg font-semibold">{selectedVideo.title ?? 'Vidéo sans titre'}</h2></div><span className="text-xs text-[#626269]">V{selectedVideo.version ?? 1} · {selectedVideo.durationSeconds ?? 5} s</span></div>{selectedVideo.previewUrl && <video controls preload="metadata" src={selectedVideo.previewUrl} className="mt-4 aspect-video max-h-[420px] w-full bg-[#232326]" />}{selectedVideo.videoUrl && <a href={selectedVideo.videoUrl} download className="mt-4 inline-flex min-h-11 items-center rounded-sm bg-[#c51e1c] px-4 py-2.5 text-xs font-semibold text-white">Télécharger MP4</a>}</aside>}
+    {selectedVideo && <aside className="border border-[#e2e2e5] bg-white p-5" aria-label="Détails de la vidéo sélectionnée"><div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-[10px] font-bold uppercase tracking-[.16em] text-[#c51e1c]">Détail de la vidéo</p><h2 className="mt-1 text-lg font-semibold">{selectedVideo.title ?? 'Vidéo sans titre'}</h2></div><span className="text-xs text-[#626269]">{selectedVideo.format ?? '16:9'} · V{selectedVideo.version ?? 1} · {selectedVideo.durationSeconds ?? 5} s</span></div>{selectedVideo.previewUrl && <video controls preload="metadata" src={selectedVideo.previewUrl} className={`mt-4 ${videoAspectClass(selectedVideo.format)} max-h-[420px] w-full bg-[#232326] object-contain`} />}{selectedVideo.videoUrl && <a href={selectedVideo.videoUrl} download className="mt-4 inline-flex min-h-11 items-center rounded-sm bg-[#c51e1c] px-4 py-2.5 text-xs font-semibold text-white">Télécharger MP4</a>}</aside>}
   </>;
 }

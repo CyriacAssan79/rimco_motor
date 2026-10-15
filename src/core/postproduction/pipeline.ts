@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { HttpError } from '@/core/auth/guards';
 import { createStorageAdminClient } from '@/core/storage/supabase';
-import { makeFinalVideoArgs, makeShotMontageArgs, shouldOverlayLogo } from './ffmpeg-args';
+import { makeFinalVideoArgs, makeShotMontageArgs, normalizeVideoFormat, shouldOverlayLogo } from './ffmpeg-args';
 
 const ffmpegPath = join(process.cwd(), '.generated', 'ffmpeg');
 const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
@@ -36,6 +36,7 @@ export async function beginPostproduction(versionId: string) {
     : null;
   if (audio && (audio.kind !== 'audio' || audio.status !== 'validée' || audio.brand_id !== video.brand_id)) throw new HttpError(422, 'La piste audio sélectionnée n’est pas validée pour cette marque.');
   const overlayLogo = shouldOverlayLogo(version.brief_json);
+  const briefFormat = normalizeVideoFormat(version.brief_json && typeof version.brief_json === 'object' ? (version.brief_json as { format?: unknown }).format : undefined);
   if (overlayLogo) {
     try { await access(logoFile, constants.R_OK); }
     catch { throw new HttpError(503, 'Le logo RIMCO est indisponible sur ce déploiement.'); }
@@ -53,7 +54,7 @@ export async function beginPostproduction(versionId: string) {
   const outputFile = join(directory, 'final.mp4');
   try {
     await Promise.all([writeFile(rawFile, rawBytes), ...(audioBytes && audioFile ? [writeFile(audioFile, audioBytes)] : [])]);
-    await runFfmpeg(ffmpegPath, makeFinalVideoArgs({ rawFile, audioFile, logoFile, outputFile, durationSeconds, overlayLogo }));
+    await runFfmpeg(ffmpegPath, makeFinalVideoArgs({ rawFile, audioFile, logoFile, outputFile, durationSeconds, overlayLogo, format: briefFormat }));
     const outputStat = await stat(outputFile);
     if (outputStat.size > MAX_VIDEO_BYTES) throw new HttpError(502, 'Le MP4 final dépasse la taille autorisée.');
     const output = await readFile(outputFile);
@@ -116,6 +117,7 @@ export async function assembleShotMontage(versionId: string) {
     throw new HttpError(409, 'Les deux plans doivent être prêts avant leur assemblage.');
   }
   const overlayLogo = shouldOverlayLogo(version.brief_json);
+  const briefFormat = normalizeVideoFormat(version.brief_json && typeof version.brief_json === 'object' ? (version.brief_json as { format?: unknown }).format : undefined);
   if (overlayLogo) {
     try { await access(logoFile, constants.R_OK); }
     catch { throw new HttpError(503, 'Le logo RIMCO est indisponible sur ce déploiement.'); }
@@ -130,7 +132,7 @@ export async function assembleShotMontage(versionId: string) {
   const outputFile = join(directory, 'montage.mp4');
   try {
     await Promise.all(clipFiles.map((path, index) => writeFile(path, clipBytes[index])));
-    const args = makeShotMontageArgs({ shotFiles: clipFiles as [string, string], logoFile, outputFile, overlayLogo, durationSeconds: 6 });
+    const args = makeShotMontageArgs({ shotFiles: clipFiles as [string, string], logoFile, outputFile, overlayLogo, durationSeconds: 6, format: briefFormat });
     await runFfmpeg(ffmpegPath, args);
     const outputStat = await stat(outputFile);
     if (outputStat.size > MAX_VIDEO_BYTES) throw new HttpError(502, 'Le montage dépasse la taille autorisée.');
