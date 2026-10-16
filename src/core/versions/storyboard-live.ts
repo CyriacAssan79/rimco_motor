@@ -2,13 +2,13 @@ import type { Actor } from '@/core/auth/guards';
 import { HttpError } from '@/core/auth/guards';
 import { buildBrief } from '@/core/brief';
 import { getStoryboardModeRoute } from '@/core/providers/storyboard-routing';
-import { wanReferenceVideoProvider, klingReferenceVideoProvider, seedanceReferenceVideoProvider, type ReferenceVideoProvider } from '@/core/providers/fal-reference-video';
+import { wanReferenceVideoProvider, klingReferenceVideoProvider, seedanceReferenceVideoProvider, safeProviderError, type ReferenceVideoProvider } from '@/core/providers/fal-reference-video';
 import { klingVideoProvider } from '@/core/providers/fal-kling';
 import { createStorageAdminClient } from '@/core/storage/supabase';
 import { createSupabaseServerClient } from '@/core/supabase/server';
 import { env } from '@/env';
 import { calculateClientPriceFcfa } from '@/core/pricing';
-import { generatedVideoSeconds, shotToPrompt, type StoryboardShot, validateStoryboard } from '@/core/storyboard';
+import { expandSingleShotStoryboard, finalVideoSeconds, shotToPrompt, type ClipDurationSeconds, type StoryboardShot, validateSingleShotStoryboard, validateStoryboard } from '@/core/storyboard';
 import { assembleShotMontage } from '@/core/postproduction/pipeline';
 import type { CreateVersionInput } from './live';
 import { reserveGenerationCost, settleUsageCost } from '@/core/billing/ledger';
@@ -23,20 +23,32 @@ const providers: Record<'wan' | 'kling' | 'seedance', ReferenceVideoProvider> = 
   wan: wanReferenceVideoProvider, kling: klingReferenceVideoProvider, seedance: seedanceReferenceVideoProvider,
 };
 
-export async function createLiveStoryboard(actor: Actor, input: CreateVersionInput & { storyboard: StoryboardShot[]; storyMode: 'standard' | 'pro' | 'premium'; finalDurationSeconds: 15 | 20; vehicleDossierId: string; placeIds: string[]; purpose: 'presentation' | 'advertising'; comparisonCampaignId?: string }) {
+export async function createLiveStoryboard(actor: Actor, input: CreateVersionInput & { storyboard: StoryboardShot[]; workflow?: 'single' | 'multi_clip'; storyMode: 'standard' | 'pro' | 'premium'; clipDurationSeconds: ClipDurationSeconds; vehicleDossierId: string; vehicleDossierIds: string[]; placeIds: string[]; purpose: 'presentation' | 'advertising'; storyboardLedgerIds?: string[]; comparisonCampaignId?: string }) {
   if (!actor.brandId) throw new HttpError(403, 'Aucune marque n’est associée à votre profil.');
 
   const authenticated = await createSupabaseServerClient();
   const admin = createStorageAdminClient();
   const route = getStoryboardModeRoute(input.storyMode);
   const provider = providers[route.adapterFamily];
-  validateStoryboard(input.storyboard, input.finalDurationSeconds, route.adapterFamily);
-  const [{ data: dossier, error: dossierError }, { data: model, error: modelError }] = await Promise.all([
-    authenticated.from('vehicle_dossiers').select('id,make,model,color,variant,brand_id,assets(id,kind,path,title,angle,photo_role,status)').eq('id', input.vehicleDossierId).eq('brand_id', actor.brandId).single(),
+  const isSingleShot = input.workflow === 'single';
+  if (isSingleShot) validateSingleShotStoryboard(input.storyboard, input.clipDurationSeconds, route.adapterFamily);
+  else {
+    validateStoryboard(input.storyboard, input.clipDurationSeconds, route.adapterFamily);
+  }
+  const generationShots = isSingleShot
+    ? expandSingleShotStoryboard(input.storyboard[0], input.clipDurationSeconds, route.adapterFamily)
+    : input.storyboard;
+  const dossierIds = [...new Set([input.vehicleDossierId, ...input.vehicleDossierIds])];
+  const [{ data: dossiers, error: dossierError }, { data: model, error: modelError }] = await Promise.all([
+    authenticated.from('vehicle_dossiers').select('id,make,model,color,variant,brand_id,assets(id,kind,path,title,angle,photo_role,status)').in('id', dossierIds).eq('brand_id', actor.brandId),
     admin.from('ai_models').select('id,name,tier,fal_endpoint_id,adapter_family,price_usd_per_second,pricing_verified_at,allowed_formats,is_active').eq('fal_endpoint_id', route.endpoint).eq('is_active', true).single(),
   ]);
-  if (dossierError || !dossier) throw new HttpError(422, 'Choisissez un dossier véhicule de votre marque.');
-  const vehiclePhotos = (dossier.assets ?? []).filter((asset) => asset.kind === 'vehicle' && asset.status === 'validée');
+  const dossier = dossiers?.find((entry) => entry.id === input.vehicleDossierId);
+  if (dossierError || !dossiers || !dossier || dossiers.length !== dossierIds.length) throw new HttpError(422, 'Choisissez des dossiers véhicule de votre marque.');
+  const normalize = (value: string | null) => (value ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLocaleLowerCase('fr');
+  const identity = (entry: typeof dossier) => [entry.make, entry.model, entry.color, entry.variant].map(normalize).join('|');
+  if (new Set(dossiers.map(identity)).size !== 1) throw new HttpError(422, 'Les dossiers regroupés doivent décrire exactement le même véhicule.');
+  const vehiclePhotos = dossiers.flatMap((entry) => entry.assets ?? []).filter((asset) => asset.kind === 'vehicle' && asset.status === 'validée');
   const asset = vehiclePhotos.find((photo) => photo.id === input.assetId) ?? vehiclePhotos[0];
   if (!asset) throw new HttpError(422, 'Le dossier ne contient aucune photo validée.');
   if (modelError || !model || model.adapter_family !== route.adapterFamily) throw new HttpError(503, `Le modèle ${route.label} n’est pas activé dans la configuration fal.`);
@@ -52,7 +64,7 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
   const placeAssets = [...curatedPlaces.map((place) => ({ id: place.id, path: place.path, title: place.title, kind: 'place' as const, status: 'validée' as const, brand_id: actor.brandId })), ...(locationsQuery.data ?? [])];
   const validVehiclePhotoIds = new Set(vehiclePhotos.map((photo) => photo.id));
   const validPlaceIds = new Set(placeAssets.map((photo) => photo.id));
-  if (input.storyboard.some((shot) => !validVehiclePhotoIds.has(shot.vehiclePhotoId) || shot.locationPhotoId != null && !validPlaceIds.has(shot.locationPhotoId))) {
+  if (generationShots.some((shot) => !validVehiclePhotoIds.has(shot.vehiclePhotoId) || shot.locationPhotoId != null && !validPlaceIds.has(shot.locationPhotoId))) {
     throw new HttpError(422, 'Le storyboard référence une photo ou un lieu qui n’est pas validé dans votre sélection.');
   }
 
@@ -69,17 +81,17 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
     camera_movement: input.cameraMovement,
     mood: input.mood,
     format: input.format,
-    duration_s: input.finalDurationSeconds,
+    duration_s: input.clipDurationSeconds,
     complexity: input.complexity,
   });
-  const prompts = input.storyboard.map((shot, index) => {
+  const prompts = generationShots.map((shot, index) => {
     const reference = vehiclePhotos.find((photo) => photo.id === shot.vehiclePhotoId);
-    return shotToPrompt(brief, shot, index, input.storyboard.length, route.adapterFamily === 'seedance' ? '[' : '@', {
+    return shotToPrompt(brief, shot, index, generationShots.length, '@', {
       role: reference?.photo_role,
       angle: reference?.angle,
     });
   });
-  const generatedSeconds = generatedVideoSeconds(input.finalDurationSeconds);
+  const generatedSeconds = generationShots.reduce((sum, shot) => sum + shot.durationSeconds, 0);
   const costUsd = generatedSeconds * Number(model.price_usd_per_second);
   const priceFcfa = calculateClientPriceFcfa(costUsd, env.USD_TO_EUR_RATE, env.EUR_TO_FCFA);
 
@@ -89,14 +101,34 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
     department: actor.department, status: 'generating',
   }).select('id').single();
   if (videoError || !video) throw new HttpError(500, 'Impossible de créer la vidéo. Réessayez.');
-  const storedBrief = { ...brief, storyboard: input.storyboard, overlayLogo: true, multiClipMode: true, storyMode: input.storyMode, finalDurationSeconds: input.finalDurationSeconds, purpose: input.purpose, vehicleDossierId: input.vehicleDossierId, placeIds: input.placeIds, ...(input.comparisonCampaignId ? { comparisonCampaignId: input.comparisonCampaignId } : {}) };
+  const storedBrief = { ...brief, storyboard: generationShots, approvedStoryboard: input.storyboard, generationTier: input.storyMode, overlayLogo: input.overlayLogo, multiClipMode: !isSingleShot, singleStoryboardMode: isSingleShot, storyMode: input.storyMode, clipDurationSeconds: input.clipDurationSeconds, finalDurationSeconds: finalVideoSeconds(input.clipDurationSeconds), purpose: input.purpose, vehicleDossierId: input.vehicleDossierId, placeIds: input.placeIds, ...(input.comparisonCampaignId ? { comparisonCampaignId: input.comparisonCampaignId } : {}) };
   const { data: version, error: versionError } = await admin.from('video_versions').insert({
     video_id: video.id, number: 1, brief_json: storedBrief, generated_prompt: prompts.join('\n\n--- Plan suivant ---\n\n'),
-    ai_model_id: model.id, status: 'queued', generation_seconds: input.finalDurationSeconds,
+    ai_model_id: model.id, status: 'queued', generation_seconds: finalVideoSeconds(input.clipDurationSeconds),
   }).select('id,number').single();
   if (versionError || !version) {
     await admin.from('videos').delete().eq('id', video.id);
     throw new HttpError(500, 'Impossible de créer la version de la vidéo. Réessayez.');
+  }
+
+  let storyboardCostUsd = 0;
+  const storyboardLedgerIds = input.storyboardLedgerIds ?? [];
+  if (storyboardLedgerIds.length) {
+    const { data: storyboardLedgers, error: storyboardLedgerError } = await admin.from('usage_ledger')
+      .select('id,cost_usd,status,version_id,user_id,ai_model_id')
+      .in('id', storyboardLedgerIds).eq('user_id', actor.id).eq('status', 'charged')
+      .is('version_id', null).is('ai_model_id', null);
+    if (storyboardLedgerError || !storyboardLedgers || storyboardLedgers.length !== storyboardLedgerIds.length) {
+      await Promise.all([admin.from('video_versions').delete().eq('id', version.id), admin.from('videos').delete().eq('id', video.id)]);
+      throw new HttpError(422, 'Le coût du storyboard ne peut pas être associé à cette vidéo. Régénérez le storyboard.');
+    }
+    const { data: linkedLedger, error: linkError } = await admin.from('usage_ledger')
+      .update({ version_id: version.id }).in('id', storyboardLedgerIds).is('version_id', null).select('id');
+    if (linkError || !linkedLedger || linkedLedger.length !== storyboardLedgerIds.length) {
+      await Promise.all([admin.from('video_versions').delete().eq('id', version.id), admin.from('videos').delete().eq('id', video.id)]);
+      throw new HttpError(409, 'Ce coût de storyboard est déjà associé à une autre vidéo. Régénérez le storyboard.');
+    }
+    storyboardCostUsd = storyboardLedgers.reduce((sum, row) => sum + Number(row.cost_usd), 0);
   }
 
   const { data: ledgerId, error: reserveError } = await reserveGenerationCost(admin, {
@@ -105,11 +137,11 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
     eurToFcfa: env.EUR_TO_FCFA, priceFcfa, department: actor.department,
   });
   if (reserveError || !ledgerId) {
-    await Promise.all([admin.from('video_versions').delete().eq('id', version.id), admin.from('videos').delete().eq('id', video.id)]);
+    await Promise.all([admin.from('usage_ledger').update({ version_id: null }).eq('version_id', version.id).eq('status', 'charged'), admin.from('video_versions').delete().eq('id', version.id), admin.from('videos').delete().eq('id', video.id)]);
     throw new HttpError(503, 'Impossible d’enregistrer le suivi de coûts du montage.');
   }
 
-  const shotRows = input.storyboard.map((shot, index) => ({
+  const shotRows = generationShots.map((shot, index) => ({
     version_id: version.id, shot_number: index + 1, duration_seconds: shot.durationSeconds,
     title: shot.title, generated_prompt: prompts[index], usage_ledger_id: ledgerId, status: 'queued',
     price_usd_per_second: Number(model.price_usd_per_second), estimated_cost_usd: shot.durationSeconds * Number(model.price_usd_per_second),
@@ -126,7 +158,7 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
 
   const falStorage = env.FAL_KEY ? createFalClient({ credentials: env.FAL_KEY }).storage : null;
   const curatedUploads = new Map<string, Promise<string>>();
-  const submissions = await Promise.allSettled(input.storyboard.map(async (shot, index) => {
+  const submissions = await Promise.allSettled(generationShots.map(async (shot, index) => {
     const vehiclePhoto = vehiclePhotos.find((photo) => photo.id === shot.vehiclePhotoId);
     const place = placeAssets.find((photo) => photo.id === shot.locationPhotoId);
     if (!vehiclePhoto) throw new HttpError(422, 'Le storyboard utilise une photo de véhicule non validée.');
@@ -147,28 +179,33 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
       if (error || !signed?.signedUrl) throw new HttpError(422, 'Impossible de préparer une image de référence.');
       return signed.signedUrl;
     }));
-    return provider.submit({ prompt: prompts[index], referenceImageUrls: refs, durationS: shot.durationSeconds, aspectRatio: '16:9', endUserId: actor.id });
+    return provider.submit({ prompt: prompts[index], referenceImageUrls: refs, durationS: shot.durationSeconds, aspectRatio: input.format, endUserId: actor.id });
   }));
   let submitted = 0;
+  const submissionErrors: string[] = [];
   for (let index = 0; index < submissions.length; index += 1) {
     const submission = submissions[index];
     if (submission.status === 'fulfilled') {
       submitted += 1;
       await admin.from('video_shots').update({ provider_request_id: submission.value.requestId, status: 'generating', updated_at: new Date().toISOString() }).eq('version_id', version.id).eq('shot_number', index + 1);
     } else {
-      await admin.from('video_shots').update({ status: 'failed', error_message: 'Impossible de démarrer ce plan auprès du fournisseur.', updated_at: new Date().toISOString() }).eq('version_id', version.id).eq('shot_number', index + 1);
+      const detail = safeProviderError(submission.reason);
+      submissionErrors.push(detail);
+      await admin.from('video_shots').update({ status: 'failed', error_message: detail, updated_at: new Date().toISOString() }).eq('version_id', version.id).eq('shot_number', index + 1);
     }
   }
   if (!submitted) {
+    const detail = submissionErrors[0] ?? 'Erreur fournisseur sans détail exploitable.';
     await Promise.all([
       settleUsageCost(admin, { entryId: ledgerId, outcome: 'released', actualCostUsd: 0, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA }),
-      admin.from('video_versions').update({ status: 'failed', error_message: 'Aucun plan n’a pu démarrer.' }).eq('id', version.id),
+      admin.from('video_versions').update({ status: 'failed', error_message: `Aucun plan n’a pu démarrer. ${detail}` }).eq('id', version.id),
       admin.from('videos').update({ status: 'failed' }).eq('id', video.id),
     ]);
-    throw new HttpError(503, 'Aucun plan n’a pu démarrer. La réservation a été libérée.');
+    throw new HttpError(503, `Aucun plan n’a pu démarrer. La réservation a été libérée. Détail fournisseur : ${detail}`);
   }
   await admin.from('video_versions').update({ status: 'generating', updated_at: new Date().toISOString() }).eq('id', version.id);
-  return { id: version.id, status: 'generating' as const, prompt: prompts.join('\n\n--- Plan suivant ---\n\n'), estimatedPriceFcfa: priceFcfa, version: version.number, completedShots: 0, totalShots: input.storyboard.length };
+  const totalEstimatedPriceFcfa = calculateClientPriceFcfa(costUsd + storyboardCostUsd, env.USD_TO_EUR_RATE, env.EUR_TO_FCFA);
+  return { id: version.id, status: 'generating' as const, prompt: prompts.join('\n\n--- Plan suivant ---\n\n'), estimatedPriceFcfa: totalEstimatedPriceFcfa, storyboardCostUsd, version: version.number, completedShots: 0, totalShots: generationShots.length };
 }
 
 export async function refreshLiveStoryboard(versionId: string, actor: Actor) {
@@ -185,11 +222,13 @@ export async function refreshLiveStoryboard(versionId: string, actor: Actor) {
   const { data: shots, error: shotsError } = await admin.from('video_shots')
     .select('shot_number,duration_seconds,provider_request_id,status,raw_path,error_message')
     .eq('version_id', versionId).order('shot_number');
-  if (shotsError || !shots || shots.length < 2 || shots.length > 6) throw new HttpError(503, 'Les plans de cette vidéo sont introuvables.');
+  const briefData = version.brief_json && typeof version.brief_json === 'object' ? version.brief_json as { singleStoryboardMode?: unknown } : {};
+  const singleStoryboardMode = briefData.singleStoryboardMode === true;
+  if (shotsError || !shots || (singleStoryboardMode ? shots.length < 1 || shots.length > 6 : shots.length < 2 || shots.length > 6)) throw new HttpError(503, 'Les plans de cette vidéo sont introuvables.');
   const model = Array.isArray(version.model) ? version.model[0] : version.model;
   const adapterFamily: 'wan' | 'kling' | 'seedance' = model?.adapter_family === 'wan' ? 'wan' : model?.adapter_family === 'seedance' ? 'seedance' : 'kling';
   const multiClip = version.brief_json && typeof version.brief_json === 'object' && (version.brief_json as { multiClipMode?: unknown }).multiClipMode === true;
-  const statusProvider = multiClip ? providers[adapterFamily] : klingVideoProvider;
+  const statusProvider = multiClip || singleStoryboardMode ? providers[adapterFamily] : klingVideoProvider;
 
   await Promise.all(shots.filter((shot) => shot.status === 'generating' && shot.provider_request_id).map(async (shot) => {
     const state = await statusProvider.status(shot.provider_request_id);
@@ -216,7 +255,7 @@ export async function refreshLiveStoryboard(versionId: string, actor: Actor) {
   const pendingShots = latestShots.some((shot) => ['queued','generating','postprocessing'].includes(shot.status));
   if (pendingShots) return { id: versionId, status: 'generating' as const, completedShots, totalShots: latestShots.length };
 
-  const { data: ledger, error: ledgerError } = await admin.from('usage_ledger').select('id,status').eq('version_id', versionId).eq('kind', 'generation').maybeSingle();
+  const { data: ledger, error: ledgerError } = await admin.from('usage_ledger').select('id,status').eq('version_id', versionId).eq('kind', 'generation').eq('ai_model_id', version.ai_model_id).maybeSingle();
   if (ledgerError) throw new HttpError(503, 'Impossible de clôturer le budget des plans.');
   const priceUsdPerSecond = Number(model.price_usd_per_second);
   if (ledger?.status === 'reserved') {
