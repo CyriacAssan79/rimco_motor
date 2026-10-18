@@ -54,6 +54,8 @@ describe('fal Reference-to-Video adapters', () => {
     const { safeProviderError } = await import('./fal-reference-video');
     expect(safeProviderError(new Error('Invalid reference https://assets.example/private.jpg bearer: secret-token')))
       .toBe('Invalid reference [URL masquée] bearer=[masqué]');
+    expect(safeProviderError(new Error('Invalid prompt: unsupported camera movement')))
+      .toBe('Invalid prompt: unsupported camera movement');
   });
 
   it('rejects unsupported clip lengths, ratios, and too many Kling reference images before queue submission', async () => {
