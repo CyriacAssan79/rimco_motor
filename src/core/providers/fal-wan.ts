@@ -6,7 +6,7 @@ export const WAN_ENDPOINT = 'alibaba/wan-3.0/image-to-video';
 
 function client(apiKey?: string) {
   const credentials = apiKey ?? env.FAL_KEY;
-  if (!credentials) throw new Error('Aucune clé Fal n’est configurée.');
+  if (!credentials) throw new Error('Aucune clé API n’est configurée.');
   return createFalClient({ credentials });
 }
 
@@ -39,11 +39,11 @@ export const wanVideoProvider: VideoProvider = {
     const fal = client(apiKey);
     const result = await fal.queue.status(WAN_ENDPOINT, { requestId, logs: false });
     const status = normalizeStatus(result.status);
-    if (status !== 'ready') return { status, ...(status === 'failed' ? { error: 'La génération fal.ai a échoué.' } : {}) };
+    if (status !== 'ready') return { status, ...(status === 'failed' ? { error: 'La génération vidéo a échoué.' } : {}) };
     const completed = await fal.queue.result(WAN_ENDPOINT, { requestId });
     // @fal-ai/client wraps queue results as { data, requestId }.
     const video = (completed as { data?: { video?: { url?: string } } }).data?.video;
-    if (!video?.url) return { status: 'failed', error: 'La réponse fal.ai ne contient pas de vidéo.' };
+    if (!video?.url) return { status: 'failed', error: 'La réponse de génération ne contient pas de vidéo.' };
     return { status: 'ready', videoUrl: video.url };
   },
 };

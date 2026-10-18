@@ -24,7 +24,7 @@ function formatVideoDate(value?: string) {
 }
 const isVideoInProgress = (status: string) => ['queued', 'generating', 'postprocessing'].includes(status);
 const videoAspectClass = (format?: string) => format === '9:16' ? 'aspect-[9/16]' : format === '1:1' ? 'aspect-square' : format === '4:5' ? 'aspect-[4/5]' : 'aspect-video';
-const stageLabels: Record<string, string> = { queued: 'En attente de Fal', generating: 'Génération chez Fal', transferring: 'Transfert du fichier', postprocessing: 'Logo et finalisation' };
+const stageLabels: Record<string, string> = { queued: 'En file d’attente', generating: 'Génération vidéo', transferring: 'Transfert du fichier', postprocessing: 'Logo et finalisation' };
 function formatElapsed(seconds?: number | null) {
   if (seconds == null) return '';
   const minutes = Math.floor(seconds / 60);
@@ -33,7 +33,7 @@ function formatElapsed(seconds?: number | null) {
 function formatStageDurations(durations?: Video['processingDurations']) {
   if (!durations) return '';
   const parts = [
-    ['File Fal', durations.queueSeconds],
+    ['File d’attente', durations.queueSeconds],
     ['Génération', durations.generationSeconds],
     ['Transfert', durations.transferSeconds],
     ['Finalisation', durations.postproductionSeconds],
@@ -190,7 +190,7 @@ export function VideoLibrary({ role }: { role: Role }) {
       </>}
     </div>}
     {error && <p role="alert" className="mb-5 border border-[#f0c9c6] bg-[#fae9e7] p-4 text-sm text-[#9d352e]">{error}</p>}
-    {refreshIssues && <p role="status" className="mb-5 border border-[#ead9b4] bg-[#fff9ed] p-4 text-sm text-[#77591f]">Fal ne répond pas momentanément au suivi. La réservation de coût reste inchangée ; le Studio réessaiera automatiquement.</p>}
+    {refreshIssues && <p role="status" className="mb-5 border border-[#ead9b4] bg-[#fff9ed] p-4 text-sm text-[#77591f]">Le suivi de génération est momentanément indisponible. La réservation de coût reste inchangée ; le Studio réessaiera automatiquement.</p>}
     {notice && <p role="status" className="mb-5 border border-[#d7e7da] bg-[#f2f8f3] p-4 text-sm text-[#315c39]">{notice}</p>}
     {filtered.length === 0 ? <div className="border border-dashed border-[#d2d2d6] bg-white px-6 py-16 text-center"><svg aria-hidden="true" viewBox="0 0 24 24" className="mx-auto size-8 fill-none stroke-[#c51e1c]" strokeWidth="1.5"><path d="M4 5h16v14H4zM10 9l5 3-5 3z" /></svg><h2 className="mt-4 text-sm font-semibold">Aucune vidéo dans cette vue</h2><p className="mx-auto mt-2 max-w-md text-xs leading-5 text-[#626269]">Les vidéos générées apparaîtront ici avec leur aperçu, leur statut et leur prix.</p><Link href="/studio" className="mt-5 inline-flex min-h-11 items-center rounded-sm bg-[#c51e1c] px-4 py-2.5 text-xs font-semibold text-white hover:bg-[#a71715]">Créer une vidéo</Link></div> : <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
       {filtered.map((video) => <article key={video.videoId ?? video.id} onClick={() => setSelectedVideo(video)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelectedVideo(video); } }} tabIndex={0} role="button" className={`cursor-pointer overflow-hidden border bg-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#c51e1c] ${selectedVideo?.id === video.id ? 'border-[#c51e1c]' : 'border-[#e2e2e5]'}`}>

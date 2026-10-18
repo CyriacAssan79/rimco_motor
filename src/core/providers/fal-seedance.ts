@@ -23,8 +23,8 @@ function normalizeStatus(status: string): ProviderStatus {
 /** Adapter for Seedance 2.5 image-to-video (5-30s, 720p, generated audio disabled). */
 export const seedanceVideoProvider: VideoProvider = {
   async submit(input, apiKey) {
-    if (!input.endUserId) throw new Error('Seedance 2.5 nécessite l’identifiant de l’utilisateur final.');
-    if (![5, 10, 15, 20, 30].includes(input.durationS)) throw new Error('Seedance 2.5 accepte les durées 5, 10, 15, 20 et 30 secondes dans RIMCO Studio.');
+    if (!input.endUserId) throw new Error('L’identifiant de l’utilisateur final est requis.');
+    if (![5, 10, 15, 20, 30].includes(input.durationS)) throw new Error('La durée choisie n’est pas prise en charge.');
     const result = await client(apiKey).queue.submit(SEEDANCE_ENDPOINT, { input: {
       prompt: input.prompt,
       image_url: input.imageUrl,

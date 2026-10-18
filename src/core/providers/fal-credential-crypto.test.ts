@@ -29,6 +29,6 @@ describe('Fal credential encryption', () => {
     const encrypted = encryptFalCredential('fal-test-account-secret-123456', masterKey);
     const tampered = { ...encrypted, ciphertext: `${encrypted.ciphertext.slice(0, -2)}AA` };
 
-    expect(() => decryptFalCredential(tampered, masterKey)).toThrow('Impossible de déchiffrer la clé Fal');
+    expect(() => decryptFalCredential(tampered, masterKey)).toThrow('Impossible de déchiffrer la clé API');
   });
 });

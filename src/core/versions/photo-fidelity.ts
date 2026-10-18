@@ -77,7 +77,7 @@ export async function createLivePhotoFidelity(actor: Actor, input: CreatePhotoFi
   };
   const { data: version, error: versionError } = await admin.from('video_versions').insert({
     video_id: video.id, number: 1, brief_json: brief,
-    generated_prompt: 'Montage déterministe à partir des photos validées. Aucun appel Wan, Kling ou Seedance.',
+    generated_prompt: 'Montage déterministe à partir des photos validées. Aucun appel de modèle vidéo IA.',
     ai_model_id: null, provider_request_id: 'photo-fidelity', status: 'queued', generation_seconds: finalDurationSeconds,
   }).select('id').single();
   if (versionError || !version) {

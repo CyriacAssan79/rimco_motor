@@ -4,13 +4,14 @@ import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { buildComparisonCsv, type ComparisonCsvRow } from '@/core/comparisons/csv';
 
-type Model = { id: string; name: string; tier: string; adapterFamily: string; falEndpointId: string; isActive: boolean; allowedDurations: number[]; allowedFormats: string[]; priceUsdPerSecond: number };
+type Model = { id: string; tier: string; comparisonCompatible: boolean; isActive: boolean; allowedDurations: number[]; allowedFormats: string[]; priceUsdPerSecond: number };
 type Asset = { id: string; make?: string; model?: string; color?: string };
 type Ratings = { fidelity: number; realism: number; brandFit: number };
-type Result = { modelId: string; modelName: string; versionId?: string; status: string; error?: string; videoUrl?: string; ratings?: Ratings; comment?: string; elapsedSeconds?: number; costUsd?: number; costEur?: number; costRealFcfa?: number; priceFcfa?: number; costStatus?: string };
+type Result = { modelId: string; modelName?: string; versionId?: string; status: string; error?: string; videoUrl?: string; ratings?: Ratings; comment?: string; elapsedSeconds?: number; costUsd?: number; costEur?: number; costRealFcfa?: number; priceFcfa?: number; costStatus?: string };
 type Comparison = { id: string; created_at: string; brief_json: { status?: string; notes?: string; brief?: { description?: string; format?: string }; results?: Result[] } };
 type Props = { mode: 'mock' | 'live'; usdToEurRate: number; llmMaxCostUsd: number };
 const formats = ['16:9', '9:16', '1:1'] as const;
+const tierLabel = (tier: string) => tier === 'standard' ? 'Standard' : tier === 'pro' ? 'Pro' : tier === 'premium' ? 'Premium' : 'Test';
 
 export function ComparisonWorkspace({ mode, usdToEurRate, llmMaxCostUsd }: Props) {
   const [models, setModels] = useState<Model[]>([]);
@@ -56,11 +57,7 @@ export function ComparisonWorkspace({ mode, usdToEurRate, llmMaxCostUsd }: Props
     return () => window.clearInterval(timer);
   }, [comparisons]);
 
-  const compatibleModels = useMemo(() => models.filter((model) => model.isActive && model.adapterFamily !== 'veo' && model.allowedDurations.includes(5) && model.allowedFormats.includes(format)
-    && ((model.adapterFamily === 'kling' && model.falEndpointId === 'fal-ai/kling-video/o3/pro/image-to-video')
-      || (model.adapterFamily === 'seedance' && model.falEndpointId === 'bytedance/seedance-2.5/image-to-video')
-      || (model.adapterFamily === 'wan' && model.falEndpointId === 'alibaba/wan-3.0/image-to-video')
-      )), [models, format]);
+  const compatibleModels = useMemo(() => models.filter((model) => model.isActive && model.comparisonCompatible && model.allowedDurations.includes(5) && model.allowedFormats.includes(format)), [models, format]);
   const selectedModels = compatibleModels.filter((model) => selected.includes(model.id));
   const estimatedEur = selectedModels.reduce((sum, model) => sum + 5 * model.priceUsdPerSecond * usdToEurRate, 0) + (selectedModels.length ? 2 * llmMaxCostUsd * usdToEurRate : 0);
 
@@ -98,7 +95,7 @@ export function ComparisonWorkspace({ mode, usdToEurRate, llmMaxCostUsd }: Props
       createdAt: comparison.created_at,
       brief: comparison.brief_json.brief?.description ?? '',
       format: comparison.brief_json.brief?.format ?? '',
-      model: result.modelName,
+      model: tierLabel(models.find((model) => model.id === result.modelId)?.tier ?? ''),
       status: result.status,
       fidelity: result.ratings?.fidelity,
       realism: result.ratings?.realism,
@@ -137,12 +134,12 @@ export function ComparisonWorkspace({ mode, usdToEurRate, llmMaxCostUsd }: Props
       <fieldset><legend className="mb-2 text-sm font-semibold">Modèles actifs compatibles <span className="font-normal text-[#716d66]">(2 à 3)</span></legend>
         <div className="divide-y divide-[#e4e1db] border-y border-[#e4e1db]">{compatibleModels.map((model) => <label key={model.id} className="flex cursor-pointer items-center gap-3 py-3 text-sm">
           <input type="checkbox" checked={selected.includes(model.id)} onChange={() => toggle(model.id)} disabled={!selected.includes(model.id) && selected.length >= 3} className="size-4 accent-[#c51e1c]" />
-          <span className="flex-1">{model.name}</span><span className="text-xs text-[#716d66]">{model.tier === 'test' ? 'Test' : model.tier} · {model.priceUsdPerSecond.toFixed(2)} USD/s</span>
+          <span className="flex-1">{tierLabel(model.tier)}</span><span className="text-xs text-[#716d66]">{model.priceUsdPerSecond.toFixed(2)} USD/s</span>
         </label>)}</div>
-        {compatibleModels.length < 2 && <p className="mt-3 text-xs leading-5 text-[#716d66]">Activez un second adaptateur compatible dans l’espace Admin. Wan 3.0 Test est disponible pour les ratios 16:9, 9:16 et 1:1. Veo est désactivé dans cette version.</p>}
+        {compatibleModels.length < 2 && <p className="mt-3 text-xs leading-5 text-[#716d66]">Activez un second modèle compatible dans l’espace Admin pour lancer une comparaison.</p>}
       </fieldset>
       <label className="grid gap-2 text-sm font-semibold">Notes de comparaison<textarea value={notes} onChange={(event) => setNotes(event.target.value)} maxLength={2000} rows={2} className="rounded-md border border-[#d2cec6] bg-[#fbfbfa] p-3 text-sm font-normal" /></label>
-      {mode === 'live' && <p className="max-w-3xl border-y border-[#e4e1db] py-3 text-xs leading-5 text-[#716d66]">Coût estimé de cette comparaison, brief LLM inclus : <strong className="text-[#253b4e]">{estimatedEur.toLocaleString('fr-FR',{minimumFractionDigits:2,maximumFractionDigits:2})} EUR</strong>. Le coût réel sera suivi après génération; le plafond de dépense est géré par fal.ai.</p>}
+      {mode === 'live' && <p className="max-w-3xl border-y border-[#e4e1db] py-3 text-xs leading-5 text-[#716d66]">Coût estimé de cette comparaison, brief inclus : <strong className="text-[#253b4e]">{estimatedEur.toLocaleString('fr-FR',{minimumFractionDigits:2,maximumFractionDigits:2})} EUR</strong>. Le coût réel sera suivi après génération; le plafond de dépense est géré par le service vidéo.</p>}
       {error && <p role="alert" className="text-sm text-[#831810]">{error}</p>}{notice && <p role="status" className="text-sm text-[#35556c]">{notice}</p>}
       <button disabled={busy || selected.length < 2 || !assetId || !description.trim()} className="min-h-11 rounded-md bg-[#c51e1c] px-5 py-3 text-sm font-semibold text-white hover:bg-[#a71715] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#c51e1c] disabled:cursor-not-allowed disabled:opacity-50">{busy ? 'Préparation des générations…' : mode === 'live' ? 'Lancer la comparaison' : 'Simuler la comparaison'}</button>
     </form>
@@ -150,10 +147,10 @@ export function ComparisonWorkspace({ mode, usdToEurRate, llmMaxCostUsd }: Props
     <section className="max-w-5xl"><div className="mb-3 flex flex-wrap items-end justify-between gap-3 border-b border-[#e4e1db] pb-3"><h2 className="text-base font-semibold">Comparaisons récentes</h2><div className="flex items-center gap-4"><button type="button" onClick={exportCsv} disabled={!comparisons.length} className="rounded-md border border-[#d2cec6] px-3 py-2 text-xs font-semibold hover:bg-[#f4f2ee] disabled:cursor-not-allowed disabled:opacity-50">Exporter CSV</button><Link href="/bibliotheque" className="text-xs font-semibold text-[#831810] underline underline-offset-4">Ouvrir la bibliothèque</Link></div></div>
       {comparisons.length === 0 ? <p className="py-8 text-sm text-[#716d66]">Les résultats apparaîtront ici après le premier lancement.</p> : <div className="divide-y divide-[#e4e1db]">{comparisons.map((comparison) => <article key={comparison.id} className="py-4">
         <div className="flex flex-wrap justify-between gap-2"><div><h3 className="text-sm font-semibold">{comparison.brief_json.brief?.description ?? 'Comparaison de modèles'}</h3><p className="mt-1 text-xs text-[#716d66]">{comparison.brief_json.brief?.format} · {new Date(comparison.created_at).toLocaleString('fr-FR')} · {comparison.brief_json.status ?? 'Brouillon'}</p></div></div>
-        <ul className="mt-3 grid gap-3 md:grid-cols-2">{(comparison.brief_json.results ?? []).map((result) => <li key={result.modelId} className="border-b border-[#e4e1db] py-4 text-xs"><div className="flex flex-wrap justify-between gap-2"><span className="font-semibold">{result.modelName}</span><span className={result.status === 'failed' ? 'text-[#831810]' : 'text-[#716d66]'}>{result.error ?? result.status}</span></div>{result.videoUrl && <video controls preload="metadata" src={result.videoUrl} className="mt-3 aspect-video w-full bg-black" aria-label={`Résultat ${result.modelName}`} />}
+        <ul className="mt-3 grid gap-3 md:grid-cols-2">{(comparison.brief_json.results ?? []).map((result) => { const displayModel = models.some((model) => model.id === result.modelId) ? tierLabel(models.find((model) => model.id === result.modelId)?.tier ?? '') : 'Modèle vidéo'; return <li key={result.modelId} className="border-b border-[#e4e1db] py-4 text-xs"><div className="flex flex-wrap justify-between gap-2"><span className="font-semibold">{displayModel}</span><span className={result.status === 'failed' ? 'text-[#831810]' : 'text-[#716d66]'}>{result.error ?? result.status}</span></div>{result.videoUrl && <video controls preload="metadata" src={result.videoUrl} className="mt-3 aspect-video w-full bg-black" aria-label={`Résultat ${displayModel}`} />}
           <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 text-[#716d66]">{result.elapsedSeconds !== undefined && <><dt>Délai</dt><dd>{result.elapsedSeconds} s</dd></>}{result.costUsd !== undefined && <><dt>Coût réel</dt><dd>{result.costUsd.toFixed(3)} USD · {result.costEur?.toFixed(2)} EUR</dd></>}{result.costRealFcfa !== undefined && <><dt>Coût réel FCFA</dt><dd>{new Intl.NumberFormat('fr-FR',{maximumFractionDigits:0}).format(result.costRealFcfa)} FCFA</dd></>}{result.priceFcfa !== undefined && <><dt>Prix facturé</dt><dd>{new Intl.NumberFormat('fr-FR',{maximumFractionDigits:0}).format(result.priceFcfa)} FCFA</dd></>}</dl>
-          <ComparisonEvaluation key={`${comparison.id}-${result.modelId}-${JSON.stringify(result.ratings ?? {})}-${result.comment ?? ''}`} comparisonId={comparison.id} result={result} onSave={saveEvaluation} />
-        </li>)}</ul>
+          <ComparisonEvaluation key={`${comparison.id}-${result.modelId}-${JSON.stringify(result.ratings ?? {})}-${result.comment ?? ''}`} comparisonId={comparison.id} result={{ ...result, modelName: displayModel }} onSave={saveEvaluation} />
+        </li>; })}</ul>
       </article>)}</div>}
     </section>
   </div>;

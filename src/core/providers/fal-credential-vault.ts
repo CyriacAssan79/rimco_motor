@@ -9,7 +9,7 @@ export type FalCredential = { id: string | null; apiKey: string };
 
 function encryptionKey(): string {
   if (!env.FAL_CREDENTIALS_ENCRYPTION_KEY) {
-    throw new HttpError(503, 'Configurez FAL_CREDENTIALS_ENCRYPTION_KEY dans Vercel avant d’enregistrer une clé Fal.');
+    throw new HttpError(503, 'La configuration de chiffrement est requise avant d’enregistrer une clé API.');
   }
   return env.FAL_CREDENTIALS_ENCRYPTION_KEY;
 }
@@ -21,24 +21,24 @@ function missingTable(error: { code?: string } | null): boolean {
 export async function getActiveFalCredential(admin: CredentialAdmin = createStorageAdminClient()): Promise<FalCredential> {
   const { data, error } = await admin.from('fal_provider_credentials')
     .select('id,ciphertext,nonce,auth_tag').eq('is_active', true).maybeSingle();
-  if (error && !missingTable(error)) throw new HttpError(503, 'Impossible de lire la configuration Fal.');
+  if (error && !missingTable(error)) throw new HttpError(503, 'Impossible de lire la configuration du service vidéo.');
   if (data) {
     const apiKey = decryptFalCredential({ ciphertext: data.ciphertext, nonce: data.nonce, authTag: data.auth_tag }, encryptionKey());
     return { id: data.id, apiKey };
   }
   if (env.FAL_KEY) return { id: null, apiKey: env.FAL_KEY };
-  throw new HttpError(503, 'Aucune clé Fal n’est configurée. Ajoutez-la dans Administration → Connexion Fal.');
+  throw new HttpError(503, 'Aucune clé API n’est configurée. Ajoutez-la dans les réglages d’administration.');
 }
 
 /** Null IDs belong to generations started with the legacy Vercel FAL_KEY. */
 export async function getFalCredentialById(credentialId: string | null, admin: CredentialAdmin = createStorageAdminClient()): Promise<FalCredential> {
   if (!credentialId) {
     if (env.FAL_KEY) return { id: null, apiKey: env.FAL_KEY };
-    throw new HttpError(503, 'La clé Fal historique n’est plus configurée dans Vercel.');
+    throw new HttpError(503, 'La clé API associée à cette génération n’est plus disponible.');
   }
   const { data, error } = await admin.from('fal_provider_credentials')
     .select('id,ciphertext,nonce,auth_tag').eq('id', credentialId).maybeSingle();
-  if (error || !data) throw new HttpError(503, 'La clé Fal associée à cette génération est introuvable.');
+  if (error || !data) throw new HttpError(503, 'La clé associée à cette génération est introuvable.');
   const apiKey = decryptFalCredential({ ciphertext: data.ciphertext, nonce: data.nonce, authTag: data.auth_tag }, encryptionKey());
   return { id: data.id, apiKey };
 }
@@ -46,7 +46,7 @@ export async function getFalCredentialById(credentialId: string | null, admin: C
 export async function getFalCredentialStatus(admin: CredentialAdmin = createStorageAdminClient()) {
   const { data, error } = await admin.from('fal_provider_credentials')
     .select('id,created_at,ciphertext,nonce,auth_tag').eq('is_active', true).maybeSingle();
-  if (error && !missingTable(error)) throw new HttpError(503, 'Impossible de lire l’état de la connexion Fal.');
+  if (error && !missingTable(error)) throw new HttpError(503, 'Impossible de lire l’état de la connexion vidéo.');
   if (data) decryptFalCredential({ ciphertext: data.ciphertext, nonce: data.nonce, authTag: data.auth_tag }, encryptionKey());
   return {
     configured: Boolean(data || env.FAL_KEY),
@@ -65,12 +65,12 @@ export async function replaceFalCredential(apiKey: string, actorId: string, admi
     created_by: actorId,
     is_active: false,
   }).select('id').single();
-  if (error || !data) throw new HttpError(503, 'Impossible d’enregistrer la nouvelle clé Fal. Vérifiez que la migration SQL est appliquée.');
+  if (error || !data) throw new HttpError(503, 'Impossible d’enregistrer la nouvelle clé API. Vérifiez que la mise à jour de la base est appliquée.');
 
   const { error: activationError } = await admin.rpc('activate_fal_provider_credential', { p_credential_id: data.id });
   if (activationError) {
     await admin.from('fal_provider_credentials').delete().eq('id', data.id);
-    throw new HttpError(503, 'Impossible d’activer la nouvelle clé Fal. Vérifiez que la migration SQL est appliquée.');
+    throw new HttpError(503, 'Impossible d’activer la nouvelle clé API. Vérifiez que la mise à jour de la base est appliquée.');
   }
 
   return { updatedAt: new Date().toISOString() };

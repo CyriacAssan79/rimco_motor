@@ -41,7 +41,7 @@ export function safeProviderError(error: unknown, apiKey?: string): string {
 
 function client(apiKey?: string) {
   const credentials = apiKey ?? env.FAL_KEY;
-  if (!credentials) throw new Error('Aucune clé Fal n’est configurée.');
+  if (!credentials) throw new Error('Aucune clé API n’est configurée.');
   return createFalClient({ credentials });
 }
 
@@ -74,10 +74,10 @@ function createStatusReader(endpoint: string): ReferenceVideoProvider['status'] 
     const fal = client(apiKey);
     const result = await fal.queue.status(endpoint, { requestId, logs: false });
     const status = normalizeStatus(result.status);
-    if (status !== 'ready') return { status, ...(status === 'failed' ? { error: 'La génération fal.ai a échoué.' } : {}) };
+    if (status !== 'ready') return { status, ...(status === 'failed' ? { error: 'La génération vidéo a échoué.' } : {}) };
     const completed = await fal.queue.result(endpoint, { requestId });
     const video = (completed as { data?: { video?: { url?: string } } }).data?.video;
-    if (!video?.url) return { status: 'failed', error: 'La réponse fal.ai ne contient pas de vidéo.' };
+    if (!video?.url) return { status: 'failed', error: 'La réponse de génération ne contient pas de vidéo.' };
     return { status: 'ready', videoUrl: video.url };
   };
 }
@@ -90,7 +90,7 @@ export const wanReferenceVideoProvider: ReferenceVideoProvider = {
   maxDurationS: 10,
   async submit(input, apiKey) {
     validateReferences(input, this);
-    if (!['16:9', '9:16', '1:1', '4:3', '3:4'].includes(input.aspectRatio)) throw new Error('Format non pris en charge par Wan 2.7.');
+    if (!['16:9', '9:16', '1:1', '4:3', '3:4'].includes(input.aspectRatio)) throw new Error('Format vidéo non pris en charge.');
     const result = await client(apiKey).queue.submit(WAN_REFERENCE_ENDPOINT, { input: {
       prompt: promptWithImageReferences(input.prompt, input.referenceImageUrls.length),
       reference_image_urls: input.referenceImageUrls,
@@ -114,7 +114,7 @@ export const klingReferenceVideoProvider: ReferenceVideoProvider = {
   maxDurationS: 15,
   async submit(input, apiKey) {
     validateReferences(input, this);
-    if (!['16:9', '9:16', '1:1'].includes(input.aspectRatio)) throw new Error('Format non pris en charge par Kling O3.');
+    if (!['16:9', '9:16', '1:1'].includes(input.aspectRatio)) throw new Error('Format vidéo non pris en charge.');
     const result = await client(apiKey).queue.submit(KLING_REFERENCE_ENDPOINT, { input: {
       prompt: promptWithImageReferences(input.prompt, input.referenceImageUrls.length),
       image_urls: input.referenceImageUrls,
@@ -135,8 +135,8 @@ export const seedanceReferenceVideoProvider: ReferenceVideoProvider = {
   maxDurationS: 30,
   async submit(input, apiKey) {
     validateReferences(input, this);
-    if (!input.endUserId) throw new Error('Seedance 2.5 nécessite l’identifiant de l’utilisateur final.');
-    if (!['16:9', '9:16', '1:1', '4:3', '3:4', '21:9'].includes(input.aspectRatio)) throw new Error('Format non pris en charge par Seedance 2.5.');
+    if (!input.endUserId) throw new Error('L’identifiant de l’utilisateur final est requis.');
+    if (!['16:9', '9:16', '1:1', '4:3', '3:4', '21:9'].includes(input.aspectRatio)) throw new Error('Format vidéo non pris en charge.');
     const result = await client(apiKey).queue.submit(SEEDANCE_REFERENCE_ENDPOINT, { input: {
       prompt: promptWithImageReferences(input.prompt, input.referenceImageUrls.length),
       image_urls: input.referenceImageUrls,

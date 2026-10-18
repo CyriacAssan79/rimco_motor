@@ -11,14 +11,14 @@ const AAD = Buffer.from('rimco-studio:fal-credential:v1');
 function parseMasterKey(encodedKey: string): Buffer {
   const key = Buffer.from(encodedKey, 'base64');
   if (key.length !== 32 || key.toString('base64') !== encodedKey) {
-    throw new Error('La clé de chiffrement Fal doit être une clé Base64 de 32 octets.');
+    throw new Error('La clé de chiffrement doit contenir 32 octets encodés en Base64.');
   }
   return key;
 }
 
 export function encryptFalCredential(apiKey: string, encodedMasterKey: string): EncryptedFalCredential {
   const normalizedApiKey = apiKey.trim();
-  if (!normalizedApiKey) throw new Error('La clé API Fal est vide.');
+  if (!normalizedApiKey) throw new Error('La clé API est vide.');
 
   const nonce = randomBytes(12);
   const cipher = createCipheriv('aes-256-gcm', parseMasterKey(encodedMasterKey), nonce);
@@ -42,6 +42,6 @@ export function decryptFalCredential(encrypted: EncryptedFalCredential, encodedM
       decipher.final(),
     ]).toString('utf8');
   } catch {
-    throw new Error('Impossible de déchiffrer la clé Fal. Vérifiez la clé de chiffrement configurée dans Vercel.');
+    throw new Error('Impossible de déchiffrer la clé API. Vérifiez la configuration de chiffrement.');
   }
 }

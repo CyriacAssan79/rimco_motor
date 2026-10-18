@@ -306,7 +306,7 @@ export async function refreshLiveVersion(versionId: string, actor: Actor) {
     status = await provider.status(version.provider_request_id, falCredential.apiKey);
   } catch (cause) {
     logFalStatusFailure({ stage: 'generation_status', versionId, providerRequestId: version.provider_request_id, endpoint: model?.fal_endpoint_id ?? 'unknown', adapterFamily: model?.adapter_family ?? null, cause, apiKey: falCredential.apiKey });
-    throw new HttpError(502, 'Le suivi de génération auprès de Fal a échoué. Réessayez dans un instant.');
+    throw new HttpError(502, 'Le suivi de génération a échoué. Réessayez dans un instant.');
   }
   const observedAt = new Date().toISOString();
   const briefData = version.brief_json && typeof version.brief_json === 'object' ? version.brief_json as Record<string, unknown> : {};

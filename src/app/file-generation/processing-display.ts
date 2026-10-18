@@ -3,7 +3,7 @@ export type ProcessingDisplayItem = { processingStage?: string | null; processin
 
 const steps = ['queued', 'generating', 'transferring', 'postprocessing', 'ready'];
 const stageRows: Array<[string, keyof StageDurations, number]> = [
-  ['Attente Fal', 'queueSeconds', 0], ['Génération', 'generationSeconds', 1], ['Transfert', 'transferSeconds', 2],
+  ['File d’attente', 'queueSeconds', 0], ['Génération', 'generationSeconds', 1], ['Transfert', 'transferSeconds', 2],
   ['Clôture des coûts', 'billingSeconds', 2], ['Post-production', 'postproductionSeconds', 3],
 ];
 

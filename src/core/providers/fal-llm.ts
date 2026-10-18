@@ -118,14 +118,14 @@ function falCall(apiKey = env.FAL_KEY ?? ''): LlmCall {
 
 export const falLlmProvider: LlmProvider = {
   async buildBrief(description, options) {
-    if (!env.FAL_KEY) throw new Error('FAL_KEY manque : configurez la clé fal.ai dans Vercel.');
-    if (!env.LLM_MODEL) throw new Error('LLM_MODEL manque : choisissez un modèle disponible sur fal.ai.');
+    if (!env.FAL_KEY) throw new Error('La configuration du service de génération est incomplète.');
+    if (!env.LLM_MODEL) throw new Error('Le modèle de rédaction n’est pas configuré.');
     return createFalLlmProvider(falCall()).buildBrief(description, options);
   },
 };
 
 export async function buildFalBriefWithCost(description: string, options: Record<string, string>, apiKey = env.FAL_KEY) {
-  if (!apiKey) throw new Error('Aucune clé Fal n’est configurée. Ajoutez-la dans Administration → Connexion Fal.');
-  if (!env.LLM_MODEL) throw new Error('LLM_MODEL manque : choisissez un modèle disponible sur fal.ai.');
+  if (!apiKey) throw new Error('Aucune clé API n’est configurée. Vérifiez les réglages d’administration.');
+  if (!env.LLM_MODEL) throw new Error('Le modèle de rédaction n’est pas configuré.');
   return createFalLlmProvider(falCall(apiKey)).buildBriefWithCost(description, options);
 }

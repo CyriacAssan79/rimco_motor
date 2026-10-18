@@ -22,7 +22,7 @@ export async function GET() {
       const durations = getSupportedReferenceDurations(tier, model.allowed_durations as number[] | null);
       if (model.fal_endpoint_id !== REFERENCE_MODEL_ENDPOINTS[tier] || !formats.length || !durations.length) return [];
       const estimatedPricesFcfa = Object.fromEntries(durations.map((duration) => [duration, calculateClientPriceFcfa(duration * Number(model.price_usd_per_second), env.USD_TO_EUR_RATE, env.EUR_TO_FCFA)]));
-      return [{ id: model.id, name: model.name, tier, adapterFamily: model.adapter_family, formats, durations, estimatedPricesFcfa, isDefault: model.is_default, isReference: true }];
+      return [{ id: model.id, tier, formats, durations, estimatedPricesFcfa, isDefault: model.is_default }];
     });
     return NextResponse.json({ models: referenceModels });
   } catch (error) { return errorResponse(error); }

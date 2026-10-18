@@ -187,26 +187,24 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
     return provider.submit({ prompt: prompts[index], referenceImageUrls: refs, durationS: shot.durationSeconds, aspectRatio: input.format, endUserId: actor.id }, falCredential.apiKey);
   }));
   let submitted = 0;
-  const submissionErrors: string[] = [];
   for (let index = 0; index < submissions.length; index += 1) {
     const submission = submissions[index];
     if (submission.status === 'fulfilled') {
       submitted += 1;
       await admin.from('video_shots').update({ provider_request_id: submission.value.requestId, status: 'generating', updated_at: new Date().toISOString() }).eq('version_id', version.id).eq('shot_number', index + 1);
     } else {
-      const detail = safeProviderError(submission.reason, falCredential.apiKey);
-      submissionErrors.push(detail);
-      await admin.from('video_shots').update({ status: 'failed', error_message: detail, updated_at: new Date().toISOString() }).eq('version_id', version.id).eq('shot_number', index + 1);
+      const providerError = safeProviderError(submission.reason, falCredential.apiKey);
+      console.error('[video-generation] Séquence non démarrée.', { versionId: version.id, shotNumber: index + 1, detail: providerError });
+      await admin.from('video_shots').update({ status: 'failed', error_message: 'Cette séquence n’a pas pu démarrer.', updated_at: new Date().toISOString() }).eq('version_id', version.id).eq('shot_number', index + 1);
     }
   }
   if (!submitted) {
-    const detail = submissionErrors[0] ?? 'Erreur fournisseur sans détail exploitable.';
     await Promise.all([
       settleUsageCost(admin, { entryId: ledgerId, outcome: 'released', actualCostUsd: 0, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA }),
-      admin.from('video_versions').update({ status: 'failed', error_message: `Aucun plan n’a pu démarrer. ${detail}` }).eq('id', version.id),
+      admin.from('video_versions').update({ status: 'failed', error_message: 'Aucun plan n’a pu démarrer. La réservation a été libérée.' }).eq('id', version.id),
       admin.from('videos').update({ status: 'failed' }).eq('id', video.id),
     ]);
-    throw new HttpError(503, `Aucun plan n’a pu démarrer. La réservation a été libérée. Détail fournisseur : ${detail}`);
+    throw new HttpError(503, 'Aucun plan n’a pu démarrer. La réservation a été libérée. Réessayez plus tard.');
   }
   const providerSubmittedAt = new Date().toISOString();
   const submittedBrief = { ...storedBrief, processingMetrics: { ...storedBrief.processingMetrics, providerSubmittedAt } };
@@ -261,7 +259,7 @@ export async function refreshLiveStoryboard(versionId: string, actor: Actor) {
       state = await statusProvider.status(shot.provider_request_id, falCredential.apiKey);
     } catch (cause) {
       logFalStatusFailure({ stage: 'storyboard_shot_status', versionId, shotNumber: shot.shot_number, providerRequestId: shot.provider_request_id, endpoint: model?.fal_endpoint_id ?? 'unknown', adapterFamily, cause, apiKey: falCredential.apiKey });
-      throw new HttpError(502, `Le suivi Fal du plan ${shot.shot_number} a échoué. Réessayez dans un instant.`);
+      throw new HttpError(502, `Le suivi du plan ${shot.shot_number} a échoué. Réessayez dans un instant.`);
     }
     if (state.status === 'failed') {
       nextShotMetrics[String(shot.shot_number)] = firstObservedAt(nextShotMetrics[String(shot.shot_number)] ?? {}, 'failedAt', observedAt);

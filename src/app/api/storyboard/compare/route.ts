@@ -22,19 +22,19 @@ const comparisonModes = ['standard', 'pro'] as const;
 export async function POST(request: Request) {
   try {
     const actor = await getActor();
-    if (actor.role !== 'admin') throw new HttpError(403, 'Le comparatif Wan/Kling est réservé à l’administration pendant la phase de test.');
+    if (actor.role !== 'admin') throw new HttpError(403, 'Le comparatif de modèles est réservé à l’administration pendant la phase de test.');
     const input = compareSchema.parse(await request.json());
     if (!actor.brandId) throw new HttpError(403, 'Aucune marque n’est associée à votre profil.');
     if (input.audioAssetId) throw new HttpError(422, 'Le comparatif est sans audio pour le moment.');
     for (const mode of comparisonModes) validateStoryboard(input.storyboard, input.clipDurationSeconds, getStoryboardModeRoute(mode).adapterFamily);
-    if (env.PROVIDERS_MODE !== 'live') throw new HttpError(503, 'Le comparatif nécessite un environnement Fal connecté.');
+    if (env.PROVIDERS_MODE !== 'live') throw new HttpError(503, 'Le comparatif nécessite un environnement de génération actif.');
 
     const admin = createStorageAdminClient();
     const endpoints = comparisonModes.map((mode) => getStoryboardModeRoute(mode).endpoint);
     const { data: models, error: modelsError } = await admin.from('ai_models')
       .select('id,fal_endpoint_id,price_usd_per_second,pricing_verified_at,allowed_formats,is_active')
       .in('fal_endpoint_id', endpoints).eq('is_active', true);
-    if (modelsError || !models || models.length !== 2) throw new HttpError(503, 'Les modèles Wan 2.7 et Kling O3 ne sont pas tous deux activés.');
+    if (modelsError || !models || models.length !== 2) throw new HttpError(503, 'Les modèles requis ne sont pas tous activés.');
     if (models.some((model) => !model.allowed_formats?.includes(input.format))) throw new HttpError(422, 'Les deux modèles du comparatif ne prennent pas en charge ce format.');
     if (models.some((model) => !model.pricing_verified_at || Date.now() - new Date(model.pricing_verified_at).getTime() > 7 * 24 * 60 * 60 * 1000)) {
       throw new HttpError(503, 'Les tarifs des modèles doivent être vérifiés et datés dans la configuration avant tout lancement.');

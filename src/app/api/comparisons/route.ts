@@ -7,6 +7,20 @@ import { requestSchema } from '@/core/versions/request-schema';
 import { createLiveVersion } from '@/core/versions/live';
 import { listComparisons, saveComparison } from '@/core/comparisons/store';
 export const maxDuration = 60;
+function publicComparison(comparison: unknown): unknown {
+  if (!comparison || typeof comparison !== 'object') return comparison;
+  const row = comparison as Record<string, unknown>;
+  if (!row.brief_json || typeof row.brief_json !== 'object') return comparison;
+  const content = row.brief_json as { results?: Array<Record<string, unknown>> };
+  const results = (content.results ?? []).map((result) => {
+    const publicResult = { ...result };
+    Reflect.deleteProperty(publicResult, 'modelName');
+    if (typeof publicResult.error === 'string') publicResult.error = publicResult.error.replace(/fal\.ai|\bfal\b|\bwan\b|\bkling\b|\bseedance\b|\bveo\b|higgsfield|xfield/gi, 'service vidéo');
+    return publicResult;
+  });
+  return { ...row, brief_json: { ...content, results } };
+}
+function publicComparisons(comparisons: unknown[]) { return comparisons.map(publicComparison); }
 const schema = z.object({
   brief: z.object({ description: z.string().trim().min(8).max(500), format: z.enum(['16:9','9:16','1:1','4:5']), location: z.string().max(160).default(''), setting: z.string().max(160).default(''), character: z.string().max(160).default(''), lighting: z.string().max(160).default('Lumière douce de fin de journée') }).strict(),
   assetId: z.string().min(1), modelIds: z.array(z.string().uuid()).min(2).max(3), notes: z.string().trim().max(2000).optional(),
@@ -20,7 +34,7 @@ function comparisonStatus(results: Array<{ status: string }>, allModelsStarted: 
 export async function GET() {
   try {
     await requireRole('admin');
-    if (env.PROVIDERS_MODE === 'mock' && !env.NEXT_PUBLIC_SUPABASE_URL) return NextResponse.json({ comparisons: listComparisons() });
+    if (env.PROVIDERS_MODE === 'mock' && !env.NEXT_PUBLIC_SUPABASE_URL) return NextResponse.json({ comparisons: publicComparisons(listComparisons()) });
     const admin = createStorageAdminClient();
     const { data, error } = await admin.from('comparisons').select('id,user_id,brief_json,created_at').order('created_at', { ascending: false });
     if (error) throw error;
@@ -60,7 +74,7 @@ export async function GET() {
       const status = results.length === 0 ? content.status ?? 'draft' : comparisonStatus(results, true);
       return { ...comparison, brief_json: { ...content, status, results } };
     }));
-    return NextResponse.json({ comparisons: enriched });
+    return NextResponse.json({ comparisons: publicComparisons(enriched) });
   } catch (error) { return errorResponse(error); }
 }
 export async function POST(request: Request) {
@@ -68,19 +82,13 @@ export async function POST(request: Request) {
     const actor = await requireRole('admin');
     const input = schema.parse(await request.json());
     if (env.PROVIDERS_MODE === 'mock' && !env.NEXT_PUBLIC_SUPABASE_URL) {
-      const names: Record<string, string> = {
-        '00000000-0000-4000-8000-000000000002': 'Kling O3 Pro',
-        '00000000-0000-4000-8000-000000000006': 'Seedance 2.5',
-        '00000000-0000-4000-8000-000000000005': 'Veo 3.1 Fast',
-        '00000000-0000-4000-8000-000000000004': 'Wan 3.0',
-      };
       const comparison = saveComparison({ id: crypto.randomUUID(), user_id: actor.id, created_at: new Date().toISOString(), brief_json: {
         ...input,
         brief: input.brief,
         status: 'simulated',
-        results: input.modelIds.map((modelId) => ({ modelId, modelName: names[modelId] ?? 'Modèle simulé', status: 'simulated', costUsd: 0, costEur: 0, costRealFcfa: 0, priceFcfa: 0 })),
+        results: input.modelIds.map((modelId) => ({ modelId, modelName: 'Modèle vidéo', status: 'simulated', costUsd: 0, costEur: 0, costRealFcfa: 0, priceFcfa: 0 })),
       } });
-      return NextResponse.json({ comparison }, { status: 201 });
+      return NextResponse.json({ comparison: publicComparison(comparison) }, { status: 201 });
     }
     const admin = createStorageAdminClient();
     const { data: models, error: modelError } = await admin.from('ai_models').select('id,name,tier,fal_endpoint_id,adapter_family,is_active,mode,allowed_durations,allowed_formats,price_usd_per_second').in('id', input.modelIds);
@@ -93,7 +101,7 @@ export async function POST(request: Request) {
       const briefJson = { ...input, status: 'simulated', results };
       const { data: updated, error: updateError } = await admin.from('comparisons').update({ brief_json: briefJson }).eq('id', comparison.id).select('id,user_id,brief_json,created_at').single();
       if (updateError || !updated) throw new HttpError(503, 'La comparaison simulée n’a pas pu être enregistrée.');
-      return NextResponse.json({ comparison: updated }, { status: 201 });
+      return NextResponse.json({ comparison: publicComparison(updated) }, { status: 201 });
     }
 
     const commonRequest = requestSchema.parse({ ...input.brief, assetId: input.assetId, tier: 'standard' });
@@ -112,6 +120,6 @@ export async function POST(request: Request) {
     }
     const status = comparisonStatus(results, true);
     const { data: updated } = await admin.from('comparisons').select('id,user_id,brief_json,created_at').eq('id', comparison.id).single();
-    return NextResponse.json({ comparison: updated ?? { ...comparison, brief_json: { ...input, status, results } } }, { status: 201 });
+    return NextResponse.json({ comparison: publicComparison(updated ?? { ...comparison, brief_json: { ...input, status, results } }) }, { status: 201 });
   } catch (error) { return errorResponse(error); }
 }

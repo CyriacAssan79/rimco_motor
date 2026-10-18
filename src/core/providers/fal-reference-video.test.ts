@@ -61,7 +61,7 @@ describe('fal Reference-to-Video adapters', () => {
   it('rejects unsupported clip lengths, ratios, and too many Kling reference images before queue submission', async () => {
     const { klingReferenceVideoProvider } = await import('./fal-reference-video');
     await expect(klingReferenceVideoProvider.submit({ ...input, durationS: 16 })).rejects.toThrow('entre 3 et 15');
-    await expect(klingReferenceVideoProvider.submit({ ...input, aspectRatio: '4:5' })).rejects.toThrow('Format non pris en charge');
+    await expect(klingReferenceVideoProvider.submit({ ...input, aspectRatio: '4:5' })).rejects.toThrow('Format vidéo non pris en charge');
     await expect(klingReferenceVideoProvider.submit({ ...input, referenceImageUrls: Array(5).fill('https://assets.example/ref.jpg') })).rejects.toThrow('1 à 4');
     expect(mockSubmit).not.toHaveBeenCalled();
   });

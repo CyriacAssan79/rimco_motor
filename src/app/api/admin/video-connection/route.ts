@@ -8,8 +8,8 @@ import { env } from '@/env';
 export const runtime = 'nodejs';
 
 const replaceSchema = z.object({
-  apiKey: z.string().trim().min(1, 'Saisissez la clé API Fal.').max(512, 'La clé API Fal est trop longue.')
-    .refine((value) => !/[\u0000-\u001f\u007f]/.test(value), 'La clé API Fal contient des caractères invalides.'),
+  apiKey: z.string().trim().min(1, 'Saisissez la clé API.').max(512, 'La clé API est trop longue.')
+    .refine((value) => !/[\u0000-\u001f\u007f]/.test(value), 'La clé API contient des caractères invalides.'),
 }).strict();
 
 export async function GET() {
