@@ -22,11 +22,13 @@ import { getSceneConceptDirection } from '@/core/scenes/concepts';
 import { reserveGenerationCost, reserveLlmCost, settleUsageCost } from '@/core/billing/ledger';
 import { getRouteForGeneration, REFERENCE_MODEL_ENDPOINTS } from '@/core/providers/model-routing';
 import { wanReferenceVideoProvider, klingReferenceVideoProvider, seedanceReferenceVideoProvider } from '@/core/providers/fal-reference-video';
+import { logFalStatusFailure } from '@/core/providers/fal-observability';
 import { findCuratedLocation, locationCatalog } from '@/core/assets/location-catalog';
 import { createFalClient } from '@fal-ai/client';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { getActiveFalCredential, getFalCredentialById, pruneRetiredFalCredentials } from '@/core/providers/fal-credential-vault';
+import { firstObservedAt, type ProcessingMetrics } from './processing-metrics';
 
 export type CreateVersionInput = z.infer<typeof requestSchema>;
 
@@ -203,26 +205,29 @@ export async function createLiveVersion(actor: Actor, input: CreateVersionInput,
   try {
     if (referenceMode && referenceAdapter) {
       const falStorage = createFalClient({ credentials: falCredential.apiKey }).storage;
-      const refs = await Promise.all(referenceAssets.slice(0, Math.max(1, referenceAdapter.maxReferenceImages - (selectedLocation ? 1 : 0))).map(async (photo) => {
+      const vehicleRefsPromise = Promise.all(referenceAssets.slice(0, Math.max(1, referenceAdapter.maxReferenceImages - (selectedLocation ? 1 : 0))).map(async (photo) => {
         if (photo.id === asset.id && image.signedUrl) return image.signedUrl;
         const { data: signed, error: signedError } = await admin.storage.from('assets').createSignedUrl(photo.path, 3600);
         if (signedError || !signed?.signedUrl) throw new HttpError(422, 'Impossible de préparer toutes les vues du véhicule.');
         return signed.signedUrl;
       }));
-      if (selectedLocation) {
+      const locationRefPromise = (async () => {
+        if (!selectedLocation) return null;
         if (selectedLocation.path.startsWith('/places/')) {
           const curated = locationCatalog.find((item) => item.id === selectedLocation!.id);
           if (!curated || !falStorage) throw new HttpError(422, 'Impossible de préparer la référence du lieu.');
           const bytes = await readFile(join(process.cwd(), 'public', curated.path.slice(1)));
           const extension = curated.path.split('.').at(-1)?.toLowerCase();
           const mimeType = extension === 'png' ? 'image/png' : extension === 'webp' ? 'image/webp' : 'image/jpeg';
-          refs.push(await falStorage.upload(new Blob([bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer], { type: mimeType }), { lifecycle: { expiresIn: '1d' } }));
+          return falStorage.upload(new Blob([bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer], { type: mimeType }), { lifecycle: { expiresIn: '1d' } });
         } else {
           const { data: signed, error: signedError } = await admin.storage.from('assets').createSignedUrl(selectedLocation.path, 3600);
           if (signedError || !signed?.signedUrl) throw new HttpError(422, 'Impossible de préparer la référence du lieu.');
-          refs.push(signed.signedUrl);
+          return signed.signedUrl;
         }
-      }
+      })();
+      const [vehicleRefs, locationRef] = await Promise.all([vehicleRefsPromise, locationRefPromise]);
+      const refs = locationRef ? [...vehicleRefs, locationRef] : vehicleRefs;
       ({ requestId } = await referenceAdapter.submit({ prompt, referenceImageUrls: refs, durationS: input.durationS, aspectRatio: input.format, endUserId: actor.id }, falCredential.apiKey));
     } else {
       const provider = model.adapter_family === 'wan' ? wanVideoProvider : model.adapter_family === 'veo' ? veoVideoProvider : model.adapter_family === 'seedance' ? seedanceVideoProvider : klingVideoProvider;
@@ -236,7 +241,10 @@ export async function createLiveVersion(actor: Actor, input: CreateVersionInput,
     ]);
     throw new HttpError(503, 'Impossible de démarrer la génération vidéo. Le budget réservé a été libéré.');
   }
-  const { error: updateError } = await admin.from('video_versions').update({ provider_request_id: requestId, status: 'generating' }).eq('id', version.id);
+  const providerSubmittedAt = new Date().toISOString();
+  const existingBrief = { ...brief, overlayLogo: input.overlayLogo, generationTier, ...(referenceMode ? { referenceVideoMode: true, vehicleDossierId: input.vehicleDossierId, vehiclePhotoIds: referenceAssets.map((photo) => photo.id), locationAssetId: selectedLocation?.id ?? null } : {}) };
+  const persistedBrief = { ...existingBrief, processingMetrics: { providerSubmittedAt } };
+  const { error: updateError } = await admin.from('video_versions').update({ provider_request_id: requestId, status: 'generating', brief_json: persistedBrief }).eq('id', version.id);
   if (updateError) throw new HttpError(503, 'La génération a démarré, mais son suivi n’a pas pu être enregistré. Le budget reste réservé.');
   return { id: version.id, status: 'generating' as const, brief, prompt, estimatedPriceFcfa: priceFcfa, version: version.number };
 }
@@ -279,10 +287,14 @@ export async function refreshLiveVersion(versionId: string, actor: Actor) {
     return { id: versionId, status: version.status, videoUrl: path ? await signedVideoUrl(admin, path) : undefined };
   }
   if (version.status === 'postprocessing') {
-    if (actor.id !== 'cron-reconcile') return { id: versionId, status: 'postprocessing' as const };
+    if (actor.id !== 'cron-reconcile' && Date.now() - new Date(version.updated_at).getTime() < 60_000) return { id: versionId, status: 'postprocessing' as const };
     return retryPostproduction(versionId, admin);
   }
   if (!version.provider_request_id) throw new HttpError(409, 'La demande de génération n’a pas encore été enregistrée.');
+  if (Date.now() - new Date(version.updated_at).getTime() < 4_000) return { id: versionId, status: version.status as 'queued' | 'generating' };
+  const { data: pollClaim, error: pollClaimError } = await admin.from('video_versions').update({ updated_at: new Date().toISOString() }).eq('id', versionId).eq('updated_at', version.updated_at).in('status', ['queued', 'generating']).select('id').maybeSingle();
+  if (pollClaimError) throw new HttpError(503, 'Impossible de réclamer le suivi de génération.');
+  if (!pollClaim) return { id: versionId, status: version.status as 'queued' | 'generating' };
   const model = Array.isArray(version.model) ? version.model[0] : version.model;
   const referenceMode = Boolean(version.brief_json && typeof version.brief_json === 'object' && 'referenceVideoMode' in version.brief_json);
   const provider = referenceMode
@@ -292,10 +304,26 @@ export async function refreshLiveVersion(versionId: string, actor: Actor) {
   let status;
   try {
     status = await provider.status(version.provider_request_id, falCredential.apiKey);
-  } catch {
+  } catch (cause) {
+    logFalStatusFailure({ stage: 'generation_status', versionId, providerRequestId: version.provider_request_id, endpoint: model?.fal_endpoint_id ?? 'unknown', adapterFamily: model?.adapter_family ?? null, cause, apiKey: falCredential.apiKey });
     throw new HttpError(502, 'Le suivi de génération auprès de Fal a échoué. Réessayez dans un instant.');
   }
+  const observedAt = new Date().toISOString();
+  const briefData = version.brief_json && typeof version.brief_json === 'object' ? version.brief_json as Record<string, unknown> : {};
+  const currentMetrics = briefData.processingMetrics && typeof briefData.processingMetrics === 'object' ? briefData.processingMetrics as ProcessingMetrics : {};
+  let metrics = currentMetrics;
+  if (status.status === 'queued') metrics = firstObservedAt(metrics, 'providerQueuedAt', observedAt);
+  if (status.status === 'generating') metrics = firstObservedAt(metrics, 'generationStartedAt', observedAt);
+  if (status.status === 'ready') metrics = firstObservedAt(metrics, 'providerCompletedAt', observedAt);
+  if (status.status === 'ready') metrics = firstObservedAt(metrics, 'costsSettlementStartedAt', observedAt);
+  if (status.status === 'failed') metrics = firstObservedAt(metrics, 'failedAt', observedAt);
+  if (metrics !== currentMetrics) {
+    const { error: metricsError } = await admin.from('video_versions').update({ brief_json: { ...briefData, processingMetrics: metrics } }).eq('id', versionId);
+    if (metricsError) console.error('Impossible d’enregistrer les durées de génération:', metricsError.message);
+  }
   let rawPath = version.raw_path as string | null;
+  let ledgerSettlementError: unknown;
+  const ledgerSettlement = status.status === 'ready' ? settleCompletedGenerationCost(admin, versionId).catch((cause: unknown) => { ledgerSettlementError = cause; }) : Promise.resolve();
   if (status.status === 'ready' && status.videoUrl) {
     const parsed = acceptedFalUrl(status.videoUrl);
     if (!parsed) throw new HttpError(502, 'Le fournisseur a retourné une URL vidéo non autorisée.');
@@ -308,13 +336,16 @@ export async function refreshLiveVersion(versionId: string, actor: Actor) {
     rawPath = `${version.video_id}/${versionId}/raw.mp4`;
     const { error: uploadError } = await admin.storage.from('videos').upload(rawPath, bytes, { contentType: 'video/mp4', upsert: true });
     if (uploadError) throw new HttpError(502, 'Impossible de sauvegarder la vidéo dans la médiathèque sécurisée.');
+    metrics = firstObservedAt(metrics, 'rawStoredAt', new Date().toISOString());
+    const { error: transferMetricsError } = await admin.from('video_versions').update({ brief_json: { ...briefData, processingMetrics: metrics } }).eq('id', versionId);
+    if (transferMetricsError) console.error('Impossible d’enregistrer la durée du transfert:', transferMetricsError.message);
   }
   if (status.status === 'ready') {
-    const { data: ledger } = await admin.from('usage_ledger').select('id,cost_usd').eq('version_id', versionId).eq('status', 'reserved').maybeSingle();
-    if (ledger) {
-      const { error: settleError } = await settleUsageCost(admin, { entryId: ledger.id, outcome: 'charged', actualCostUsd: ledger.cost_usd, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA });
-      if (settleError) throw new HttpError(503, 'La vidéo est générée mais la clôture du budget doit être réconciliée par l’administrateur.');
-    }
+    await ledgerSettlement;
+    if (ledgerSettlementError) throw ledgerSettlementError;
+    metrics = firstObservedAt(metrics, 'costsSettledAt', new Date().toISOString());
+    const { error: billingMetricsError } = await admin.from('video_versions').update({ brief_json: { ...briefData, processingMetrics: metrics } }).eq('id', versionId);
+    if (billingMetricsError) console.error('Impossible d’enregistrer la durée de clôture des coûts:', billingMetricsError.message);
   }
   if (status.status === 'failed') {
     const { data: ledger } = await admin.from('usage_ledger').select('id').eq('version_id', versionId).eq('status', 'reserved').maybeSingle();
@@ -323,10 +354,14 @@ export async function refreshLiveVersion(versionId: string, actor: Actor) {
       if (settleError) throw new HttpError(503, 'La réservation de budget doit être réconciliée par l’administrateur.');
     }
   }
-  const updates: Record<string, unknown> = { status: status.status };
+  const updates: Record<string, unknown> = { status: status.status, updated_at: new Date().toISOString() };
   if (rawPath) updates.raw_path = rawPath;
   if (status.error) updates.error_message = status.error;
-  if (status.status === 'ready') { updates.status = 'postprocessing'; updates.updated_at = new Date().toISOString(); }
+  if (status.status === 'ready') {
+    metrics = firstObservedAt(metrics, 'postproductionStartedAt', new Date().toISOString());
+    updates.brief_json = { ...briefData, processingMetrics: metrics };
+    updates.status = 'postprocessing'; updates.updated_at = new Date().toISOString();
+  }
   // A queued version can already have a Fal request ID when the initial
   // submission was only partially persisted. Reconcile either in-flight state
   // so a completed Fal result is not downloaded repeatedly and left unprocessed.
@@ -344,8 +379,9 @@ export async function refreshLiveVersion(versionId: string, actor: Actor) {
       return { id: versionId, status: processed.status, videoUrl: canDownload ? await signedVideoUrl(admin, processed.finalPath) : undefined };
     } catch (postprodError) {
       const message = postprodError instanceof HttpError ? postprodError.message : 'La post-production a échoué.';
+      metrics = firstObservedAt(metrics, 'failedAt', new Date().toISOString());
       await Promise.all([
-        admin.from('video_versions').update({ status: 'failed', error_message: message }).eq('id', versionId),
+        admin.from('video_versions').update({ status: 'failed', error_message: message, brief_json: { ...briefData, processingMetrics: metrics }, updated_at: metrics.failedAt }).eq('id', versionId),
         admin.from('videos').update({ status: 'failed' }).eq('id', version.video_id),
         notifyVersion(admin, video.user_id, versionId, 'failed', message),
       ]);
@@ -364,6 +400,15 @@ async function notifyVersion(admin: ReturnType<typeof createStorageAdminClient>,
   const { error } = await admin.from('notifications').upsert({ user_id: userId, version_id: versionId, type, message }, { onConflict: 'user_id,version_id,type', ignoreDuplicates: true });
   if (error && !error.message.includes('notifications')) console.error('Notification vidéo non enregistrée:', error.message);
 }
+
+async function settleCompletedGenerationCost(admin: ReturnType<typeof createStorageAdminClient>, versionId: string) {
+  const { data: ledger, error: ledgerReadError } = await admin.from('usage_ledger').select('id,cost_usd').eq('version_id', versionId).eq('status', 'reserved').maybeSingle();
+  if (ledgerReadError) throw new HttpError(503, 'Impossible de lire la réservation de coût de la génération.');
+  if (!ledger) return;
+  const { error } = await settleUsageCost(admin, { entryId: ledger.id, outcome: 'charged', actualCostUsd: ledger.cost_usd, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA });
+  if (error) throw new HttpError(503, 'La vidéo est générée mais la clôture du budget doit être réconciliée par l’administrateur.');
+}
+
 async function readBoundedVideo(response: Response, maxBytes: number): Promise<Buffer> {
   if (!response.body) throw new HttpError(502, 'Le fournisseur n’a retourné aucun fichier vidéo.');
   const reader = response.body.getReader();

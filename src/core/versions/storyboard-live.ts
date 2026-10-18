@@ -3,11 +3,13 @@ import { HttpError } from '@/core/auth/guards';
 import { buildBrief } from '@/core/brief';
 import { getStoryboardModeRoute } from '@/core/providers/storyboard-routing';
 import { wanReferenceVideoProvider, klingReferenceVideoProvider, seedanceReferenceVideoProvider, safeProviderError, type ReferenceVideoProvider } from '@/core/providers/fal-reference-video';
+import { logFalStatusFailure } from '@/core/providers/fal-observability';
 import { klingVideoProvider } from '@/core/providers/fal-kling';
 import { createStorageAdminClient } from '@/core/storage/supabase';
 import { createSupabaseServerClient } from '@/core/supabase/server';
 import { env } from '@/env';
 import { calculateClientPriceFcfa } from '@/core/pricing';
+import { firstObservedAt, type ProcessingMetrics } from './processing-metrics';
 import { expandSingleShotStoryboard, finalVideoSeconds, shotToPrompt, type ClipDurationSeconds, type StoryboardShot, validateSingleShotStoryboard, validateStoryboard } from '@/core/storyboard';
 import { assembleShotMontage } from '@/core/postproduction/pipeline';
 import type { CreateVersionInput } from './live';
@@ -104,7 +106,7 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
     department: actor.department, status: 'generating',
   }).select('id').single();
   if (videoError || !video) throw new HttpError(500, 'Impossible de créer la vidéo. Réessayez.');
-  const storedBrief = { ...brief, storyboard: generationShots, approvedStoryboard: input.storyboard, generationTier: input.storyMode, overlayLogo: input.overlayLogo, multiClipMode: !isSingleShot, singleStoryboardMode: isSingleShot, storyMode: input.storyMode, clipDurationSeconds: input.clipDurationSeconds, finalDurationSeconds: finalVideoSeconds(input.clipDurationSeconds), purpose: input.purpose, vehicleDossierId: input.vehicleDossierId, placeIds: input.placeIds, ...(input.comparisonCampaignId ? { comparisonCampaignId: input.comparisonCampaignId } : {}) };
+  const storedBrief = { ...brief, storyboard: generationShots, approvedStoryboard: input.storyboard, generationTier: input.storyMode, overlayLogo: input.overlayLogo, multiClipMode: !isSingleShot, singleStoryboardMode: isSingleShot, storyMode: input.storyMode, clipDurationSeconds: input.clipDurationSeconds, finalDurationSeconds: finalVideoSeconds(input.clipDurationSeconds), purpose: input.purpose, vehicleDossierId: input.vehicleDossierId, placeIds: input.placeIds, processingMetrics: { requestedAt: new Date().toISOString() }, shotProcessingMetrics: {}, ...(input.comparisonCampaignId ? { comparisonCampaignId: input.comparisonCampaignId } : {}) };
   const { data: version, error: versionError } = await admin.from('video_versions').insert({
     video_id: video.id, number: 1, brief_json: storedBrief, generated_prompt: prompts.join('\n\n--- Plan suivant ---\n\n'),
     ai_model_id: model.id, fal_credential_id: falCredential.id, status: 'queued', generation_seconds: finalVideoSeconds(input.clipDurationSeconds),
@@ -206,7 +208,9 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
     ]);
     throw new HttpError(503, `Aucun plan n’a pu démarrer. La réservation a été libérée. Détail fournisseur : ${detail}`);
   }
-  await admin.from('video_versions').update({ status: 'generating', updated_at: new Date().toISOString() }).eq('id', version.id);
+  const providerSubmittedAt = new Date().toISOString();
+  const submittedBrief = { ...storedBrief, processingMetrics: { ...storedBrief.processingMetrics, providerSubmittedAt } };
+  await admin.from('video_versions').update({ status: 'generating', brief_json: submittedBrief, updated_at: providerSubmittedAt }).eq('id', version.id);
   const totalEstimatedPriceFcfa = calculateClientPriceFcfa(costUsd + storyboardCostUsd, env.USD_TO_EUR_RATE, env.EUR_TO_FCFA);
   return { id: version.id, status: 'generating' as const, prompt: prompts.join('\n\n--- Plan suivant ---\n\n'), estimatedPriceFcfa: totalEstimatedPriceFcfa, storyboardCostUsd, version: version.number, completedShots: 0, totalShots: generationShots.length };
 }
@@ -214,38 +218,60 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
 export async function refreshLiveStoryboard(versionId: string, actor: Actor) {
   const admin = createStorageAdminClient();
   const { data: version, error } = await admin.from('video_versions')
-    .select('id,video_id,status,final_path,ai_model_id,fal_credential_id,brief_json,model:ai_models!inner(adapter_family,price_usd_per_second),video:videos!inner(id,user_id,status)')
+    .select('id,video_id,status,final_path,updated_at,ai_model_id,fal_credential_id,brief_json,model:ai_models!inner(adapter_family,fal_endpoint_id,price_usd_per_second),video:videos!inner(id,user_id,status)')
     .eq('id', versionId).single();
   if (error || !version) throw new HttpError(404, 'Cette version est introuvable.');
   const video = Array.isArray(version.video) ? version.video[0] : version.video;
   if (!video || video.user_id !== actor.id && actor.role !== 'admin') throw new HttpError(404, 'Cette version est introuvable.');
   if (version.status === 'ready' && version.final_path) return { id: versionId, status: 'ready' as const, videoUrl: await signedUrl(admin, version.final_path) };
   if (version.status === 'failed') { await pruneRetiredFalCredentials(admin); return { id: versionId, status: 'failed' as const, error: 'Un plan n’a pas pu être généré.' }; }
+  if (version.status === 'postprocessing' && actor.id !== 'cron-reconcile' && Date.now() - new Date(version.updated_at).getTime() < 60_000) {
+    return { id: versionId, status: 'postprocessing' as const };
+  }
+  if (version.status === 'postprocessing') {
+    const { data: claimed, error: claimError } = await admin.from('video_versions').update({ updated_at: new Date().toISOString() }).eq('id', versionId).eq('status', 'postprocessing').eq('updated_at', version.updated_at).select('id').maybeSingle();
+    if (claimError) throw new HttpError(503, 'Impossible de réclamer la finalisation du montage.');
+    if (!claimed) return { id: versionId, status: 'postprocessing' as const };
+  }
 
   const { data: shots, error: shotsError } = await admin.from('video_shots')
-    .select('shot_number,duration_seconds,provider_request_id,status,raw_path,error_message')
+    .select('shot_number,duration_seconds,provider_request_id,status,raw_path,error_message,updated_at')
     .eq('version_id', versionId).order('shot_number');
-  const briefData = version.brief_json && typeof version.brief_json === 'object' ? version.brief_json as { singleStoryboardMode?: unknown } : {};
+  const briefData = version.brief_json && typeof version.brief_json === 'object' ? version.brief_json as Record<string, unknown> : {};
   const singleStoryboardMode = briefData.singleStoryboardMode === true;
   if (shotsError || !shots || (singleStoryboardMode ? shots.length < 1 || shots.length > 6 : shots.length < 2 || shots.length > 6)) throw new HttpError(503, 'Les plans de cette vidéo sont introuvables.');
+  if (version.status === 'generating') {
+    const { data: claimed, error: claimError } = await admin.from('video_versions').update({ updated_at: new Date().toISOString() }).eq('id', versionId).eq('status', 'generating').eq('updated_at', version.updated_at).select('id').maybeSingle();
+    if (claimError) throw new HttpError(503, 'Impossible de réclamer le suivi des plans.');
+    if (!claimed) return { id: versionId, status: 'generating' as const, completedShots: shots.filter((shot) => shot.status === 'ready').length, totalShots: shots.length };
+  }
+  const currentMetrics = briefData.processingMetrics && typeof briefData.processingMetrics === 'object' ? briefData.processingMetrics as ProcessingMetrics : {};
+  const shotMetrics = briefData.shotProcessingMetrics && typeof briefData.shotProcessingMetrics === 'object' ? briefData.shotProcessingMetrics as Record<string, ProcessingMetrics> : {};
+  const observedAt = new Date().toISOString();
+  const nextShotMetrics = { ...shotMetrics };
   const model = Array.isArray(version.model) ? version.model[0] : version.model;
   const adapterFamily: 'wan' | 'kling' | 'seedance' = model?.adapter_family === 'wan' ? 'wan' : model?.adapter_family === 'seedance' ? 'seedance' : 'kling';
   const multiClip = version.brief_json && typeof version.brief_json === 'object' && (version.brief_json as { multiClipMode?: unknown }).multiClipMode === true;
   const statusProvider = multiClip || singleStoryboardMode ? providers[adapterFamily] : klingVideoProvider;
   const falCredential = await getFalCredentialById(version.fal_credential_id, admin);
 
-  await Promise.all(shots.filter((shot) => shot.status === 'generating' && shot.provider_request_id).map(async (shot) => {
+  const shotRefreshResults = await Promise.allSettled(shots.filter((shot) => shot.status === 'generating' && shot.provider_request_id).map(async (shot) => {
     let state;
     try {
       state = await statusProvider.status(shot.provider_request_id, falCredential.apiKey);
-    } catch {
+    } catch (cause) {
+      logFalStatusFailure({ stage: 'storyboard_shot_status', versionId, shotNumber: shot.shot_number, providerRequestId: shot.provider_request_id, endpoint: model?.fal_endpoint_id ?? 'unknown', adapterFamily, cause, apiKey: falCredential.apiKey });
       throw new HttpError(502, `Le suivi Fal du plan ${shot.shot_number} a échoué. Réessayez dans un instant.`);
     }
     if (state.status === 'failed') {
+      nextShotMetrics[String(shot.shot_number)] = firstObservedAt(nextShotMetrics[String(shot.shot_number)] ?? {}, 'failedAt', observedAt);
       await admin.from('video_shots').update({ status: 'failed', error_message: state.error ?? 'La génération fal a échoué.', updated_at: new Date().toISOString() }).eq('version_id', versionId).eq('shot_number', shot.shot_number).eq('status', 'generating');
       return;
     }
+    if (state.status === 'queued') nextShotMetrics[String(shot.shot_number)] = firstObservedAt(nextShotMetrics[String(shot.shot_number)] ?? {}, 'providerQueuedAt', observedAt);
+    if (state.status === 'generating') nextShotMetrics[String(shot.shot_number)] = firstObservedAt(nextShotMetrics[String(shot.shot_number)] ?? {}, 'generationStartedAt', observedAt);
     if (state.status !== 'ready' || !state.videoUrl) return;
+    nextShotMetrics[String(shot.shot_number)] = firstObservedAt(nextShotMetrics[String(shot.shot_number)] ?? {}, 'providerCompletedAt', observedAt);
     const parsed = acceptedFalUrl(state.videoUrl);
     if (!parsed) throw new HttpError(502, 'Le fournisseur a retourné une URL vidéo non autorisée.');
     const response = await fetch(parsed, { signal: AbortSignal.timeout(30000), redirect: 'error' });
@@ -256,7 +282,25 @@ export async function refreshLiveStoryboard(versionId: string, actor: Actor) {
     const { error: uploadError } = await admin.storage.from('videos').upload(rawPath, bytes, { contentType: 'video/mp4', upsert: true });
     if (uploadError) throw new HttpError(502, `Impossible d’enregistrer le plan ${shot.shot_number}.`);
     await admin.from('video_shots').update({ status: 'ready', raw_path: rawPath, actual_cost_usd: Number(shot.duration_seconds) * Number(model?.price_usd_per_second ?? 0), error_message: null, updated_at: new Date().toISOString() }).eq('version_id', versionId).eq('shot_number', shot.shot_number).eq('status', 'generating');
+    nextShotMetrics[String(shot.shot_number)] = firstObservedAt(nextShotMetrics[String(shot.shot_number)] ?? {}, 'rawStoredAt', new Date().toISOString());
   }));
+
+  const observedShots = latestMetricsForShots(shots, nextShotMetrics, observedAt);
+  let metrics = { ...currentMetrics };
+  const firstGeneration = observedShots.map((entry) => entry.generationStartedAt).filter((value): value is string => Boolean(value)).sort()[0];
+  if (firstGeneration) metrics.generationStartedAt = metrics.generationStartedAt ?? firstGeneration;
+  const allSettled = observedShots.length > 0 && observedShots.every((entry) => entry.providerCompletedAt || entry.failedAt);
+  const lastCompleted = observedShots.map((entry) => entry.providerCompletedAt).filter((value): value is string => Boolean(value)).sort().at(-1);
+  if (allSettled && lastCompleted) metrics.providerCompletedAt = metrics.providerCompletedAt ?? lastCompleted;
+  const lastStored = observedShots.map((entry) => entry.rawStoredAt).filter((value): value is string => Boolean(value)).sort().at(-1);
+  if (allSettled && lastStored) metrics.rawStoredAt = metrics.rawStoredAt ?? lastStored;
+  const lastFailed = observedShots.map((entry) => entry.failedAt).filter((value): value is string => Boolean(value)).sort().at(-1);
+  if (allSettled && lastFailed) metrics.failedAt = metrics.failedAt ?? lastFailed;
+  const mergedBrief = { ...briefData, processingMetrics: metrics, shotProcessingMetrics: nextShotMetrics };
+  const { error: metricsSaveError } = await admin.from('video_versions').update({ brief_json: mergedBrief }).eq('id', versionId);
+  if (metricsSaveError) console.error('Impossible d’enregistrer les durées des plans:', metricsSaveError.message);
+  const refreshFailure = shotRefreshResults.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+  if (refreshFailure) throw refreshFailure.reason;
 
   const { data: latestShots, error: latestError } = await admin.from('video_shots').select('status,raw_path,duration_seconds').eq('version_id', versionId).order('shot_number');
   if (latestError || !latestShots) throw new HttpError(503, 'Impossible de relire l’état des plans.');
@@ -268,6 +312,9 @@ export async function refreshLiveStoryboard(versionId: string, actor: Actor) {
   if (ledgerError) throw new HttpError(503, 'Impossible de clôturer le budget des plans.');
   const priceUsdPerSecond = Number(model.price_usd_per_second);
   if (ledger?.status === 'reserved') {
+    metrics = firstObservedAt(metrics, 'costsSettlementStartedAt', new Date().toISOString());
+    const { error: billingStartError } = await admin.from('video_versions').update({ brief_json: { ...mergedBrief, processingMetrics: metrics } }).eq('id', versionId);
+    if (billingStartError) console.error('Impossible d’enregistrer le début de clôture des coûts:', billingStartError.message);
     const outcome = completedShots > 0 ? 'charged' : 'released';
     const actualCostUsd = latestShots.filter((shot) => shot.status === 'ready').reduce((sum, shot) => sum + Number(shot.duration_seconds) * priceUsdPerSecond, 0);
     const { error: settleError } = await settleUsageCost(admin, {
@@ -275,6 +322,9 @@ export async function refreshLiveStoryboard(versionId: string, actor: Actor) {
     });
     if (settleError) throw new HttpError(503, 'La consommation fal doit être réconciliée avant de terminer le montage.');
   }
+  metrics.costsSettledAt = metrics.costsSettledAt ?? new Date().toISOString();
+  metrics.postproductionStartedAt = metrics.postproductionStartedAt ?? new Date().toISOString();
+  await admin.from('video_versions').update({ brief_json: { ...mergedBrief, processingMetrics: metrics } }).eq('id', versionId);
   if (completedShots !== latestShots.length) {
     const errorMessage = 'Un plan a échoué. Relancez la vidéo pour obtenir le montage complet.';
     await Promise.all([
@@ -301,6 +351,10 @@ async function signedUrl(admin: ReturnType<typeof createStorageAdminClient>, pat
   const { data, error } = await admin.storage.from('videos').createSignedUrl(path, 3600);
   if (error || !data) throw new HttpError(503, 'Impossible de créer le lien temporaire du montage.');
   return data.signedUrl;
+}
+
+function latestMetricsForShots(shots: Array<{ shot_number: number }>, byShot: Record<string, ProcessingMetrics>, fallbackAt: string) {
+  return shots.map((shot) => byShot[String(shot.shot_number)] ?? { requestedAt: fallbackAt });
 }
 
 function acceptedFalUrl(rawUrl: string): URL | null {

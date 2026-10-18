@@ -31,6 +31,8 @@ export function safeProviderError(error: unknown, apiKey?: string): string {
   const safe = redacted
     .replace(/https?:\/\/\S+/gi, '[URL masquée]')
     .replace(/\b(key|token|authorization|bearer)\s*[:=]\s*[^\s,;]+/gi, '$1=[masqué]')
+    .replace(/(["'])(prompt|image_url|image_urls|reference_image_urls)\1\s*:\s*(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|\[[\s\S]*?\]|[^,}\s]+)/gi, '$1$2$1=[masqué]')
+    .replace(/\b(prompt|image_url|image_urls|reference_image_urls)\s*=\s*(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s&,]+)/gi, '$1=[masqué]')
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 300);

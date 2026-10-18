@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { HttpError } from '@/core/auth/guards';
 import { createStorageAdminClient } from '@/core/storage/supabase';
 import { makeFinalVideoArgs, makeMultiClipMontageArgs, makePhotoFidelityShotArgs, makeShotMontageArgs, normalizeVideoFormat, shouldOverlayLogo, type VideoFormat } from './ffmpeg-args';
+import { firstObservedAt, type ProcessingMetrics } from '@/core/versions/processing-metrics';
 
 const ffmpegPath = join(process.cwd(), '.generated', 'ffmpeg');
 const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
@@ -25,6 +26,9 @@ export async function beginPostproduction(versionId: string) {
   if (![5, 6, 10, 15, 20, 30].includes(durationSeconds)) throw new HttpError(422, 'La durée enregistrée pour cette vidéo n’est pas prise en charge.');
   const video = Array.isArray(version.video) ? version.video[0] : version.video;
   if (!video?.brand_id || !video.user_id) throw new HttpError(409, 'La marque associée à cette vidéo est introuvable.');
+  const briefData = version.brief_json && typeof version.brief_json === 'object' ? version.brief_json as Record<string, unknown> : {};
+  const previousMetrics = briefData.processingMetrics && typeof briefData.processingMetrics === 'object' ? briefData.processingMetrics as ProcessingMetrics : {};
+  const metrics = firstObservedAt(previousMetrics, 'postproductionStartedAt', new Date().toISOString());
   try {
     await access(ffmpegPath, constants.X_OK);
   } catch {
@@ -81,7 +85,8 @@ export async function beginPostproduction(versionId: string) {
       }
     }
 
-    const { error: versionError } = await admin.from('video_versions').update({ status: 'ready', final_path: finalPath, overlay_variant: null, error_message: null, updated_at: new Date().toISOString() }).eq('id', versionId);
+    const completedMetrics = firstObservedAt(metrics, 'postproductionCompletedAt', new Date().toISOString());
+    const { error: versionError } = await admin.from('video_versions').update({ status: 'ready', final_path: finalPath, overlay_variant: null, error_message: null, brief_json: { ...briefData, processingMetrics: completedMetrics }, updated_at: new Date().toISOString() }).eq('id', versionId);
     if (versionError) throw new HttpError(503, 'Le MP4 final est enregistré; son état doit être réconcilié.');
     const { error: readyError } = await admin.from('videos').update({ status: 'ready', updated_at: new Date().toISOString() }).eq('id', version.video_id);
     if (readyError) throw new HttpError(503, 'Le fichier final est prêt; son état doit être réconcilié.');
@@ -114,6 +119,8 @@ export async function assembleShotMontage(versionId: string) {
     .select('shot_number,duration_seconds,status,raw_path')
     .eq('version_id', versionId).order('shot_number');
   const brief = version.brief_json && typeof version.brief_json === 'object' ? version.brief_json as Record<string, unknown> : {};
+  const oldMetrics = brief.processingMetrics && typeof brief.processingMetrics === 'object' ? brief.processingMetrics as ProcessingMetrics : {};
+  const completedMetrics = firstObservedAt(oldMetrics, 'postproductionCompletedAt', new Date().toISOString());
   const isMultiClip = brief.multiClipMode === true;
   const isStoryboard = isMultiClip || brief.singleStoryboardMode === true;
   if (shotsError || !shots || (isMultiClip ? shots.length < 2 || shots.length > 6 : isStoryboard ? shots.length < 1 || shots.length > 6 : shots.length !== 2) || shots.some((shot) => shot.status !== 'ready' || !shot.raw_path)) {
@@ -146,7 +153,7 @@ export async function assembleShotMontage(versionId: string) {
     const finalPath = `${version.video_id}/${versionId}/montage.mp4`;
     const { error: uploadError } = await admin.storage.from('videos').upload(finalPath, output, { contentType: 'video/mp4', upsert: true });
     if (uploadError) throw new HttpError(502, 'Impossible d’enregistrer le montage dans le stockage sécurisé.');
-    const { error: updateVersionError } = await admin.from('video_versions').update({ status: 'ready', final_path: finalPath, raw_path: null, error_message: null, updated_at: new Date().toISOString() }).eq('id', versionId);
+    const { error: updateVersionError } = await admin.from('video_versions').update({ status: 'ready', final_path: finalPath, raw_path: null, error_message: null, brief_json: { ...brief, processingMetrics: completedMetrics }, updated_at: new Date().toISOString() }).eq('id', versionId);
     if (updateVersionError) throw new HttpError(503, 'Le montage est enregistré; son état doit être réconcilié.');
     const { error: updateVideoError } = await admin.from('videos').update({ status: 'ready', updated_at: new Date().toISOString() }).eq('id', version.video_id);
     if (updateVideoError) throw new HttpError(503, 'Le montage est prêt; son état doit être réconcilié.');
