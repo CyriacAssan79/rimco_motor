@@ -9,7 +9,8 @@ import { requestSchema } from '@/core/versions/request-schema';
 import { createLiveVersion } from '@/core/versions/live';
 import { createPersistedMockVersion } from '@/core/versions/mock-persistence';
 import { createStorageAdminClient } from '@/core/storage/supabase';
-import { createSignedVideoDownloadUrl } from '@/core/storage/signed-video';
+import { collectVideoArtifactPaths } from '@/core/storage/intermediate-cleanup';
+import { createSignedStoragePreviewUrl, createSignedVideoDownloadUrl } from '@/core/storage/signed-video';
 import { getScenePreset } from '@/core/scenes/catalog';
 import { getSceneConceptDirection } from '@/core/scenes/concepts';
 import { z } from 'zod';
@@ -21,6 +22,7 @@ import { createLivePhotoFidelity } from '@/core/versions/photo-fidelity';
 import { getStoryboardModeRoute } from '@/core/providers/storyboard-routing';
 import { resolveGenerationTier } from '@/core/versions/generation-tier';
 import { elapsedSeconds, processingDurations, processingStage, type ProcessingMetrics } from '@/core/versions/processing-metrics';
+import { limitRelationToLatest } from '@/core/versions/library-query';
 
 const deleteSchema = z.object({ videoIds: z.array(z.string().uuid()).min(1).max(50) }).strict().refine((input) => new Set(input.videoIds).size === input.videoIds.length, { message: 'La sélection contient des doublons.' });
 const multiClipSchema = requestSchema.extend({
@@ -61,7 +63,9 @@ const photoFidelitySchema = requestSchema.extend({
 export async function GET(request: Request) {
   try {
     const actor = await getActor();
-    const requestedStatus = new URL(request.url).searchParams.get('status');
+    const queryParams = new URL(request.url).searchParams;
+    const requestedStatus = queryParams.get('status');
+    const includePreviews = queryParams.get('includePreviews') !== 'false';
     if (env.PROVIDERS_MODE === 'mock' && !env.NEXT_PUBLIC_SUPABASE_URL) {
       const records = allVersions().filter((item) => item.userId === actor.id || actor.role === 'admin');
       const versions = records.map((latest) => {
@@ -71,7 +75,13 @@ export async function GET(request: Request) {
       return NextResponse.json({ versions });
     }
     const admin = createStorageAdminClient();
-    let query = admin.from('videos').select('id,user_id,title,status,department,brand_id,created_at,video_versions(id,number,status,generation_seconds,final_path,raw_path,provider_request_id,brief_json,generated_prompt,error_message,created_at,validations(id,status),model:ai_models(tier),usage_ledger(kind,ai_model_id,seconds,cost_usd,billable_cost_usd,price_fcfa,status),video_shots(shot_number,title,provider_poll_failure_count,provider_reconciliation_required,provider_last_poll_error,video_quality_status,status))').order('created_at', { ascending: false });
+    let query = limitRelationToLatest(
+      admin.from('videos')
+        .select('id,user_id,title,status,department,brand_id,created_at,video_versions(id,number,status,generation_seconds,final_path,raw_path,provider_request_id,brief_json,error_message,created_at,validations(id,status),model:ai_models(tier),usage_ledger(kind,ai_model_id,seconds,cost_usd,billable_cost_usd,price_fcfa,status),video_shots(shot_number,title,provider_poll_failure_count,provider_reconciliation_required,provider_last_poll_error,video_quality_status,status))')
+        .order('created_at', { ascending: false }),
+      'video_versions',
+      'number',
+    );
     if (actor.role === 'collaborateur') query = query.eq('user_id', actor.id);
     if (actor.role === 'valideur') {
       if (!actor.brandId) return NextResponse.json({ versions: [] });
@@ -109,31 +119,30 @@ export async function GET(request: Request) {
       const finalPath = latest?.final_path ?? null;
       const rawPath = latest?.raw_path ?? null;
       const storage = admin.storage.from('videos');
-      if (canPreview && isPersistedMock && (finalPath || rawPath)) {
+      if (includePreviews && canPreview && isPersistedMock && (finalPath || rawPath)) {
         previewUrl = '/mock/mock-video.mp4';
         previewSource = finalPath ? 'final' : 'raw';
-      } else if (canPreview) {
+      } else if (includePreviews && canPreview) {
         const previewPaths = [
           ...(finalPath ? [{ path: finalPath, source: 'final' as const }] : []),
           ...(rawPath && rawPath !== finalPath ? [{ path: rawPath, source: 'raw' as const }] : []),
         ];
         for (const candidate of previewPaths) {
-          const { data: signed } = await storage.createSignedUrl(candidate.path, 3600);
-          if (!signed?.signedUrl) continue;
-          previewUrl = signed.signedUrl;
+          previewUrl = await createSignedStoragePreviewUrl((storagePath, expiresIn) => storage.createSignedUrl(storagePath, expiresIn), 'videos', candidate.path);
+          if (!previewUrl) continue;
           previewSource = candidate.source;
           break;
         }
       }
-      if (video.status === 'approved' && finalPath) {
+      if (includePreviews && video.status === 'approved' && finalPath) {
         videoUrl = await createSignedVideoDownloadUrl((storagePath, expiresIn, options) => storage.createSignedUrl(storagePath, expiresIn, options), finalPath);
       }
-      if (video.status === 'approved' && isPersistedMock && previewUrl) videoUrl = previewUrl;
+      if (includePreviews && video.status === 'approved' && isPersistedMock && previewUrl) videoUrl = previewUrl;
       const status = video.status === 'approved' ? 'ready' : video.status === 'rejected' ? 'rejected' : video.status === 'review' ? 'review' : video.status === 'cancelled' ? 'cancelled' : video.status === 'ready' ? 'ready' : latest?.status === 'failed' ? 'failed' : latest?.status === 'cancelled' ? 'cancelled' : latest?.status === 'queued' || latest?.status === 'generating' || latest?.status === 'postprocessing' ? 'generating' : 'draft';
       const metrics = briefData.processingMetrics && typeof briefData.processingMetrics === 'object' ? briefData.processingMetrics as ProcessingMetrics : {};
       const stage = qualityCheckActive ? 'quality_checking' : processingStage(latest?.status ?? status, metrics);
       const stageStartedAt = stage === 'queued' ? metrics.providerSubmittedAt : stage === 'keyframing' ? metrics.keyframingStartedAt : stage === 'generating' ? metrics.generationStartedAt ?? metrics.providerSubmittedAt : stage === 'transferring' ? metrics.providerCompletedAt : stage === 'postprocessing' ? metrics.postproductionStartedAt : undefined;
-      return { id: latest?.id ?? video.id, videoId: video.id, title: video.title, status, workflow: briefData.multiClipMode === true ? 'multi_clip' : 'single', tier: generationTier, photoFidelity: isPhotoFidelity, format: typeof briefData.format === 'string' ? briefData.format : '16:9', durationSeconds: Number(latest?.generation_seconds ?? generationCost?.seconds ?? 5), version: latest?.number ?? 1, versionStatus: latest?.status ?? null, errorMessage: latest?.error_message ?? null, pollError, canRetryTracking, reconciliationRequired, checkedQualityShots, totalQualityShots, shotProgress, processingStage: stage, stageElapsedSeconds: elapsedSeconds(stageStartedAt), processingDurations: processingDurations(metrics, latest?.status ?? status), processingMetrics: metrics, priceFcfa: generationCost?.priceFcfa ?? (typeof mockMetadata.priceFcfa === 'number' ? mockMetadata.priceFcfa : null), validationId: validationRows[0]?.id ?? null, validationStatus: validationRows[0]?.status ?? null, prompt: latest?.generated_prompt ?? null, videoUrl, previewUrl, previewSource, createdAt: video.created_at, department: video.department, userId: video.user_id };
+      return { id: latest?.id ?? video.id, videoId: video.id, title: video.title, status, workflow: briefData.multiClipMode === true ? 'multi_clip' : 'single', tier: generationTier, photoFidelity: isPhotoFidelity, format: typeof briefData.format === 'string' ? briefData.format : '16:9', durationSeconds: Number(latest?.generation_seconds ?? generationCost?.seconds ?? 5), version: latest?.number ?? 1, versionStatus: latest?.status ?? null, errorMessage: latest?.error_message ?? null, pollError, canRetryTracking, reconciliationRequired, checkedQualityShots, totalQualityShots, shotProgress, processingStage: stage, stageElapsedSeconds: elapsedSeconds(stageStartedAt), processingDurations: processingDurations(metrics, latest?.status ?? status), processingMetrics: metrics, priceFcfa: generationCost?.priceFcfa ?? (typeof mockMetadata.priceFcfa === 'number' ? mockMetadata.priceFcfa : null), validationId: validationRows[0]?.id ?? null, validationStatus: validationRows[0]?.status ?? null, ...(includePreviews ? { videoUrl, previewUrl, previewSource } : {}), createdAt: video.created_at, department: video.department, userId: video.user_id };
     }));
     return NextResponse.json({ versions: requestedStatus ? versions.filter((version) => version.status === requestedStatus) : versions });
   } catch (error) { return errorResponse(error); }
@@ -214,7 +223,7 @@ export async function DELETE(request: Request) {
     }
 
     const admin = createStorageAdminClient();
-    let query = admin.from('videos').select('id,user_id,status,video_versions(status,raw_path,final_path)').in('id', videoIds);
+    let query = admin.from('videos').select('id,user_id,status,video_versions(id,status,raw_path,final_path)').in('id', videoIds);
     if (actor.role === 'collaborateur') query = query.eq('user_id', actor.id);
     const { data: videos, error: queryError } = await query;
     if (queryError) throw queryError;
@@ -225,9 +234,15 @@ export async function DELETE(request: Request) {
       (Array.isArray(video.video_versions) && video.video_versions.some((version) => ['queued', 'generating', 'postprocessing'].includes(version.status))));
     if (isInProgress) throw new HttpError(409, 'Une vidéo est encore en cours de génération et ne peut pas être supprimée.');
 
-    const paths = [...new Set(videos.flatMap((video) => Array.isArray(video.video_versions)
-      ? video.video_versions.flatMap((version) => [version.raw_path, version.final_path].filter((path): path is string => Boolean(path)))
-      : []))];
+    const versionIds = videos.flatMap((video) => Array.isArray(video.video_versions) ? video.video_versions.map((version) => version.id) : []);
+    const { data: shots, error: shotsError } = versionIds.length
+      ? await admin.from('video_shots').select('raw_path,keyframe_path,video_quality_previous_path').in('version_id', versionIds)
+      : { data: [], error: null };
+    if (shotsError) throw new HttpError(503, 'Impossible de préparer le nettoyage des fichiers de plans. Aucune vidéo n’a été supprimée.');
+    const paths = collectVideoArtifactPaths(
+      videos.flatMap((video) => Array.isArray(video.video_versions) ? video.video_versions : []),
+      shots ?? [],
+    );
     if (paths.length) {
       const { error: storageError } = await admin.storage.from('videos').remove(paths);
       if (storageError) throw storageError;
