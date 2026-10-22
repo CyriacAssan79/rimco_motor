@@ -3,7 +3,7 @@ import { HttpError } from '@/core/auth/guards';
 import { buildBrief } from '@/core/brief';
 import { getStoryboardModeRoute } from '@/core/providers/storyboard-routing';
 import { wanReferenceVideoProvider, klingReferenceVideoProvider, seedanceReferenceVideoProvider, safeProviderError, type ReferenceVideoProvider } from '@/core/providers/fal-reference-video';
-import { buildEndKeyframePrompt, buildEndKeyframeQualityPrompt, buildKeyframeAnimationPrompt, buildKeyframePrompt, buildKeyframeQualityPrompt, buildVideoQualityPrompt, canAnimateKeyframes, needsEndKeyframe, resolveShotType, KEYFRAME_IMAGE_COST_USD, KEYFRAME_MAX_REFERENCES, KEYFRAME_QUALITY_RESERVE_USD, KEYFRAME_VIDEO_ENDPOINTS, KEYFRAME_IMAGE_ENDPOINT, KEYFRAME_VISION_ENDPOINT, keyframeVideoProviders, readKeyframe, readKeyframeQuality, selectKeyframeReferenceIds, shouldGenerateKeyframes, submitKeyframe, submitKeyframeQuality } from '@/core/providers/fal-keyframes';
+import { ANIMATION_PROMPT_MAX_LENGTH, buildEndKeyframePrompt, buildEndKeyframeQualityPrompt, buildKeyframeAnimationPrompt, buildKeyframePrompt, buildKeyframeQualityPrompt, buildVideoQualityPrompt, canAnimateKeyframes, needsEndKeyframe, resolveShotType, KEYFRAME_IMAGE_COST_USD, KEYFRAME_MAX_REFERENCES, KEYFRAME_QUALITY_RESERVE_USD, KEYFRAME_VIDEO_ENDPOINTS, KEYFRAME_IMAGE_ENDPOINT, KEYFRAME_VISION_ENDPOINT, keyframeVideoProviders, readKeyframe, readKeyframeQuality, selectKeyframeReferenceIds, shouldGenerateKeyframes, submitKeyframe, submitKeyframeQuality } from '@/core/providers/fal-keyframes';
 import { logFalStatusFailure } from '@/core/providers/fal-observability';
 import { klingVideoProvider, KLING_ENDPOINT } from '@/core/providers/fal-kling';
 import { createStorageAdminClient } from '@/core/storage/supabase';
@@ -867,7 +867,7 @@ async function refreshKeyframes(input: {
     const prompt = buildKeyframeAnimationPrompt({
       shot: draft, vehicle: String(brief.vehicle_description ?? 'Véhicule de référence'),
       durationS: Number(shot.duration_seconds), mood: String(brief.mood ?? ''), lighting: lightingForShot(brief, Number(shot.shot_number)),
-      excludePeople: people.excludePeople, castTitles: people.castTitles, castDescription: people.castDescription, hasEndFrame: Boolean(endImageUrl),
+      excludePeople: people.excludePeople, castTitles: people.castTitles, castDescription: people.castDescription, hasEndFrame: Boolean(endImageUrl), maxLength: ANIMATION_PROMPT_MAX_LENGTH[adapterFamily],
     });
     const job = await provider.submit({ prompt, referenceImageUrls: [signedUrl], ...(endImageUrl ? { endImageUrl } : {}), durationS: Number(shot.duration_seconds), aspectRatio: String(brief.format ?? '16:9'), endUserId: String(video.user_id) }, apiKey);
     const animationPatch = { provider_request_id: job.requestId, provider_endpoint: provider.endpoint, animation_submit_state: 'submitted', status: 'generating', generated_prompt: prompt, provider_poll_failure_count: 0, provider_next_poll_at: null, provider_last_poll_error: null, provider_reconciliation_required: false, updated_at: now };
@@ -1003,7 +1003,7 @@ export async function refreshLiveStoryboard(versionId: string, actor: Actor) {
       const retryPrompt = buildKeyframeAnimationPrompt({
         shot: draft, vehicle: String(briefData.vehicle_description ?? 'Véhicule de référence'), durationS: Number(shot.duration_seconds),
         mood: String(briefData.mood ?? ''), lighting: lightingForShot(briefData, Number(shot.shot_number)), excludePeople: retryPeople.excludePeople,
-        castTitles: retryPeople.castTitles, castDescription: retryPeople.castDescription, hasEndFrame: Boolean(retryEndImageUrl),
+        castTitles: retryPeople.castTitles, castDescription: retryPeople.castDescription, hasEndFrame: Boolean(retryEndImageUrl), maxLength: ANIMATION_PROMPT_MAX_LENGTH[adapterFamily],
         retryReason: quality.issues.join('; ') || quality.reason,
       });
       let retryJob: { requestId: string };
@@ -1127,7 +1127,8 @@ export async function refreshLiveStoryboard(versionId: string, actor: Actor) {
   const completedShots = latestShots.filter((shot) => shot.status === 'ready' && shot.raw_path).length;
   const reconciliationRequired = latestShots.some((shot) => shot.provider_reconciliation_required);
   if (reconciliationRequired) return { id: versionId, status: 'generating' as const, reconciliationRequired: true, error: 'Une tâche fal doit être réconciliée avec son identifiant fournisseur avant la clôture des coûts.', completedShots, totalShots: latestShots.length };
-  const pendingShots = latestShots.some((shot) => ['queued','generating','postprocessing'].includes(shot.status) || premiumQualityMode && ['queued','checking','retrying'].includes(shot.video_quality_status));
+  // A failed shot never waits for its clip check: its 'queued' quality status would keep the version generating forever.
+  const pendingShots = latestShots.some((shot) => ['queued','generating','postprocessing'].includes(shot.status) || premiumQualityMode && shot.status !== 'failed' && ['queued','checking','retrying'].includes(shot.video_quality_status));
   const shotProgress = latestShots.map((shot) => ({ number: shot.shot_number, title: shot.title, status: shot.status, qualityStatus: shot.video_quality_status }));
   const scheduledPolls = latestShots.map((shot) => shot.provider_next_poll_at ? Math.max(1, Math.ceil((new Date(shot.provider_next_poll_at).getTime() - Date.now()) / 1000)) : null).filter((seconds): seconds is number => seconds !== null);
   const nextPollInSeconds = scheduledPolls.length ? Math.min(...scheduledPolls) : 15;

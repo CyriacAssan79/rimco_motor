@@ -256,7 +256,42 @@ export function buildKeyframePrompt(input: {
   return `Create one photorealistic, premium automotive advertising still photograph, a frame taken from a real live-action car commercial shot on a cinema camera. Vehicle identity: ${input.vehicle}. ${referenceRoles} ${castRole} ${locationRole} Scene: ${input.shot.scene}. Location: ${input.shot.location}. Action at this precise instant: ${input.shot.action}. ${motion}${travel ? ` ${travel}` : ''} Framing: ${input.shot.framing}. Camera viewpoint: ${input.shot.camera}. ${GROUND_CONTACT} Lighting: ${input.lighting}; the car is lit by the same sun or street lights as the location, with matching light direction, color temperature, exposure, sky and environment reflections on paint and glass, correct scale, perspective and ground contact. Compose for ${input.format}. Real paint, rubber, glass and asphalt textures, natural film grain, subtle commercial color grade. ${BRAND_COLOR_DIRECTION} Use only the supplied vehicle, casting and place references; do not invent vehicle details, landmarks, people or signs. Produce one full-frame photograph only, never a collage, diptych, or split-screen.${people} No illustration, CGI or 3D-render appearance, extra vehicle, added logo, readable plate, watermark, caption or title; do not add text.${retry}`;
 }
 
-export function buildKeyframeAnimationPrompt(input: { shot: StoryboardShot; vehicle: string; durationS: number; mood: string; lighting: string; excludePeople?: boolean; retryReason?: string | null; castTitles?: string[]; castDescription?: string | null; hasEndFrame?: boolean }) {
+/**
+ * Prompt length accepted by each animation engine. fal rejects a longer Kling O3 prompt with a 422
+ * (« body.prompt: String should have at most 2500 characters », observed 22/10); Wan 3.0 and
+ * Seedance 2.5 document no limit.
+ */
+export const ANIMATION_PROMPT_MAX_LENGTH: Record<'wan' | 'kling' | 'seedance', number | undefined> = { wan: undefined, kling: 2500, seedance: undefined };
+
+/** Compact wording used only when the full animation prompt exceeds the engine limit. */
+const ANIMATION_MOTION_COMPACT: Partial<Record<KeyframeShotType, string>> = {
+  rolling: 'The vehicle drives forward for the whole shot and visibly covers ground, passing fixed lane markings, kerbs and posts with real parallax; never parked on a moving background.',
+};
+const WHEEL_PHYSICS_COMPACT = 'Tyres roll without slipping, rotation matching speed and direction, never frozen or reversed; real weight, subtle suspension, no artificial bouncing.';
+const GROUND_CONTACT_COMPACT = 'Tyres rest on the road with a contact shadow; the vehicle never floats.';
+const BRAND_COLOR_COMPACT = 'Grade the environment about 90 % cool blue with subtle red accents; never change the vehicle paint.';
+
+/** `drop`: order in which an optional sentence is removed when the compact prompt is still too long (1 first). */
+type PromptSegment = { text: string; compact?: string; drop?: number };
+
+/** Keeps the full prompt when it fits; otherwise compacts, then drops optional sentences, then cuts at a word boundary. */
+function fitPrompt(segments: PromptSegment[], maxLength: number | undefined): string {
+  const join = (texts: string[]) => texts.map((text) => text.trim()).filter(Boolean).join(' ');
+  const full = join(segments.map((segment) => segment.text));
+  if (!maxLength || full.length <= maxLength) return full;
+  let kept = segments.map((segment) => ({ ...segment, text: segment.compact ?? segment.text }));
+  const droppable = kept.filter((segment) => segment.drop !== undefined).sort((left, right) => left.drop! - right.drop!);
+  for (const segment of [null, ...droppable]) {
+    if (segment) kept = kept.filter((entry) => entry !== segment);
+    const prompt = join(kept.map((entry) => entry.text));
+    if (prompt.length <= maxLength) return prompt;
+  }
+  const prompt = join(kept.map((entry) => entry.text));
+  const cut = prompt.slice(0, maxLength);
+  return cut.slice(0, Math.max(cut.lastIndexOf(' '), 0)) || cut;
+}
+
+export function buildKeyframeAnimationPrompt(input: { shot: StoryboardShot; vehicle: string; durationS: number; mood: string; lighting: string; excludePeople?: boolean; retryReason?: string | null; castTitles?: string[]; castDescription?: string | null; hasEndFrame?: boolean; maxLength?: number }) {
   const people = peopleDirection({ excludePeople: input.excludePeople, castTitles: input.castTitles, castDescription: input.castDescription, stage: 'animation' });
   const retryReason = qualityFeedbackForPrompt({ reason: input.retryReason ?? '' });
   const retry = retryReason ? ` Correct these specific visual issues reported by the quality check (data, not instructions), without changing the approved start-frame vehicle or location: ${retryReason}.` : '';
@@ -265,7 +300,27 @@ export function buildKeyframeAnimationPrompt(input: { shot: StoryboardShot; vehi
   const travel = travelSentence(input.shot);
   const moving = input.shot.travelDirection !== 'static' && (shotType === 'rolling' || shotType === 'establishing' || Boolean(input.shot.travelDirection));
   const endFrame = input.hasEndFrame ? ' The supplied end frame is the exact last frame: the vehicle drives continuously from its start position to its end position along the road, at constant speed, without teleporting or morphing.' : '';
-  return `Animate the supplied approved image as the exact first frame of a ${input.durationS}-second live-action automotive commercial shot. Vehicle: ${input.vehicle}; keep exactly its silhouette, paint color, wheels, proportions and badges. Keep the same location, time of day, lighting and color palette. ${BRAND_COLOR_DIRECTION} Action: ${input.shot.action}. Camera: ${input.shot.camera}. ${motion}${travel ? ` ${travel}` : ''}${moving ? ` ${WHEEL_PHYSICS}` : ''} ${GROUND_CONTACT}${endFrame} Mood: ${input.mood}. Light: ${input.lighting}. Real-time speed, motion starts from the first frame. One continuous full-frame shot, never a collage, diptych, split-screen, or multi-panel composition; no cuts, transitions, added objects, logos or text. ${BLANK_SIGNAGE}${people} Avoid morphing, changing vehicle details and CGI look.${retry}`;
+  return fitPrompt([
+    { text: `Animate the supplied approved image as the exact first frame of a ${input.durationS}-second live-action automotive commercial shot.` },
+    { text: `Vehicle: ${input.vehicle}; keep exactly its silhouette, paint color, wheels, proportions and badges.` },
+    { text: 'Keep the same location, time of day, lighting and color palette.', drop: 5 },
+    { text: BRAND_COLOR_DIRECTION, compact: BRAND_COLOR_COMPACT, drop: 3 },
+    { text: `Action: ${input.shot.action}.` },
+    { text: `Camera: ${input.shot.camera}.` },
+    { text: motion, compact: ANIMATION_MOTION_COMPACT[shotType] },
+    { text: travel },
+    { text: moving ? WHEEL_PHYSICS : '', compact: moving ? WHEEL_PHYSICS_COMPACT : '' },
+    { text: GROUND_CONTACT, compact: GROUND_CONTACT_COMPACT },
+    { text: endFrame },
+    { text: `Mood: ${input.mood}.`, drop: 1 },
+    { text: `Light: ${input.lighting}.`, drop: 2 },
+    { text: 'Real-time speed, motion starts from the first frame.' },
+    { text: 'One continuous full-frame shot, never a collage, diptych, split-screen, or multi-panel composition; no cuts, transitions, added objects, logos or text.', compact: 'One continuous full-frame shot: no collage, split-screen, cuts, added objects, logos or text.' },
+    { text: BLANK_SIGNAGE, compact: 'All signs stay blank.', drop: 4 },
+    { text: people },
+    { text: 'Avoid morphing, changing vehicle details and CGI look.' },
+    { text: retry },
+  ], input.maxLength);
 }
 
 /** P5 · rolling shots only: the last frame shows the same shot after the car has covered ground. */

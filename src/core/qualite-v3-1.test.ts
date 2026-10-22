@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { buildKeyframeAnimationPrompt, buildKeyframePrompt, buildKeyframeQualityPrompt, buildVideoQualityPrompt, GROUND_CONTACT, NO_BODYWORK_CONTACT, parseKeyframeQuality, SAME_PLACE_CHECK, videoQualityTimestamps } from '@/core/providers/fal-keyframes';
+import { ANIMATION_PROMPT_MAX_LENGTH, buildKeyframeAnimationPrompt, buildKeyframePrompt, buildKeyframeQualityPrompt, buildVideoQualityPrompt, GROUND_CONTACT, NO_BODYWORK_CONTACT, parseKeyframeQuality, SAME_PLACE_CHECK, videoQualityTimestamps } from '@/core/providers/fal-keyframes';
 import { buildSingleShotStoryboardInstruction, type StoryboardShot } from '@/core/storyboard';
 import { collectQualityWarnings, qualityDecision, storedQualityWarnings, warningIssues } from '@/core/versions/quality-gate';
 
@@ -107,5 +107,38 @@ describe('Réglage QUALITY_GATE_MODE', () => {
     if (raw === undefined) delete process.env.QUALITY_GATE_MODE; else process.env.QUALITY_GATE_MODE = raw;
     const { env } = await import('@/env');
     expect(env.QUALITY_GATE_MODE).toBe(expected);
+  });
+});
+
+describe('Limite de longueur du prompt Kling (422 observé le 22/10)', () => {
+  const animation = (shot: StoryboardShot, extra: Partial<Parameters<typeof buildKeyframeAnimationPrompt>[0]> = {}) => buildKeyframeAnimationPrompt({
+    shot, vehicle: 'GWM TANK 300 Gris', durationS: 5, mood: 'Chaleureux, fiable et accessible', lighting: 'Lumière douce de fin de journée',
+    castDescription: 'One woman driver, early 30s, medium-brown skin, slim build, short natural black hair. She wears a cream linen shirt with rolled sleeves, olive chino trousers and clean white leather sneakers. Same look in every shot.',
+    ...extra,
+  });
+
+  it('ramène sous 2 500 caractères le plan roulant qui dépassait chez Kling', () => {
+    const full = animation(rolling);
+    expect(full.length).toBeGreaterThan(ANIMATION_PROMPT_MAX_LENGTH.kling!);
+    const fitted = animation(rolling, { maxLength: ANIMATION_PROMPT_MAX_LENGTH.kling });
+    expect(fitted.length).toBeLessThanOrEqual(2500);
+    expect(fitted).toContain('Action: a.');
+    expect(fitted).toContain('Tyres roll without slipping');
+    expect(fitted).toContain('Keep exactly the same people');
+    expect(fitted).toContain('Avoid morphing');
+  });
+
+  it('tient la limite dans le pire cas (champs au maximum, reprise et image de fin)', () => {
+    const long = (size: number) => 'word '.repeat(size / 5).trim();
+    const worst: StoryboardShot = { ...rolling, action: long(240), camera: long(240) };
+    const fitted = animation(worst, { castDescription: long(400), retryReason: long(300), hasEndFrame: true, mood: long(160), lighting: long(160), maxLength: 2500 });
+    expect(fitted.length).toBeLessThanOrEqual(2500);
+  });
+
+  it('laisse le prompt intact quand il tient ou quand le moteur n’a pas de limite', () => {
+    const full = animation(rolling);
+    expect(animation(rolling, { maxLength: ANIMATION_PROMPT_MAX_LENGTH.wan })).toBe(full);
+    expect(animation(rolling, { maxLength: ANIMATION_PROMPT_MAX_LENGTH.seedance })).toBe(full);
+    expect(animation(rolling, { maxLength: 10_000 })).toBe(full);
   });
 });
