@@ -3,7 +3,7 @@ import { HttpError } from '@/core/auth/guards';
 import { buildBrief } from '@/core/brief';
 import { getStoryboardModeRoute } from '@/core/providers/storyboard-routing';
 import { wanReferenceVideoProvider, klingReferenceVideoProvider, seedanceReferenceVideoProvider, safeProviderError, type ReferenceVideoProvider } from '@/core/providers/fal-reference-video';
-import { buildKeyframeAnimationPrompt, buildKeyframePrompt, buildKeyframeQualityPrompt, buildVideoQualityPrompt, canAnimateKeyframes, keyframeQualityAction, shouldExcludePeople, videoQualityAction, KEYFRAME_IMAGE_COST_USD, KEYFRAME_QUALITY_RESERVE_USD, KEYFRAME_VIDEO_ENDPOINTS, KEYFRAME_IMAGE_ENDPOINT, KEYFRAME_VISION_ENDPOINT, keyframeVideoProviders, readKeyframe, readKeyframeQuality, selectKeyframeReferenceIds, shouldGenerateKeyframes, submitKeyframe, submitKeyframeQuality } from '@/core/providers/fal-keyframes';
+import { buildKeyframeAnimationPrompt, buildKeyframePrompt, buildKeyframeQualityPrompt, buildVideoQualityPrompt, canAnimateKeyframes, keyframeQualityAction, shouldExcludePeople, videoQualityAction, KEYFRAME_IMAGE_COST_USD, KEYFRAME_MAX_REFERENCES, KEYFRAME_QUALITY_RESERVE_USD, KEYFRAME_VIDEO_ENDPOINTS, KEYFRAME_IMAGE_ENDPOINT, KEYFRAME_VISION_ENDPOINT, keyframeVideoProviders, readKeyframe, readKeyframeQuality, selectKeyframeReferenceIds, shouldGenerateKeyframes, submitKeyframe, submitKeyframeQuality } from '@/core/providers/fal-keyframes';
 import { logFalStatusFailure } from '@/core/providers/fal-observability';
 import { klingVideoProvider, KLING_ENDPOINT } from '@/core/providers/fal-kling';
 import { createStorageAdminClient } from '@/core/storage/supabase';
@@ -13,12 +13,13 @@ import { createSupabaseServerClient } from '@/core/supabase/server';
 import { env } from '@/env';
 import { estimateGridPriceFcfa } from '@/core/pricing';
 import { firstObservedAt, type ProcessingMetrics } from './processing-metrics';
-import { expandSingleShotStoryboard, finalVideoSeconds, isPremiumTenSecondAd, premiumTenSecondAdDurations, shotToPrompt, type ClipDurationSeconds, type StoryboardShot, validatePremiumTenSecondAdStoryboard, validatePremiumTwentySecondStoryboard, validateSingleShotStoryboard, validateStoryboard, validateTierDuration } from '@/core/storyboard';
+import { expandSingleShotStoryboard, vehicleDescriptionForPrompt, finalVideoSeconds, isPremiumTenSecondAd, premiumTenSecondAdDurations, shotToPrompt, type ClipDurationSeconds, type StoryboardShot, validatePremiumTenSecondAdStoryboard, validatePremiumTwentySecondStoryboard, validateSingleShotStoryboard, validateStoryboard, validateTierDuration } from '@/core/storyboard';
 import { assembleShotMontage, extractRepresentativeVideoFrames } from '@/core/postproduction/pipeline';
 import type { CreateVersionInput } from './live';
 import { animationSubmitStateAfterFailure, canSubmitAnimation } from './animation-submit-state';
 import { reserveGenerationCost, reserveKeyframeCost, settleUsageCost } from '@/core/billing/ledger';
-import { findCuratedLocation, locationCatalog } from '@/core/assets/location-catalog';
+import { checkVideoCostCap, nominalVideoCostUsd } from '@/core/billing/video-cap';
+import { findCuratedLocation, locationCatalog, placeTimeOfDay, resolveShotLighting } from '@/core/assets/location-catalog';
 import { createFalClient } from '@fal-ai/client';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -134,7 +135,10 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
   if (keyframeMode && (!videoModel.pricing_verified_at || Date.now() - new Date(videoModel.pricing_verified_at).getTime() > 7 * 24 * 60 * 60 * 1000)) throw new HttpError(503, `Le tarif du modèle vidéo ${route.label} doit être vérifié et daté avant tout lancement.`);
   if (!videoModel.allowed_formats?.includes(input.format)) throw new HttpError(422, `${route.label} ne prend pas en charge le format ${input.format}.`);
   if (generationShots.some((shot) => !videoModel.allowed_durations?.includes(shot.durationSeconds))) throw new HttpError(422, `La durée d’un clip n’est pas prise en charge par ${route.label}. Réduisez le nombre de plans ou choisissez une autre durée totale.`);
-  if (input.audioAssetId) throw new HttpError(422, 'Les vidéos multi-plans sont sans audio pour le moment.');
+  if (input.audioAssetId) {
+    const { data: audio, error: audioError } = await authenticated.from('assets').select('id,kind,status,brand_id').eq('id', input.audioAssetId).maybeSingle();
+    if (audioError || !audio || audio.kind !== 'audio' || audio.status !== 'validée' || audio.brand_id !== actor.brandId) throw new HttpError(422, 'Choisissez une piste audio validée de votre marque.');
+  }
 
   const curatedPlaces = input.placeIds.map(findCuratedLocation).filter((place) => place !== undefined);
   const curatedIds = new Set<string>(curatedPlaces.map((place) => place.id));
@@ -153,7 +157,7 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
     throw new HttpError(422, 'Le storyboard référence une photo ou un lieu qui n’est pas validé dans votre sélection.');
   }
 
-  const vehicleDescription = [dossier.make, dossier.model, dossier.variant, dossier.color].filter((value): value is string => typeof value === 'string' && value.trim().length > 0).join(' ');
+  const vehicleDescription = vehicleDescriptionForPrompt(dossier);
   const keyframeReferencesByShot = keyframeMode ? generationShots.map((shot, index) => {
     const referencePool = [
       ...selectedVehiclePhotos,
@@ -165,6 +169,7 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
         primaryVehiclePhotoId: shot.vehiclePhotoId,
         vehiclePhotos: referencePool.map((photo) => ({ id: photo.id, angle: photo.angle, photo_role: photo.photo_role })),
         locationPhotoId: shot.locationPhotoId,
+        maxReferences: KEYFRAME_MAX_REFERENCES,
       }),
     };
   }) : [];
@@ -190,6 +195,20 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
       angle: reference?.angle,
     });
   });
+  // Lighting per shot follows its place photo (a night place is never lit « comme le matin »).
+  const excludePeopleForBrief = shouldExcludePeople(String(brief.character ?? ''), String(brief.user_direction ?? ''));
+  const shotLighting = generationShots.map((shot) => {
+    const place = placeAssets.find((photo) => photo.id === shot.locationPhotoId);
+    return resolveShotLighting(String(brief.lighting ?? ''), place ? placeTimeOfDay({ title: place.title, path: place.path, category: findCuratedLocation(place.id)?.category }) : null);
+  });
+  // The keyframe prompt is the one actually sent first in keyframe mode: build it once, store it, display it and submit it.
+  const keyframePrompts = keyframeMode ? generationShots.map((shot, index) => {
+    const referenceIds = keyframeReferencesByShot[index]?.assetIds ?? [shot.vehiclePhotoId];
+    const hasLocationReference = Boolean(shot.locationPhotoId && placeAssets.some((photo) => photo.id === shot.locationPhotoId));
+    const vehicleReferenceCount = Math.max(1, referenceIds.filter((id) => id !== shot.locationPhotoId).length);
+    return buildKeyframePrompt({ shot, vehicle: vehicleDescription, lighting: shotLighting[index], format: input.format, retryReason: null, vehicleReferenceCount, hasLocationReference, excludePeople: excludePeopleForBrief });
+  }) : [];
+  const displayPrompts = keyframeMode ? keyframePrompts : prompts;
   const generatedSeconds = generationShots.reduce((sum, shot) => sum + shot.durationSeconds, 0);
   const maximumGeneratedSeconds = generatedSeconds * (premiumQualityMode ? 2 : 1);
   const { data: pricingSettings, error: pricingError } = await admin.from('pricing_settings')
@@ -199,6 +218,23 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
     standard: Number(pricingSettings.grid_fcfa_per_second_standard), premium: Number(pricingSettings.grid_fcfa_per_second_premium),
   });
 
+  // Garde-fou de coût nominal, vérifié avant toute écriture et tout appel payant.
+  const plannedStoryboardLedgerIds = input.storyboardLedgerIds ?? [];
+  const { data: plannedStoryboardCosts } = plannedStoryboardLedgerIds.length
+    ? await admin.from('usage_ledger').select('cost_usd').in('id', plannedStoryboardLedgerIds).eq('user_id', actor.id)
+    : { data: [] as Array<{ cost_usd: number }> };
+  const nominalCost = nominalVideoCostUsd({
+    generatedSeconds,
+    videoPriceUsdPerSecond: Number(videoModel.price_usd_per_second),
+    shotCount: generationShots.length,
+    keyframeImageCostUsd: keyframeMode ? KEYFRAME_IMAGE_COST_USD : 0,
+    keyframeQualityCostUsd: keyframeMode ? KEYFRAME_QUALITY_RESERVE_USD : 0,
+    videoQualityCostUsd: premiumQualityMode ? KEYFRAME_QUALITY_RESERVE_USD : 0,
+    storyboardCostUsd: (plannedStoryboardCosts ?? []).reduce((sum, row) => sum + Number(row.cost_usd ?? 0), 0),
+  });
+  const capCheck = env.VIDEO_COST_CAP_USD === undefined ? { ok: true as const } : checkVideoCostCap(nominalCost, env.VIDEO_COST_CAP_USD);
+  if (!capCheck.ok) throw new HttpError(422, capCheck.message);
+
   const falCredential = await getActiveFalCredential(admin);
   const { data: video, error: videoError } = await admin.from('videos').insert({
     user_id: actor.id, brand_id: actor.brandId,
@@ -206,9 +242,9 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
     department: actor.department, status: 'generating',
   }).select('id').single();
   if (videoError || !video) throw new HttpError(500, 'Impossible de créer la vidéo. Réessayez.');
-  const storedBrief = { ...brief, storyboard: generationShots, approvedStoryboard: input.storyboard, generationTier: input.storyMode, overlayLogo: input.overlayLogo, multiClipMode: !isSingleShot, singleStoryboardMode: isSingleShot, storyMode: input.storyMode, clipDurationSeconds: input.clipDurationSeconds, finalDurationSeconds: finalVideoSeconds(input.clipDurationSeconds), purpose: input.purpose, vehicleDossierId: input.vehicleDossierId, vehiclePhotoIds: selectedVehiclePhotos.map((photo) => photo.id), keyframeReferencesByShot, placeIds: input.placeIds, ...(premiumTenSecondAd ? { premiumAdCutMode: true, shotOutputDurations: premiumDurations!.editorial, videoRetryReserveSeconds: generatedSeconds } : {}), ...(premiumQualityMode ? { videoQualityMode: true } : {}), processingMetrics: { requestedAt: new Date().toISOString() }, shotProcessingMetrics: {}, ...(input.comparisonCampaignId ? { comparisonCampaignId: input.comparisonCampaignId } : {}) };
+  const storedBrief = { ...brief, storyboard: generationShots, approvedStoryboard: input.storyboard, generationTier: input.storyMode, overlayLogo: input.overlayLogo, audioAssetId: input.audioAssetId ?? null, multiClipMode: !isSingleShot, singleStoryboardMode: isSingleShot, storyMode: input.storyMode, clipDurationSeconds: input.clipDurationSeconds, finalDurationSeconds: finalVideoSeconds(input.clipDurationSeconds), purpose: input.purpose, vehicleDossierId: input.vehicleDossierId, vehiclePhotoIds: selectedVehiclePhotos.map((photo) => photo.id), keyframeReferencesByShot, placeIds: input.placeIds, ...(premiumTenSecondAd ? { premiumAdCutMode: true, shotOutputDurations: premiumDurations!.editorial, videoRetryReserveSeconds: generatedSeconds } : {}), ...(premiumQualityMode ? { videoQualityMode: true } : {}), costPlanUsd: { ...nominalCost, capUsd: env.VIDEO_COST_CAP_USD ?? null }, shotLighting, processingMetrics: { requestedAt: new Date().toISOString() }, shotProcessingMetrics: {}, ...(input.comparisonCampaignId ? { comparisonCampaignId: input.comparisonCampaignId } : {}) };
   const { data: version, error: versionError } = await admin.from('video_versions').insert({
-    video_id: video.id, number: 1, brief_json: storedBrief, generated_prompt: prompts.join('\n\n--- Plan suivant ---\n\n'),
+    video_id: video.id, number: 1, brief_json: storedBrief, generated_prompt: displayPrompts.join('\n\n--- Plan suivant ---\n\n'),
     ai_model_id: videoModel.id, fal_credential_id: falCredential.id, status: 'queued', generation_seconds: finalVideoSeconds(input.clipDurationSeconds),
   }).select('id,number').single();
   if (versionError || !version) {
@@ -248,7 +284,7 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
 
   const shotRows = generationShots.map((shot, index) => ({
     version_id: version.id, shot_number: index + 1, duration_seconds: shot.durationSeconds,
-    title: shot.title, generated_prompt: prompts[index], usage_ledger_id: ledgerId, status: 'queued', keyframe_status: keyframeMode ? 'queued' : 'skipped',
+    title: shot.title, generated_prompt: displayPrompts[index], usage_ledger_id: ledgerId, status: 'queued', keyframe_status: keyframeMode ? 'queued' : 'skipped',
     provider_endpoint: keyframeMode ? animationEndpoint : route.endpoint,
     price_usd_per_second: Number(videoModel.price_usd_per_second), estimated_cost_usd: shot.durationSeconds * Number(videoModel.price_usd_per_second) * (premiumQualityMode ? 2 : 1),
     video_quality_status: premiumQualityMode ? 'queued' : 'skipped', animation_submit_state: 'queued',
@@ -330,8 +366,8 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
       if (references.length !== referenceIds.length || references[0]?.id !== vehiclePhoto.id || place && references.at(-1)?.id !== place.id) throw new HttpError(422, 'L’ordre des références image-clé est invalide.');
       const imageUrls = await Promise.all(references.map((reference) => resolveFalAssetUrl(reference.path, admin, falStorage, uploads)));
       const vehicleReferenceCount = references.filter((reference) => reference.id !== place?.id).length;
-      const prompt = buildKeyframePrompt({ shot, vehicle: vehicleDescription, lighting: brief.lighting, format: input.format, retryReason: null, vehicleReferenceCount, hasLocationReference: Boolean(place), excludePeople: shouldExcludePeople(String(brief.character ?? ''), String(brief.user_direction ?? '')) });
-      return submitKeyframe({ prompt, imageUrls, aspectRatio: input.format }, falCredential.apiKey);
+      if (vehicleReferenceCount !== Math.max(1, referenceIds.filter((id) => id !== shot.locationPhotoId).length)) throw new HttpError(422, 'Les références image-clé ne correspondent pas au prompt préparé.');
+      return submitKeyframe({ prompt: keyframePrompts[index], imageUrls, aspectRatio: input.format }, falCredential.apiKey);
     }));
     let submittedKeyframes = 0;
     for (let index = 0; index < keyframeSubmissions.length; index += 1) {
@@ -369,7 +405,7 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
     }
     const keyframingStartedAt = new Date().toISOString();
     await admin.from('video_versions').update({ status: 'generating', brief_json: { ...storedBrief, keyframeMode: true, processingMetrics: { ...storedBrief.processingMetrics, keyframingStartedAt } }, updated_at: keyframingStartedAt }).eq('id', version.id);
-    return { id: version.id, status: 'generating' as const, prompt: prompts.join('\n\n--- Plan suivant ---\n\n'), estimatedPriceFcfa: priceFcfa, storyboardCostUsd, version: version.number, completedShots: 0, totalShots: generationShots.length, completedKeyframes: 0, totalKeyframes: generationShots.length, ...(premiumQualityMode ? { checkedQualityShots: 0, totalQualityShots: generationShots.length, shotProgress: generationShots.map((shot, index) => ({ number: index + 1, title: shot.title, status: 'queued', qualityStatus: 'queued' })) } : {}), processingStage: 'keyframing' as const };
+    return { id: version.id, status: 'generating' as const, prompt: displayPrompts.join('\n\n--- Plan suivant ---\n\n'), estimatedPriceFcfa: priceFcfa, storyboardCostUsd, version: version.number, completedShots: 0, totalShots: generationShots.length, completedKeyframes: 0, totalKeyframes: generationShots.length, ...(premiumQualityMode ? { checkedQualityShots: 0, totalQualityShots: generationShots.length, shotProgress: generationShots.map((shot, index) => ({ number: index + 1, title: shot.title, status: 'queued', qualityStatus: 'queued' })) } : {}), processingStage: 'keyframing' as const };
   }
 
   const falStorage = createFalClient({ credentials: falCredential.apiKey }).storage;
@@ -429,7 +465,7 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
   const submittedBrief = { ...storedBrief, processingMetrics: { ...storedBrief.processingMetrics, providerSubmittedAt } };
   await admin.from('video_versions').update({ status: 'generating', brief_json: submittedBrief, updated_at: providerSubmittedAt }).eq('id', version.id);
   const totalEstimatedPriceFcfa = priceFcfa;
-  return { id: version.id, status: 'generating' as const, prompt: prompts.join('\n\n--- Plan suivant ---\n\n'), estimatedPriceFcfa: totalEstimatedPriceFcfa, storyboardCostUsd, version: version.number, completedShots: 0, totalShots: generationShots.length };
+  return { id: version.id, status: 'generating' as const, prompt: displayPrompts.join('\n\n--- Plan suivant ---\n\n'), estimatedPriceFcfa: totalEstimatedPriceFcfa, storyboardCostUsd, version: version.number, completedShots: 0, totalShots: generationShots.length };
 }
 
 async function refreshKeyframes(input: {
@@ -606,7 +642,7 @@ async function refreshKeyframes(input: {
     }
     if (qualityAction === 'retry') {
       const vehicleDescription = String(brief.vehicle_description ?? 'Véhicule fidèle à la photo validée');
-      const prompt = buildKeyframePrompt({ shot: draft, vehicle: vehicleDescription, lighting: String(brief.lighting ?? ''), format: String(brief.format ?? '16:9'), retryReason: quality.issues.join('; ') || quality.reason, vehicleReferenceCount, hasLocationReference: Boolean(draft.locationPhotoId) });
+      const prompt = buildKeyframePrompt({ shot: draft, vehicle: vehicleDescription, lighting: lightingForShot(brief, shotNumber), format: String(brief.format ?? '16:9'), retryReason: quality.issues.join('; ') || quality.reason, vehicleReferenceCount, hasLocationReference: Boolean(draft.locationPhotoId), excludePeople: shouldExcludePeople(String(brief.character ?? ''), String(brief.user_direction ?? '')) });
       let retryRequestId: string | null = null;
       try {
         const retryJob = await submitKeyframe({ prompt, imageUrls: referenceUrls, aspectRatio: String(brief.format ?? '16:9') }, apiKey);
@@ -681,7 +717,7 @@ async function refreshKeyframes(input: {
     if (!signedUrl) throw new HttpError(503, 'Impossible de préparer une image-clé pour son animation.');
     const prompt = buildKeyframeAnimationPrompt({
       shot: draft, vehicle: String(brief.vehicle_description ?? 'Véhicule de référence'),
-      durationS: Number(shot.duration_seconds), mood: String(brief.mood ?? ''), lighting: String(brief.lighting ?? ''),
+      durationS: Number(shot.duration_seconds), mood: String(brief.mood ?? ''), lighting: lightingForShot(brief, Number(shot.shot_number)),
       excludePeople: shouldExcludePeople(String(brief.character ?? ''), String(brief.user_direction ?? '')),
     });
     const job = await provider.submit({ prompt, referenceImageUrls: [signedUrl], durationS: Number(shot.duration_seconds), aspectRatio: String(brief.format ?? '16:9'), endUserId: String(video.user_id) }, apiKey);
@@ -813,7 +849,7 @@ export async function refreshLiveStoryboard(versionId: string, actor: Actor) {
       if (!retryClaim) return;
       const retryPrompt = buildKeyframeAnimationPrompt({
         shot: draft, vehicle: String(briefData.vehicle_description ?? 'Véhicule de référence'), durationS: Number(shot.duration_seconds),
-        mood: String(briefData.mood ?? ''), lighting: String(briefData.lighting ?? ''), excludePeople: shouldExcludePeople(String(briefData.character ?? ''), String(briefData.user_direction ?? '')),
+        mood: String(briefData.mood ?? ''), lighting: lightingForShot(briefData, Number(shot.shot_number)), excludePeople: shouldExcludePeople(String(briefData.character ?? ''), String(briefData.user_direction ?? '')),
         retryReason: quality.issues.join('; ') || quality.reason,
       });
       let retryJob: { requestId: string };
@@ -1048,4 +1084,11 @@ async function readBoundedVideo(response: Response, maxBytes: number): Promise<B
     chunks.push(Buffer.from(value));
   }
   return Buffer.concat(chunks, total);
+}
+
+/** Per-shot lighting stored at creation; versions created before this field fall back to the brief lighting. */
+function lightingForShot(brief: Record<string, unknown>, shotNumber: number): string {
+  const list = Array.isArray(brief.shotLighting) ? brief.shotLighting as unknown[] : null;
+  const value = list?.[shotNumber - 1];
+  return typeof value === 'string' && value.trim() ? value : String(brief.lighting ?? '');
 }

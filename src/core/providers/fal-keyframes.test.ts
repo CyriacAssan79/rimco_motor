@@ -104,7 +104,7 @@ describe('fal keyframe helpers', () => {
     expect(still).toContain('never a collage, diptych, or split-screen');
     expect(motion).toContain('visually unoccupied');
     expect(motion).toContain('never a collage, diptych, split-screen');
-    expect(motion).toContain('Correct these specific quality issues');
+    expect(motion).toContain('Correct these specific visual issues reported by the quality check');
   });
 
   it('accepts only explicit valid JSON quality decisions', () => {

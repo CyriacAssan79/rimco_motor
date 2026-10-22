@@ -3,6 +3,8 @@ const schema = z.object({
   PROVIDERS_MODE: z.enum(['mock','live']).default('mock'),
   FAL_KEY: z.string().optional(), FAL_CREDENTIALS_ENCRYPTION_KEY: z.string().optional(), LLM_MODEL: z.string().optional(),
   LLM_MAX_COST_USD: z.coerce.number().positive().optional(),
+  // Optional per-video cap (AGENTS.md: no app-level block by default); an empty Vercel variable means "no cap" instead of breaking the app at boot.
+  VIDEO_COST_CAP_USD: z.preprocess((value) => (typeof value === 'string' && value.trim() === '' ? undefined : value), z.coerce.number().positive().optional()),
   NEXT_PUBLIC_SUPABASE_URL: z.string().url().optional(),
   NEXT_PUBLIC_SUPABASE_ANON_KEY: z.string().optional(), NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: z.string().optional(),
   SUPABASE_SERVICE_ROLE_KEY: z.string().optional(), SUPABASE_SECRET_KEY: z.string().optional(),

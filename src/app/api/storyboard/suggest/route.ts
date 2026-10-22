@@ -4,13 +4,13 @@ import { errorResponse, getActor, HttpError } from '@/core/auth/guards';
 import { createSupabaseServerClient } from '@/core/supabase/server';
 import { createStorageAdminClient } from '@/core/storage/supabase';
 import { env } from '@/env';
-import { buildSingleShotStoryboardInstruction, buildStoryboardInstruction, fitStoryboardDurations, isPremiumTenSecondAd, isTierDurationSupported, singleShotStoryboardSchema, storyboardSchema, validatePremiumTenSecondAdStoryboard, validatePremiumTwentySecondStoryboard, validateSingleShotStoryboard, validateStoryboard, type ClipDurationSeconds, type StoryboardShot } from '@/core/storyboard';
+import { buildDirectorUserPrompt, buildSingleShotStoryboardInstruction, vehicleDescriptionForPrompt, buildStoryboardInstruction, DIRECTOR_SYSTEM_PREFIX, fitStoryboardDurations, isPremiumTenSecondAd, isTierDurationSupported, singleShotStoryboardSchema, storyboardSchema, validatePremiumTenSecondAdStoryboard, validatePremiumTwentySecondStoryboard, validateSingleShotStoryboard, validateStoryboard, type ClipDurationSeconds, type StoryboardShot } from '@/core/storyboard';
 import { getStoryboardModeRoute } from '@/core/providers/storyboard-routing';
 import { buildFalLlmInput, createFalLlmProvider, FalLlmBriefError, llmReservationUsd } from '@/core/providers/fal-llm';
 import { createFalClient } from '@fal-ai/client';
 import { getActiveFalCredential } from '@/core/providers/fal-credential-vault';
 import { reserveLlmCost, settleUsageCost } from '@/core/billing/ledger';
-import { findCuratedLocation } from '@/core/assets/location-catalog';
+import { findCuratedLocation, placeTimeOfDay } from '@/core/assets/location-catalog';
 import { estimateGridPriceFcfa } from '@/core/pricing';
 import { storyboardDirectionSchema } from '@/core/storyboard-direction';
 
@@ -27,6 +27,7 @@ const requestSchema = z.object({
   format: z.enum(['16:9', '9:16', '1:1', '4:5']).default('16:9'),
   character: z.string().trim().max(160).default(''),
   lighting: z.string().trim().max(160).default(''),
+  mood: z.string().trim().max(160).default(''),
 });
 const singleShotStoryboardResponseSchema = z.object({ shots: singleShotStoryboardSchema }).strict();
 
@@ -89,16 +90,18 @@ export async function POST(request: Request) {
     const selectedPlaces = places.slice(0, Math.max(0, route.maxReferenceImages - 1));
     const instructionInput = {
       durationSeconds: input.durationSeconds,
-      vehicle: [dossier.make, dossier.model, dossier.variant, dossier.color].filter(Boolean).join(' '),
+      vehicle: vehicleDescriptionForPrompt(dossier),
       vehiclePhotos: selectedVehicle.map((photo) => ({ id: photo.id, role: photo.photo_role ?? 'exterior', title: photo.title ?? 'Photo véhicule', angle: photo.angle })),
-      places: selectedPlaces.map((place) => ({ id: place.id, title: place.title ?? 'Lieu', category: place.category })),
+      places: selectedPlaces.map((place) => ({ id: place.id, title: place.title ?? 'Lieu', category: place.category, timeOfDay: placeTimeOfDay(place) })),
       purpose: input.purpose, direction: input.direction, format: input.format,
-      character: input.character, lighting: input.lighting,
+      character: input.character, lighting: input.lighting, mood: input.mood,
     };
     const instruction = input.workflow === 'single'
       ? buildSingleShotStoryboardInstruction(instructionInput)
       : buildStoryboardInstruction({ ...instructionInput, durationSeconds: input.durationSeconds, mode: input.mode });
 
+    const directorSystemPrompt = `${DIRECTOR_SYSTEM_PREFIX} ${instruction}`;
+    const directorUserPrompt = buildDirectorUserPrompt(input.direction);
     let shots: StoryboardShot[];
     let storyboardLedgerId: string | null = null;
     let storyboardCostUsd = 0;
@@ -116,6 +119,7 @@ export async function POST(request: Request) {
       const premiumCreative = premiumTenSecondAd || premiumTwentySecond;
       const drafts = durations.map((durationSeconds, index) => ({
         title: premiumCreative ? premiumTitles[index] : index === 0 ? 'Révélation du véhicule' : 'Détail et signature',
+        shotType: premiumCreative ? (['establishing', 'rolling', 'detail', 'hero'] as const)[index] : index === 0 ? 'rolling' as const : 'hero' as const,
         scene: premiumCreative ? ['Vue large du lieu', 'Suivi extérieur du véhicule', 'Détail extérieur appuyé par les photos', 'Trois-quarts avant en plan héros'][index] : index === 0 ? 'Plan d’ensemble cinématographique' : 'Plan rapproché sur le véhicule',
         framing: premiumCreative ? ['Plan large', 'Plan moyen trois-quarts', 'Gros plan autorisé par la photo', 'Plan héros trois-quarts avant'][index] : 'Plan moyen',
         location: selectedPlaces[index % Math.max(1, selectedPlaces.length)]?.title ?? 'Abidjan, Côte d’Ivoire',
@@ -155,7 +159,8 @@ export async function POST(request: Request) {
                   ? (validatePremiumTwentySecondStoryboard(shots), shots)
                 : fitStoryboardDurations(shots, input.durationSeconds, route.adapterFamily),
             }));
-        const result = await provider.buildStoryboardWithCost(instruction, responseSchema, 'You are an expert automotive commercial director. Return only JSON matching the requested schema. Use French for all creative text.');
+        // Layer 1 (locked rules + approved references) goes in the system prompt; layer 2 (user brief) is the only user content.
+        const result = await provider.buildStoryboardWithCost(directorUserPrompt, responseSchema, directorSystemPrompt);
         shots = result.fields.shots;
         storyboardCostUsd = result.costUsd ?? (env.LLM_MAX_COST_USD ?? 0) * result.completedRequests;
         totalEstimatedPriceFcfa = estimateGridPriceFcfa(input.durationSeconds, input.mode, {
@@ -189,7 +194,7 @@ export async function POST(request: Request) {
     if (shots.some((shot) => !vehicleIds.has(shot.vehiclePhotoId) || (shot.locationPhotoId && !placeIds.has(shot.locationPhotoId)))) {
       throw new HttpError(422, 'Le storyboard référence une image non autorisée. Régénérez la proposition.');
     }
-    return NextResponse.json({ storyboard: shots, prompt: instruction, mode: input.mode, durationSeconds: input.durationSeconds, finalVideoSeconds: input.durationSeconds + 2, storyboardLedgerId, storyboardCostUsd, storyboardCostFcfa: Math.round(storyboardCostUsd * env.USD_TO_EUR_RATE * env.EUR_TO_FCFA * 1.3), totalEstimatedPriceFcfa });
+    return NextResponse.json({ storyboard: shots, prompt: `${directorSystemPrompt}\n\n${directorUserPrompt}`, mode: input.mode, durationSeconds: input.durationSeconds, finalVideoSeconds: input.durationSeconds + 2, storyboardLedgerId, storyboardCostUsd, storyboardCostFcfa: Math.round(storyboardCostUsd * env.USD_TO_EUR_RATE * env.EUR_TO_FCFA * 1.3), totalEstimatedPriceFcfa });
   } catch (error) {
     if (error instanceof HttpError) return errorResponse(error);
     if (error instanceof z.ZodError) {

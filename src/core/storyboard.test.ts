@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildBrief } from '@/core/brief';
-import { buildStoryboardInstruction, compactStoryboardText, expandSingleShotStoryboard, finalVideoSeconds, fitStoryboardDurations, getSingleShotClipDurations, isPremiumTenSecondAd, premiumTenSecondAdDurations, shotDraftSchema, shotToPrompt, storyboardSchema, validatePremiumTenSecondAdStoryboard, validatePremiumTwentySecondStoryboard, validateStoryboard, validateTierDuration } from './storyboard';
+import { buildDirectorUserPrompt, buildStoryboardInstruction, compactStoryboardText, expandSingleShotStoryboard, finalVideoSeconds, fitStoryboardDurations, getSingleShotClipDurations, isPremiumTenSecondAd, premiumTenSecondAdDurations, shotDraftSchema, shotToPrompt, storyboardSchema, validatePremiumTenSecondAdStoryboard, validatePremiumTwentySecondStoryboard, validateStoryboard, validateTierDuration } from './storyboard';
 
 const shots = [
   { title: 'Découverte', scene: 'Plan large', framing: 'Plan large', location: 'Plateau', action: 'Le véhicule avance lentement', camera: 'Travelling latéral', durationSeconds: 8, vehiclePhotoId: 'vehicle-front', locationPhotoId: 'place-plateau' },
@@ -61,7 +61,8 @@ describe('storyboard', () => {
 
     expect(instruction).toContain('10s of footage in 9:16');
     expect(instruction).toContain('9:16');
-    expect(instruction).toContain('Une famille traverse Abidjan au coucher du soleil.');
+    expect(instruction).not.toContain('Une famille traverse Abidjan au coucher du soleil.');
+    expect(buildDirectorUserPrompt('Une famille traverse Abidjan au coucher du soleil.')).toContain('<user_brief>Une famille traverse Abidjan au coucher du soleil.</user_brief>');
     expect(instruction).toContain('automotive commercial film director');
     expect(instruction).toContain('Une famille à bord du véhicule');
     expect(instruction).toContain('Fin de journée');
@@ -107,9 +108,9 @@ describe('storyboard', () => {
 
   it('keeps verbose model storyboard fields within the validated limits without cutting a word', () => {
     const text = `${'A precise cinematic scene with the vehicle advancing slowly. '.repeat(5)}`;
-    const compact = compactStoryboardText(text, 160);
+    const compact = compactStoryboardText(text, 240);
 
-    expect(compact.length).toBeLessThanOrEqual(160);
+    expect(compact.length).toBeLessThanOrEqual(240);
     expect(text.startsWith(compact)).toBe(true);
     expect(compact).toMatch(/[.!?]$/);
     expect(shotDraftSchema.parse({ ...shots[0], scene: text }).scene).toBe(compact);

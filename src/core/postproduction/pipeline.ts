@@ -137,17 +137,27 @@ export async function assembleShotMontage(versionId: string) {
   try { await access(ffmpegPath, constants.X_OK); }
   catch { throw new HttpError(503, 'FFmpeg n’est pas disponible sur ce déploiement.'); }
 
-  const clipBytes = await Promise.all(shots.map((shot, index) => downloadAsset(admin, 'videos', shot.raw_path, MAX_VIDEO_BYTES, `Le plan ${index + 1}`)));
+  const audioAssetId = typeof brief.audioAssetId === 'string' ? brief.audioAssetId : null;
+  const audio = audioAssetId && isStoryboard
+    ? (await admin.from('assets').select('path,kind,status').eq('id', audioAssetId).maybeSingle()).data
+    : null;
+  if (audioAssetId && isStoryboard && (!audio || audio.kind !== 'audio' || audio.status !== 'validée')) throw new HttpError(422, 'La piste audio sélectionnée n’est plus validée.');
+  const [clipBytes, audioBytes] = await Promise.all([
+    Promise.all(shots.map((shot, index) => downloadAsset(admin, 'videos', shot.raw_path, MAX_VIDEO_BYTES, `Le plan ${index + 1}`))),
+    audio ? downloadAsset(admin, 'audio', audio.path, MAX_AUDIO_BYTES, 'La piste audio') : Promise.resolve(null),
+  ]);
   clipBytes.forEach(validateMp4);
   const directory = await mkdtemp(join(tmpdir(), 'rimco-montage-'));
   const clipFiles = shots.map((shot) => join(directory, `shot-${shot.shot_number}.mp4`));
   const outputFile = join(directory, 'montage.mp4');
+  const audioFile = audioBytes && audio ? join(directory, audio.path.toLowerCase().endsWith('.wav') ? 'music.wav' : audio.path.toLowerCase().endsWith('.m4a') ? 'music.m4a' : 'music.mp3') : null;
   try {
-    await Promise.all(clipFiles.map((path, index) => writeFile(path, clipBytes[index])));
+    await Promise.all([...clipFiles.map((path, index) => writeFile(path, clipBytes[index])), ...(audioFile && audioBytes ? [writeFile(audioFile, audioBytes)] : [])]);
     const requestedCuts = Array.isArray(brief.shotOutputDurations) ? brief.shotOutputDurations : null;
     const cutDurations = requestedCuts?.length === shots.length ? requestedCuts.map(Number) : shots.map((shot) => Number(shot.duration_seconds));
+    const startOffsets = editorialStartOffsets(shots.map((shot) => Number(shot.duration_seconds)), cutDurations);
     const args = isStoryboard
-      ? makeMultiClipMontageArgs({ shotFiles: clipFiles, shotDurations: cutDurations, logoFile, outputFile, finalDurationSeconds: Number(brief.finalDurationSeconds), ...(typeof brief.clipDurationSeconds === 'number' ? { clipDurationSeconds: brief.clipDurationSeconds as 5 | 10 | 15 | 20 } : {}), singleStoryboardMode: brief.singleStoryboardMode === true, format: briefFormat })
+      ? makeMultiClipMontageArgs({ shotFiles: clipFiles, shotDurations: cutDurations, shotStartOffsets: startOffsets, audioFile, logoFile, outputFile, finalDurationSeconds: Number(brief.finalDurationSeconds), ...(typeof brief.clipDurationSeconds === 'number' ? { clipDurationSeconds: brief.clipDurationSeconds as 5 | 10 | 15 | 20 } : {}), singleStoryboardMode: brief.singleStoryboardMode === true, format: briefFormat })
       : makeShotMontageArgs({ shotFiles: clipFiles as [string, string], logoFile, outputFile, overlayLogo, durationSeconds: 6, format: briefFormat });
     await runFfmpeg(ffmpegPath, args);
     const outputStat = await stat(outputFile);
@@ -166,6 +176,17 @@ export async function assembleShotMontage(versionId: string) {
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+}
+
+/**
+ * When a clip is generated longer than its editorial cut, skip up to 0.4 s at its head:
+ * image-to-video clips often start almost still on the keyframe, which reads as a frozen frame at each cut.
+ */
+export function editorialStartOffsets(generatedSeconds: number[], cutSeconds: number[]): number[] {
+  return generatedSeconds.map((generated, index) => {
+    const spare = generated - (cutSeconds[index] ?? generated);
+    return Number.isFinite(spare) && spare > 0 ? Math.round(Math.min(0.4, spare) * 100) / 100 : 0;
+  });
 }
 
 async function removeCompletedIntermediates(admin: AdminClient, versionId: string, versionRawPath: string | null, shotRawPaths: string[]) {

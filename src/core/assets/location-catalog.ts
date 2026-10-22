@@ -22,3 +22,30 @@ export function findCuratedLocation(id: string): CuratedLocation | undefined {
 export function curatedLocationAsset(location: CuratedLocation) {
   return { id: location.id, kind: 'place' as const, title: location.title, category: location.category, path: location.path, status: 'validée' as const, previewUrl: location.path, isCurated: true as const };
 }
+
+export type PlaceTimeOfDay = 'day' | 'night' | 'interior';
+
+/**
+ * Time of day read from a place's title, category or file name (« nuit », « journée », « intérieur »).
+ * Returns null when nothing is stated: the brief's lighting then applies unchanged.
+ */
+export function placeTimeOfDay(place: { title?: string | null; category?: string | null; path?: string | null }): PlaceTimeOfDay | null {
+  const text = [place.title, place.category, place.path].filter(Boolean).join(' ').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  if (/\b(?:nuit|nocturne|night|soir|soiree)\b/.test(text)) return 'night';
+  if (/\b(?:interieur|interior|showroom)\b/.test(text)) return 'interior';
+  if (/\b(?:jour|journee|day|matin|midi)\b/.test(text)) return 'day';
+  return null;
+}
+
+/**
+ * Lighting sent to the image and video models for one shot: the place photo wins over the
+ * Studio lighting chip, so a night location is never described as « lumière du matin ».
+ */
+export function resolveShotLighting(briefLighting: string, timeOfDay: PlaceTimeOfDay | null): string {
+  const lighting = briefLighting.trim();
+  const saysNight = /\b(?:nuit|nocturne|night|soir|soiree|soirée)\b/i.test(lighting);
+  if (timeOfDay === 'night' && !saysNight) return 'Night, lit by the real street and city lights visible in the selected location photo';
+  if (timeOfDay === 'day' && saysNight) return 'Natural daylight, as in the selected location photo';
+  if (timeOfDay === 'interior') return lighting && /int[eé]rieur|interior|showroom/i.test(lighting) ? lighting : 'Soft, even interior light, as in the selected location photo';
+  return lighting || 'Natural light matching the selected location photo';
+}

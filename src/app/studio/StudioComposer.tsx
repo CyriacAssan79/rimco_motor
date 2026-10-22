@@ -12,7 +12,7 @@ type Job = { id: string; status: string; error?: string; prompt?: string; comple
 type Model = { id: string; tier: string; formats: Format[]; durations: number[]; estimatedPricesFcfa: Record<string, number>; isDefault: boolean };
 type VehicleDossier = { id: string | null; key: string; dossierIds?: string[]; make: string; model: string; color?: string | null; variant?: string | null; photos: Array<{ id: string; photoRole: string; title: string; angle?: string | null; previewUrl?: string | null }> };
 type PlaceAsset = { id: string; title?: string; category?: string; previewUrl?: string | null; isCurated?: boolean };
-type StoryShot = { title: string; scene: string; framing: string; location: string; action: string; camera: string; durationSeconds: number; vehiclePhotoId: string; locationPhotoId?: string | null };
+type StoryShot = { title: string; shotType?: 'establishing' | 'rolling' | 'detail' | 'hero'; scene: string; framing: string; location: string; action: string; camera: string; durationSeconds: number; vehiclePhotoId: string; locationPhotoId?: string | null };
 const durationOptions = [5, 10, 15, 20];
 const premiumDurationOptions = [20];
 const lightOptions = ['Lumière naturelle claire du matin'];
@@ -193,7 +193,7 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
       const workflow = durationS === 5 ? 'single' : 'multi_clip';
       const directorResponse = await fetch('/api/storyboard/suggest', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ workflow, vehicleDossierId: selectedDossier.id, vehicleDossierIds: selectedDossier.dossierIds ?? [selectedDossier.id], vehiclePhotoIds: selectedVehiclePhotoIds, placeIds: effectivePlaceIds, mode: tier, durationSeconds: durationS, purpose, direction: additionalDirection, character, lighting: selectedScene?.lighting ?? lightOptions[0], format }),
+        body: JSON.stringify({ workflow, vehicleDossierId: selectedDossier.id, vehicleDossierIds: selectedDossier.dossierIds ?? [selectedDossier.id], vehiclePhotoIds: selectedVehiclePhotoIds, placeIds: effectivePlaceIds, mode: tier, durationSeconds: durationS, purpose, direction: additionalDirection, character, lighting: selectedScene?.lighting ?? lightOptions[0], mood: selectedScene?.mood ?? '', format }),
       });
       const directorData = await directorResponse.json();
       if (!directorResponse.ok) throw new Error(directorData.error ?? 'Le réalisateur IA n’a pas pu préparer la vidéo. Aucune vidéo n’a été lancée.');

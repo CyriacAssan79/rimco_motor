@@ -27,6 +27,12 @@ type MultiClipMontageArgs = {
   singleStoryboardMode?: boolean;
   qualityCrf?: number;
   format?: VideoFormat;
+  /** Seconds skipped at the head of each generated clip (I2V clips often start almost still). */
+  shotStartOffsets?: number[];
+  /** Optional validated music bed, looped/trimmed to the final duration with fades. */
+  audioFile?: string | null;
+  /** Light common grade (contrast, saturation) to unify clips from different engines. */
+  grade?: boolean;
 };
 
 type PhotoFidelityShotArgs = {
@@ -45,6 +51,26 @@ const OUTPUT_DIMENSIONS: Record<VideoFormat, [number, number]> = {
   '1:1': [1080, 1080],
   '4:5': [864, 1080],
 };
+
+/** Storyboard montages are delivered in 1080p; generated clips are upscaled with lanczos. */
+const MONTAGE_DIMENSIONS: Record<VideoFormat, [number, number]> = {
+  '16:9': [1920, 1080],
+  '9:16': [1080, 1920],
+  '1:1': [1080, 1080],
+  '4:5': [1080, 1350],
+};
+
+/** Starting point to be calibrated with the DA: subtle, never a look that changes paint color. */
+// Film grain (noise=alls=3:allf=t) helps against the 'plastic' look but costs ~60 % more encode time:
+// enable it once the montage runs in a worker instead of a 60 s serverless function.
+/** Storyboard montages are delivered at a single cinema cadence. */
+export const MONTAGE_FPS = 24;
+/** Encoding quality of the 1080p montage: CRF 20 keeps the file and the Supabase egress close to the 720p version. */
+export const MONTAGE_CRF = 20;
+/** The bitmap logo is never enlarged more than this: beyond it, the brand mark turns soft. Provide an HD logo to reach the target size. */
+export const MAX_LOGO_UPSCALE = 1.5;
+
+export const MONTAGE_GRADE_FILTER = 'eq=contrast=1.04:saturation=1.05:gamma=0.99';
 
 export function normalizeVideoFormat(value: unknown): VideoFormat {
   return value === '9:16' || value === '1:1' || value === '4:5' ? value : '16:9';
@@ -121,18 +147,36 @@ export function makeMultiClipMontageArgs(input: MultiClipMontageArgs) {
   if (!hasNewDurationContract && ![5, 10, 15, 20, 30].includes(input.finalDurationSeconds)) throw new Error('La durée enregistrée n’est pas prise en charge.');
   const footageSeconds = input.clipDurationSeconds ?? input.finalDurationSeconds - 2;
   if ((input.singleStoryboardMode ? clipSeconds < footageSeconds : clipSeconds !== footageSeconds) || input.shotDurations.some((seconds) => !Number.isFinite(seconds) || seconds <= 0)) throw new Error('Les plans doivent laisser exactement deux secondes au logo final.');
+  const offsets = input.shotStartOffsets ?? [];
+  if (offsets.length && (offsets.length !== input.shotFiles.length || offsets.some((offset) => !Number.isFinite(offset) || offset < 0 || offset > 2))) throw new Error('Les décalages de début de plan sont invalides.');
   const format = normalizeVideoFormat(input.format);
-  const [width, height] = OUTPUT_DIMENSIONS[format];
+  const [width, height] = MONTAGE_DIMENSIONS[format];
+  const grade = input.grade !== false;
   const args = ['-hide_banner', '-loglevel', 'error', '-y'];
   input.shotFiles.forEach((file) => args.push('-i', file));
   args.push('-loop', '1', '-i', input.logoFile);
-  const filters = input.shotFiles.map((_, index) => `[${index}:v:0]setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop_duration=${input.shotDurations[index]},trim=duration=${input.shotDurations[index]},scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},setsar=1[v${index}]`);
+  const audioIndex = input.shotFiles.length + 1;
+  if (input.audioFile) args.push('-stream_loop', '-1', '-i', input.audioFile);
+  const filters = input.shotFiles.map((_, index) => {
+    const offset = offsets[index] ?? 0;
+    const head = offset > 0 ? `trim=start=${offset},` : '';
+    return `[${index}:v:0]${head}setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop_duration=${input.shotDurations[index]},trim=duration=${input.shotDurations[index]},scale=${width}:${height}:force_original_aspect_ratio=increase:flags=lanczos,crop=${width}:${height},setsar=1,fps=${MONTAGE_FPS}[v${index}]`;
+  });
   filters.push(`${input.shotFiles.map((_, index) => `[v${index}]`).join('')}concat=n=${input.shotFiles.length}:v=1:a=0[footage_all]`);
-  filters.push(`[footage_all]trim=duration=${footageSeconds},setpts=PTS-STARTPTS[footage]`);
-  filters.push(`color=c=white:s=${width}x${height}:r=30:d=2[card];[${input.shotFiles.length}:v:0]format=rgba,scale=w='iw*(0.9+0.1*min(t/0.6,1))':h=-1:eval=frame[logo];[card][logo]overlay=(W-w)/2:(H-h)/2:format=auto,fade=t=in:st=0:d=0.45,fade=t=out:st=1.55:d=0.45[brand]`);
+  filters.push(`[footage_all]trim=duration=${footageSeconds},setpts=PTS-STARTPTS${grade ? `,${MONTAGE_GRADE_FILTER}` : ''}[footage]`);
+  // End card: logo aimed at ~32 % of the frame width, capped at 1.5x its native size so it never turns soft.
+  const logoWidth = Math.round(Math.min(width, height * 1.6) * 0.32);
+  filters.push(`color=c=white:s=${width}x${height}:r=${MONTAGE_FPS}:d=2[card];[${input.shotFiles.length}:v:0]format=rgba,scale=w='min(${logoWidth},iw*${MAX_LOGO_UPSCALE})*(0.94+0.06*min(t/0.6,1))':h=-1:eval=frame:flags=lanczos[logo];[card][logo]overlay=(W-w)/2:(H-h)/2:format=auto,fade=t=in:st=0:d=0.45,fade=t=out:st=1.55:d=0.45,fps=${MONTAGE_FPS}[brand]`);
   filters.push('[footage][brand]concat=n=2:v=1:a=0[vout]');
-  const qualityCrf = Number.isInteger(input.qualityCrf) && input.qualityCrf! >= 0 && input.qualityCrf! <= 51 ? input.qualityCrf! : 20;
-  args.push('-filter_complex', filters.join(';'), '-map', '[vout]', '-an', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', String(qualityCrf), '-pix_fmt', 'yuv420p', '-movflags', '+faststart', '-t', String(input.finalDurationSeconds), input.outputFile);
+  if (input.audioFile) {
+    const fadeOutStart = Math.max(0, input.finalDurationSeconds - 1.5);
+    filters.push(`[${audioIndex}:a:0]atrim=duration=${input.finalDurationSeconds},asetpts=PTS-STARTPTS,afade=t=in:st=0:d=0.3,afade=t=out:st=${fadeOutStart}:d=1.5[aout]`);
+  }
+  const qualityCrf = Number.isInteger(input.qualityCrf) && input.qualityCrf! >= 0 && input.qualityCrf! <= 51 ? input.qualityCrf! : MONTAGE_CRF;
+  args.push('-filter_complex', filters.join(';'), '-map', '[vout]');
+  if (input.audioFile) args.push('-map', '[aout]', '-c:a', 'aac', '-b:a', '192k');
+  else args.push('-an');
+  args.push('-c:v', 'libx264', '-preset', 'veryfast', '-crf', String(qualityCrf), '-pix_fmt', 'yuv420p', '-r', String(MONTAGE_FPS), '-movflags', '+faststart', '-t', String(input.finalDurationSeconds), input.outputFile);
   return args;
 }
 
