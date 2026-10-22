@@ -75,8 +75,8 @@ describe('P3 · mouvement naturel', () => {
   });
 
   it('contrôle que la voiture avance dans les plans roulants', () => {
-    expect(buildVideoQualityPrompt({ vehicleReferenceCount: 1, hasLocationReference: false, excludePeople: true, shotType: 'rolling' })).toContain('treadmill');
-    expect(buildVideoQualityPrompt({ vehicleReferenceCount: 1, hasLocationReference: false, excludePeople: true, shotType: 'detail' })).not.toContain('treadmill');
+    expect(buildVideoQualityPrompt({ vehicleReferenceCount: 1, hasLocationReference: false, excludePeople: true, shotType: 'rolling' })).toContain('while only the background slides');
+    expect(buildVideoQualityPrompt({ vehicleReferenceCount: 1, hasLocationReference: false, excludePeople: true, shotType: 'detail' })).not.toContain('while only the background slides');
   });
 });
 
@@ -87,8 +87,9 @@ describe('P6 · aucun texte dans les décors', () => {
     expect(buildKeyframeAnimationPrompt({ shot: rolling, vehicle: 'Haval H6', durationS: 5, mood: 'm', lighting: 'l' })).toContain(BLANK_SIGNAGE);
   });
 
-  it('fait refuser par les juges tout texte lisible, y compris recopié du lieu', () => {
+  it('fait signaler par les juges tout texte lisible, y compris recopié du lieu', () => {
     expect(NO_READABLE_TEXT_CHECK).toContain('copied from the location reference');
+    expect(NO_READABLE_TEXT_CHECK).toContain('Never set "approved" to false because of text alone');
     expect(buildKeyframeQualityPrompt({ vehicleReferenceCount: 1, hasLocationReference: true })).toContain(NO_READABLE_TEXT_CHECK);
     expect(buildVideoQualityPrompt({ vehicleReferenceCount: 1, hasLocationReference: true, excludePeople: false })).toContain(NO_READABLE_TEXT_CHECK);
   });

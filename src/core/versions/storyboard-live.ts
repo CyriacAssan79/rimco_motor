@@ -3,7 +3,7 @@ import { HttpError } from '@/core/auth/guards';
 import { buildBrief } from '@/core/brief';
 import { getStoryboardModeRoute } from '@/core/providers/storyboard-routing';
 import { wanReferenceVideoProvider, klingReferenceVideoProvider, seedanceReferenceVideoProvider, safeProviderError, type ReferenceVideoProvider } from '@/core/providers/fal-reference-video';
-import { buildEndKeyframePrompt, buildEndKeyframeQualityPrompt, buildKeyframeAnimationPrompt, buildKeyframePrompt, buildKeyframeQualityPrompt, buildVideoQualityPrompt, canAnimateKeyframes, needsEndKeyframe, resolveShotType, keyframeQualityAction, videoQualityAction, KEYFRAME_IMAGE_COST_USD, KEYFRAME_MAX_REFERENCES, KEYFRAME_QUALITY_RESERVE_USD, KEYFRAME_VIDEO_ENDPOINTS, KEYFRAME_IMAGE_ENDPOINT, KEYFRAME_VISION_ENDPOINT, keyframeVideoProviders, readKeyframe, readKeyframeQuality, selectKeyframeReferenceIds, shouldGenerateKeyframes, submitKeyframe, submitKeyframeQuality } from '@/core/providers/fal-keyframes';
+import { buildEndKeyframePrompt, buildEndKeyframeQualityPrompt, buildKeyframeAnimationPrompt, buildKeyframePrompt, buildKeyframeQualityPrompt, buildVideoQualityPrompt, canAnimateKeyframes, needsEndKeyframe, resolveShotType, KEYFRAME_IMAGE_COST_USD, KEYFRAME_MAX_REFERENCES, KEYFRAME_QUALITY_RESERVE_USD, KEYFRAME_VIDEO_ENDPOINTS, KEYFRAME_IMAGE_ENDPOINT, KEYFRAME_VISION_ENDPOINT, keyframeVideoProviders, readKeyframe, readKeyframeQuality, selectKeyframeReferenceIds, shouldGenerateKeyframes, submitKeyframe, submitKeyframeQuality } from '@/core/providers/fal-keyframes';
 import { logFalStatusFailure } from '@/core/providers/fal-observability';
 import { klingVideoProvider, KLING_ENDPOINT } from '@/core/providers/fal-kling';
 import { createStorageAdminClient } from '@/core/storage/supabase';
@@ -17,6 +17,7 @@ import { expandSingleShotStoryboard, validateStoryboardCast, vehicleDescriptionF
 import { assembleShotMontage, extractRepresentativeVideoFrames } from '@/core/postproduction/pipeline';
 import { MAX_MONTAGE_ATTEMPTS, montageFailureDecision } from '@/core/postproduction/montage-failure';
 import { peopleForShot, storedCast, withCastReferences, type StoredCastMember } from './casting';
+import { collectQualityWarnings, qualityDecision, warningIssues, type QualityWarning } from './quality-gate';
 import type { CreateVersionInput } from './live';
 import { animationSubmitStateAfterFailure, canSubmitAnimation } from './animation-submit-state';
 import { reserveGenerationCost, reserveKeyframeCost, settleUsageCost } from '@/core/billing/ledger';
@@ -101,7 +102,8 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
   const isSingleShot = input.workflow === 'single';
   const premiumTenSecondAd = input.workflow === 'multi_clip' && isPremiumTenSecondAd(input.storyMode, input.purpose, input.clipDurationSeconds);
   const premiumTwentySecond = input.workflow === 'multi_clip' && input.storyMode === 'premium' && input.clipDurationSeconds === 20;
-  const premiumQualityMode = input.storyMode === 'premium' && input.workflow !== 'single';
+  // Patch v3.1 (D): the clip quality gate runs on every tier, not only Premium (variable name kept for a small diff).
+  const premiumQualityMode = keyframeMode;
   validateTierDuration(input.storyMode, input.clipDurationSeconds);
   if (isSingleShot) validateSingleShotStoryboard(input.storyboard, input.clipDurationSeconds, route.adapterFamily);
   else if (premiumTenSecondAd) validatePremiumTenSecondAdStoryboard(input.storyboard);
@@ -770,20 +772,21 @@ async function refreshKeyframes(input: {
     const quality = state.quality;
     const qualityCostUsd = state.costUsd ?? KEYFRAME_QUALITY_RESERVE_USD;
     await settleUsageCost(admin, { entryId: qualityLedgerId, outcome: 'charged', actualCostUsd: qualityCostUsd, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA, billable: false });
-    const qualityAction = keyframeQualityAction(quality.approved, attempt);
-    if (qualityAction === 'accept') {
+    const qualityAction = qualityDecision(quality, attempt, { stage: 'keyframe', mode: env.QUALITY_GATE_MODE });
+    if (qualityAction === 'accept' || qualityAction === 'accept_with_warning') {
+      const storedQuality = qualityAction === 'accept_with_warning' ? { ...quality, warning: true, warningIssues: warningIssues(quality) } : quality;
       if (attempt === 0) {
         await Promise.all([
           settleUsageCost(admin, { entryId: imageLedgerIds[1], outcome: 'released', actualCostUsd: 0, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA, billable: false }),
           settleUsageCost(admin, { entryId: qualityLedgerIds[1], outcome: 'released', actualCostUsd: 0, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA, billable: false }),
         ]);
       }
-      await admin.from('video_shots').update({ keyframe_status: 'ready', keyframe_quality: quality, provider_poll_failure_count: 0, provider_next_poll_at: null, provider_last_poll_error: null, error_message: null, updated_at: now }).eq('version_id', version.id).eq('shot_number', shotNumber);
+      await admin.from('video_shots').update({ keyframe_status: 'ready', keyframe_quality: storedQuality, provider_poll_failure_count: 0, provider_next_poll_at: null, provider_last_poll_error: null, error_message: null, updated_at: now }).eq('version_id', version.id).eq('shot_number', shotNumber);
       return;
     }
     if (qualityAction === 'retry') {
       const vehicleDescription = String(brief.vehicle_description ?? 'Véhicule fidèle à la photo validée');
-      const prompt = buildKeyframePrompt({ shot: draft, vehicle: vehicleDescription, lighting: lightingForShot(brief, shotNumber), format: String(brief.format ?? '16:9'), retryReason: quality.issues.join('; ') || quality.reason, vehicleReferenceCount, hasLocationReference: Boolean(draft.locationPhotoId), excludePeople: people.excludePeople, castTitles: people.castTitles, castDescription: people.castDescription });
+      const prompt = buildKeyframePrompt({ shot: draft, vehicle: vehicleDescription, lighting: lightingForShot(brief, shotNumber), format: String(brief.format ?? '16:9'), retryReason: [...quality.issues, ...(quality.readableText ? ['make every sign, billboard, poster and storefront blank, without readable letters'] : [])].join('; ') || quality.reason, vehicleReferenceCount, hasLocationReference: Boolean(draft.locationPhotoId), excludePeople: people.excludePeople, castTitles: people.castTitles, castDescription: people.castDescription });
       let retryRequestId: string | null = null;
       try {
         const retryJob = await submitKeyframe({ prompt, imageUrls: referenceUrls, aspectRatio: String(brief.format ?? '16:9') }, apiKey);
@@ -828,7 +831,7 @@ async function refreshKeyframes(input: {
   // A rolling shot waits for its optional end frame (ready or failed) before animation; failure only drops the end frame.
   const pendingKeyframes = refreshedShots.some((shot) => ['queued','generating','checking'].includes(shot.keyframe_status)
     || shot.keyframe_status === 'ready' && ['queued','generating','checking'].includes(String(shot.end_keyframe_status ?? 'skipped')));
-  if (pendingKeyframes) return { id: version.id, status: 'generating' as const, processingStage: 'keyframing' as const, completedKeyframes, totalKeyframes: refreshedShots.length, keyframes: keyframePreviews, completedShots: 0, totalShots: refreshedShots.length };
+  if (pendingKeyframes) return { id: version.id, status: 'generating' as const, processingStage: 'keyframing' as const, qualityWarnings: collectQualityWarnings(refreshedShots), completedKeyframes, totalKeyframes: refreshedShots.length, keyframes: keyframePreviews, completedShots: 0, totalShots: refreshedShots.length };
   if (completedKeyframes !== refreshedShots.length) {
     const { data: generationLedger } = await admin.from('usage_ledger').select('id').eq('version_id', version.id).eq('kind', 'generation').eq('ai_model_id', version.ai_model_id).eq('status', 'reserved').maybeSingle();
     if (generationLedger?.id) await settleUsageCost(admin, { entryId: generationLedger.id, outcome: 'released', actualCostUsd: 0, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA });
@@ -843,7 +846,7 @@ async function refreshKeyframes(input: {
       admin.from('video_versions').update({ status: 'failed', error_message: error, updated_at: now }).eq('id', version.id),
       admin.from('videos').update({ status: 'failed', updated_at: now }).eq('id', version.video_id),
     ]);
-    return { id: version.id, status: 'failed' as const, error, completedKeyframes, totalKeyframes: refreshedShots.length, keyframes: keyframePreviews };
+    return { id: version.id, status: 'failed' as const, error, qualityWarnings: collectQualityWarnings(refreshedShots), completedKeyframes, totalKeyframes: refreshedShots.length, keyframes: keyframePreviews };
   }
   if (canAnimateKeyframes(refreshedShots.map((shot) => shot.keyframe_status)) && refreshedShots.some((shot) => typeof shot.provider_request_id === 'string')) return null;
   const animationTargets = refreshedShots.filter((shot) => canSubmitAnimation(shot.animation_submit_state, shot.provider_request_id));
@@ -891,7 +894,7 @@ async function refreshKeyframes(input: {
   const keyframeCompletedAt = new Date().toISOString();
   const updatedBrief = { ...brief, processingMetrics: { ...metrics, keyframingCompletedAt: keyframeCompletedAt, providerSubmittedAt: keyframeCompletedAt } };
   await admin.from('video_versions').update({ brief_json: updatedBrief, updated_at: keyframeCompletedAt }).eq('id', version.id);
-  return { id: version.id, status: 'generating' as const, processingStage: 'generating' as const, completedKeyframes, totalKeyframes: refreshedShots.length, keyframes: keyframePreviews, completedShots: 0, totalShots: refreshedShots.length };
+  return { id: version.id, status: 'generating' as const, processingStage: 'generating' as const, qualityWarnings: collectQualityWarnings(refreshedShots), completedKeyframes, totalKeyframes: refreshedShots.length, keyframes: keyframePreviews, completedShots: 0, totalShots: refreshedShots.length };
 }
 
 export async function refreshLiveStoryboard(versionId: string, actor: Actor) {
@@ -902,7 +905,7 @@ export async function refreshLiveStoryboard(versionId: string, actor: Actor) {
   if (error || !version) throw new HttpError(404, 'Cette version est introuvable.');
   const video = Array.isArray(version.video) ? version.video[0] : version.video;
   if (!video || video.user_id !== actor.id && actor.role !== 'admin') throw new HttpError(404, 'Cette version est introuvable.');
-  if (version.status === 'ready' && version.final_path) return { id: versionId, status: 'ready' as const, videoUrl: await signedUrl(admin, version.final_path) };
+  if (version.status === 'ready' && version.final_path) return { id: versionId, status: 'ready' as const, qualityWarnings: storedQualityWarnings(version.brief_json), videoUrl: await signedUrl(admin, version.final_path) };
   if (version.status === 'cancelled') return { id: versionId, status: 'cancelled' as const, error: 'La génération a été annulée.' };
   if (version.status === 'failed') { await pruneRetiredFalCredentials(admin); return { id: versionId, status: 'failed' as const, error: version.error_message ?? 'Un plan n’a pas pu être généré.' }; }
   if (version.status === 'postprocessing' && actor.id !== 'cron-reconcile' && Date.now() - new Date(version.updated_at).getTime() < 60_000) {
@@ -975,11 +978,13 @@ export async function refreshLiveStoryboard(versionId: string, actor: Actor) {
         return;
       }
       const quality = qualityState.quality;
-      const videoQualityDecision = videoQualityAction(quality.approved, attempt);
+      const videoQualityDecision = qualityDecision(quality, attempt, { stage: 'video', mode: env.QUALITY_GATE_MODE });
       if (ledgerId) await settleQualityLedger(admin, ledgerId, qualityState.costUsd ?? KEYFRAME_QUALITY_RESERVE_USD);
-      if (videoQualityDecision === 'accept') {
+      if (videoQualityDecision === 'accept' || videoQualityDecision === 'accept_with_warning') {
         if (attempt === 0 && qualityLedgerIds[1]) await settleUsageCost(admin, { entryId: qualityLedgerIds[1], outcome: 'released', actualCostUsd: 0, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA, billable: false });
-        await admin.from('video_shots').update({ status: 'ready', video_quality_status: 'passed', video_quality: quality, provider_poll_failure_count: 0, provider_next_poll_at: null, provider_last_poll_error: null, provider_reconciliation_required: false, error_message: null, updated_at: new Date().toISOString() }).eq('version_id', versionId).eq('shot_number', shotNumber);
+        // 'passed' + warning flag in the jsonb: no new status value, hence no migration.
+        const storedVideoQuality = videoQualityDecision === 'accept_with_warning' ? { ...quality, warning: true, warningIssues: warningIssues(quality) } : quality;
+        await admin.from('video_shots').update({ status: 'ready', video_quality_status: 'passed', video_quality: storedVideoQuality, provider_poll_failure_count: 0, provider_next_poll_at: null, provider_last_poll_error: null, provider_reconciliation_required: false, error_message: null, updated_at: new Date().toISOString() }).eq('version_id', versionId).eq('shot_number', shotNumber);
         return;
       }
       if (videoQualityDecision === 'reject') {
@@ -1069,13 +1074,13 @@ export async function refreshLiveStoryboard(versionId: string, actor: Actor) {
       const curatedPlace = placeId ? findCuratedLocation(placeId) : undefined;
       const placeAsset = placeId && !curatedPlace ? (await admin.from('assets').select('id,path,kind,status,brand_id').eq('id', placeId).eq('kind', 'place').eq('status', 'validée').eq('brand_id', video.brand_id).maybeSingle()).data : null;
       if (!draft || refError || (refAssets ?? []).length !== vehicleIds.length || placeId && !curatedPlace && !placeAsset) throw new HttpError(422, `Les références du plan ${shotNumber} ne sont plus accessibles pour son contrôle qualité.`);
-      const frameBytes = await extractRepresentativeVideoFrames(bytes);
+      const frameBytes = await extractRepresentativeVideoFrames(bytes, Number(shot.duration_seconds));
       const falStorage = createFalClient({ credentials: falCredential.apiKey }).storage;
       const frameUrls = await Promise.all(frameBytes.map((frame) => falStorage.upload(new Blob([frame.buffer.slice(frame.byteOffset, frame.byteOffset + frame.byteLength) as ArrayBuffer], { type: 'image/jpeg' }), { lifecycle: { expiresIn: '1d' } })));
       const assets = new Map((refAssets ?? []).map((asset) => [asset.id, asset]));
       const referencePaths = [...vehicleIds.map((id) => assets.get(id)?.path), ...clipPeople.castMembers.map((member) => member.path), ...(placeId ? [curatedPlace?.path ?? placeAsset?.path] : [])];
       const referenceUrls = await Promise.all(referencePaths.map((path) => path ? resolveFalAssetUrl(path, admin, falStorage, new Map()) : Promise.reject(new HttpError(422, 'Une référence qualité est introuvable.'))));
-      const visionPrompt = `${buildVideoQualityPrompt({ vehicleReferenceCount: vehicleIds.length, hasLocationReference: Boolean(placeId), excludePeople: clipPeople.excludePeople, castTitles: clipPeople.castTitles, shotType: resolveShotType(draft) })} Shot: ${draft.title}; scene: ${draft.scene}; framing: ${draft.framing}; location: ${draft.location}.`;
+      const visionPrompt = `${buildVideoQualityPrompt({ vehicleReferenceCount: vehicleIds.length, hasLocationReference: Boolean(placeId), excludePeople: clipPeople.excludePeople, castTitles: clipPeople.castTitles, shotType: resolveShotType(draft), durationS: Number(shot.duration_seconds) })} Shot: ${draft.title}; scene: ${draft.scene}; framing: ${draft.framing}; location: ${draft.location}.`;
       let qualityJob: { requestId: string };
       try {
         qualityJob = await submitKeyframeQuality({ prompt: visionPrompt, imageUrls: [...frameUrls, ...referenceUrls] }, falCredential.apiKey);
@@ -1117,7 +1122,7 @@ export async function refreshLiveStoryboard(versionId: string, actor: Actor) {
   const refreshFailure = shotRefreshResults.find((result): result is PromiseRejectedResult => result.status === 'rejected');
   if (refreshFailure) throw refreshFailure.reason;
 
-  const { data: latestShots, error: latestError } = await admin.from('video_shots').select('shot_number,title,status,raw_path,duration_seconds,actual_cost_usd,video_quality_status,video_quality_retry_count,video_quality_ledger_ids,provider_reconciliation_required,provider_poll_failure_count,provider_next_poll_at').eq('version_id', versionId).order('shot_number');
+  const { data: latestShots, error: latestError } = await admin.from('video_shots').select('shot_number,title,status,raw_path,duration_seconds,keyframe_quality,video_quality,actual_cost_usd,video_quality_status,video_quality_retry_count,video_quality_ledger_ids,provider_reconciliation_required,provider_poll_failure_count,provider_next_poll_at').eq('version_id', versionId).order('shot_number');
   if (latestError || !latestShots) throw new HttpError(503, 'Impossible de relire l’état des plans.');
   const completedShots = latestShots.filter((shot) => shot.status === 'ready' && shot.raw_path).length;
   const reconciliationRequired = latestShots.some((shot) => shot.provider_reconciliation_required);
@@ -1126,7 +1131,7 @@ export async function refreshLiveStoryboard(versionId: string, actor: Actor) {
   const shotProgress = latestShots.map((shot) => ({ number: shot.shot_number, title: shot.title, status: shot.status, qualityStatus: shot.video_quality_status }));
   const scheduledPolls = latestShots.map((shot) => shot.provider_next_poll_at ? Math.max(1, Math.ceil((new Date(shot.provider_next_poll_at).getTime() - Date.now()) / 1000)) : null).filter((seconds): seconds is number => seconds !== null);
   const nextPollInSeconds = scheduledPolls.length ? Math.min(...scheduledPolls) : 15;
-  if (pendingShots) return { id: versionId, status: 'generating' as const, completedShots, totalShots: latestShots.length, checkedQualityShots: latestShots.filter((shot) => shot.video_quality_status === 'passed').length, totalQualityShots: premiumQualityMode ? latestShots.length : 0, shotProgress: premiumQualityMode ? shotProgress : undefined, processingStage: latestShots.some((shot) => shot.video_quality_status === 'checking') ? 'quality_checking' as const : 'generating' as const, nextPollInSeconds };
+  if (pendingShots) return { id: versionId, status: 'generating' as const, qualityWarnings: collectQualityWarnings(latestShots), completedShots, totalShots: latestShots.length, checkedQualityShots: latestShots.filter((shot) => shot.video_quality_status === 'passed').length, totalQualityShots: premiumQualityMode ? latestShots.length : 0, shotProgress: premiumQualityMode ? shotProgress : undefined, processingStage: latestShots.some((shot) => shot.video_quality_status === 'checking') ? 'quality_checking' as const : 'generating' as const, nextPollInSeconds };
 
   if (premiumQualityMode) {
     const unusedClipQualityReservations = latestShots.flatMap((shot) => {
@@ -1165,16 +1170,23 @@ export async function refreshLiveStoryboard(versionId: string, actor: Actor) {
       admin.from('videos').update({ status: 'failed', updated_at: new Date().toISOString() }).eq('id', version.video_id),
     ]);
     await pruneRetiredFalCredentials(admin);
-    return { id: versionId, status: 'failed' as const, error: errorMessage, completedShots, totalShots: latestShots.length, checkedQualityShots: latestShots.filter((shot) => shot.video_quality_status === 'passed').length, totalQualityShots: premiumQualityMode ? latestShots.length : 0, shotProgress: premiumQualityMode ? shotProgress : undefined };
+    return { id: versionId, status: 'failed' as const, error: errorMessage, qualityWarnings: collectQualityWarnings(latestShots), completedShots, totalShots: latestShots.length, checkedQualityShots: latestShots.filter((shot) => shot.video_quality_status === 'passed').length, totalQualityShots: premiumQualityMode ? latestShots.length : 0, shotProgress: premiumQualityMode ? shotProgress : undefined };
   }
 
   if (version.status !== 'postprocessing') {
     await admin.from('video_versions').update({ status: 'postprocessing', updated_at: new Date().toISOString() }).eq('id', versionId);
   }
   try {
+    // Warnings are frozen on the version before the montage, so the final video and the validator keep them.
+    const qualityWarnings = collectQualityWarnings(latestShots);
+    if (qualityWarnings.length) {
+      const { data: current } = await admin.from('video_versions').select('brief_json').eq('id', versionId).maybeSingle();
+      const currentBrief = current?.brief_json && typeof current.brief_json === 'object' ? current.brief_json as Record<string, unknown> : {};
+      await admin.from('video_versions').update({ brief_json: { ...currentBrief, qualityWarnings } }).eq('id', versionId);
+    }
     const { finalPath } = await assembleShotMontage(versionId);
     await pruneRetiredFalCredentials(admin);
-    return { id: versionId, status: 'ready' as const, videoUrl: await signedUrl(admin, finalPath), completedShots: latestShots.length, totalShots: latestShots.length };
+    return { id: versionId, status: 'ready' as const, qualityWarnings, videoUrl: await signedUrl(admin, finalPath), completedShots: latestShots.length, totalShots: latestShots.length };
   } catch (cause) {
     // P7 · a montage failure was silent and retried forever. Log it, count it, and stop after MAX_MONTAGE_ATTEMPTS.
     // The clips stay stored: a new attempt costs nothing at fal.
@@ -1194,6 +1206,11 @@ export async function refreshLiveStoryboard(versionId: string, actor: Actor) {
     }
     return { id: versionId, status: 'postprocessing' as const, error: `${decision.userMessage} Nouvelle tentative automatique (${decision.attempts}/${MAX_MONTAGE_ATTEMPTS}).`, completedShots: latestShots.length, totalShots: latestShots.length };
   }
+}
+
+function storedQualityWarnings(briefJson: unknown): QualityWarning[] {
+  const value = briefJson && typeof briefJson === 'object' ? (briefJson as { qualityWarnings?: unknown }).qualityWarnings : null;
+  return Array.isArray(value) ? value as QualityWarning[] : [];
 }
 
 async function signedUrl(admin: ReturnType<typeof createStorageAdminClient>, path: string) {

@@ -7,6 +7,7 @@ import { HttpError } from '@/core/auth/guards';
 import { createStorageAdminClient } from '@/core/storage/supabase';
 import { chooseMontageFps, makeFinalVideoArgs, makeMultiClipMontageArgs, parseFfmpegFps, makePhotoFidelityShotArgs, makeShotMontageArgs, normalizeVideoFormat, shouldOverlayLogo, type VideoFormat } from './ffmpeg-args';
 import { firstObservedAt, type ProcessingMetrics } from '@/core/versions/processing-metrics';
+import { videoQualityTimestamps } from '@/core/providers/fal-keyframes';
 
 const ffmpegPath = resolveFfmpegPath(process.platform, process.cwd());
 
@@ -222,19 +223,26 @@ async function removeCompletedIntermediates(admin: AdminClient, versionId: strin
   }
 }
 
-/** Extract three representative frames for the clip quality gate before montage. */
-export async function extractRepresentativeVideoFrames(bytes: Buffer): Promise<Buffer[]> {
+/**
+ * Frames for the clip quality gate (patch v3.1): 5 frames across the whole clip, then 2 enlarged crops of the
+ * lower part of the frame (wheel and road zone), where tyre-road contact is only a few pixels on a full frame.
+ */
+export async function extractRepresentativeVideoFrames(bytes: Buffer, durationS = 5): Promise<Buffer[]> {
   try { await access(ffmpegPath, constants.X_OK); }
   catch { throw new HttpError(503, 'FFmpeg n’est pas disponible sur ce déploiement.'); }
   const directory = await mkdtemp(join(tmpdir(), 'rimco-quality-'));
   const inputFile = join(directory, 'clip.mp4');
-  const timestamps = [0.5, 2, 3.5];
-  const outputFiles = timestamps.map((_, index) => join(directory, `frame-${index + 1}.jpg`));
+  const { frames, crops } = videoQualityTimestamps(durationS);
+  const jobs = [
+    ...frames.map((at) => ({ at, filter: 'scale=960:-2' })),
+    ...crops.map((at) => ({ at, filter: VIDEO_QUALITY_CROP_FILTER })),
+  ];
+  const outputFiles = jobs.map((_, index) => join(directory, `frame-${index + 1}.jpg`));
   try {
     await writeFile(inputFile, bytes);
     await Promise.all(outputFiles.map((outputFile, index) => runFfmpeg(ffmpegPath, [
-      '-hide_banner', '-loglevel', 'error', '-y', '-ss', String(timestamps[index]), '-i', inputFile,
-      '-frames:v', '1', '-vf', 'scale=960:-2', '-q:v', '3', outputFile,
+      '-hide_banner', '-loglevel', 'error', '-y', '-ss', String(jobs[index].at), '-i', inputFile,
+      '-frames:v', '1', '-vf', jobs[index].filter, '-q:v', '3', outputFile,
     ])));
     return await Promise.all(outputFiles.map(async (path) => {
       const info = await stat(path);
@@ -245,6 +253,9 @@ export async function extractRepresentativeVideoFrames(bytes: Buffer): Promise<B
     await rm(directory, { recursive: true, force: true });
   }
 }
+
+/** Lower 45 % of the frame, enlarged: wheels and road for ground-level shots. */
+export const VIDEO_QUALITY_CROP_FILTER = 'crop=iw:ih*0.45:0:ih*0.55,scale=1280:-2';
 
 /** Render an exact-source photo montage without sending the selected images to a video model. */
 export async function renderPhotoFidelityMontage(input: {

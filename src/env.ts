@@ -7,6 +7,8 @@ const schema = z.object({
   VIDEO_COST_CAP_USD: z.preprocess((value) => (typeof value === 'string' && value.trim() === '' ? undefined : value), z.coerce.number().positive().optional()),
   // Optional end frame for rolling shots (A/B test). Only "true"/"1"/"on"/"oui" enable it; anything else = off.
   KEYFRAME_END_FRAME_ROLLING: z.preprocess((value) => typeof value === 'string' && ['true', '1', 'on', 'oui', 'yes'].includes(value.trim().toLowerCase()), z.boolean()).default(false),
+  // Quality gate (patch v3.1): "warn" (default, temporary) keeps a shot still rejected after its retry, with warnings; "block" fails it.
+  QUALITY_GATE_MODE: z.preprocess((value) => typeof value === 'string' && value.trim().toLowerCase() === 'block' ? 'block' : 'warn', z.enum(['warn', 'block'])),
   NEXT_PUBLIC_SUPABASE_URL: z.string().url().optional(),
   NEXT_PUBLIC_SUPABASE_ANON_KEY: z.string().optional(), NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: z.string().optional(),
   SUPABASE_SERVICE_ROLE_KEY: z.string().optional(), SUPABASE_SECRET_KEY: z.string().optional(),
