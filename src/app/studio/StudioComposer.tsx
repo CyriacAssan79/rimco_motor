@@ -12,7 +12,9 @@ type Job = { id: string; status: string; error?: string; prompt?: string; comple
 type Model = { id: string; tier: string; formats: Format[]; durations: number[]; estimatedPricesFcfa: Record<string, number>; isDefault: boolean };
 type VehicleDossier = { id: string | null; key: string; dossierIds?: string[]; make: string; model: string; color?: string | null; variant?: string | null; photos: Array<{ id: string; photoRole: string; title: string; angle?: string | null; previewUrl?: string | null }> };
 type PlaceAsset = { id: string; title?: string; category?: string; previewUrl?: string | null; isCurated?: boolean };
-type StoryShot = { title: string; shotType?: 'establishing' | 'rolling' | 'detail' | 'hero'; scene: string; framing: string; location: string; action: string; camera: string; durationSeconds: number; vehiclePhotoId: string; locationPhotoId?: string | null };
+type CastAsset = { id: string; title?: string; previewUrl?: string | null };
+const MAX_CAST = 2;
+type StoryShot = { title: string; shotType?: 'establishing' | 'rolling' | 'detail' | 'hero'; travelDirection?: string; travelSpeed?: string; castIds?: string[]; scene: string; framing: string; location: string; action: string; camera: string; durationSeconds: number; vehiclePhotoId: string; locationPhotoId?: string | null };
 const durationOptions = [5, 10, 15, 20];
 const premiumDurationOptions = [20];
 const lightOptions = ['Lumière naturelle claire du matin'];
@@ -70,6 +72,8 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
   const [vehicleDossierId, setVehicleDossierId] = useState('');
   const [placeIds, setPlaceIds] = useState<string[]>([]);
   const [locationAssetId, setLocationAssetId] = useState('');
+  const [castAssets, setCastAssets] = useState<CastAsset[]>([]);
+  const [castIds, setCastIds] = useState<string[]>([]);
 
   const selectedDossier = vehicleDossiers.find((vehicle) => vehicle.key === vehicleDossierId);
   const availableDurationOptions = tier === 'premium' ? premiumDurationOptions : durationOptions;
@@ -150,6 +154,11 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
         setAssetsError(loadError instanceof Error ? loadError.message : 'Impossible de charger les véhicules.');
       })
       .finally(() => { if (active) setAssetsLoading(false); });
+    // Casting is optional: a loading error only hides the picker.
+    fetch('/api/assets?kind=character&status=valid%C3%A9e')
+      .then(async (response) => (response.ok ? ((await response.json()).assets ?? []) as CastAsset[] : []))
+      .catch(() => [] as CastAsset[])
+      .then((list) => { if (active) setCastAssets(list); });
     return () => { active = false; };
   }, [assetsRetry]);
 
@@ -193,7 +202,7 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
       const workflow = durationS === 5 ? 'single' : 'multi_clip';
       const directorResponse = await fetch('/api/storyboard/suggest', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ workflow, vehicleDossierId: selectedDossier.id, vehicleDossierIds: selectedDossier.dossierIds ?? [selectedDossier.id], vehiclePhotoIds: selectedVehiclePhotoIds, placeIds: effectivePlaceIds, mode: tier, durationSeconds: durationS, purpose, direction: additionalDirection, character, lighting: selectedScene?.lighting ?? lightOptions[0], mood: selectedScene?.mood ?? '', format }),
+        body: JSON.stringify({ workflow, vehicleDossierId: selectedDossier.id, vehicleDossierIds: selectedDossier.dossierIds ?? [selectedDossier.id], vehiclePhotoIds: selectedVehiclePhotoIds, placeIds: effectivePlaceIds, mode: tier, durationSeconds: durationS, purpose, direction: additionalDirection, character, lighting: selectedScene?.lighting ?? lightOptions[0], mood: selectedScene?.mood ?? '', format, castAssetIds: castIds }),
       });
       const directorData = await directorResponse.json();
       if (!directorResponse.ok) throw new Error(directorData.error ?? 'Le réalisateur IA n’a pas pu préparer la vidéo. Aucune vidéo n’a été lancée.');
@@ -207,7 +216,8 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
         vehiclePhotoIds: selectedVehiclePhotoIds, placeIds: workflow === 'single' ? effectivePlaceIds.slice(0, 1) : effectivePlaceIds,
         storyMode: tier, clipDurationSeconds: durationS, purpose, storyboard: shots,
         storyboardLedgerIds: directorData.storyboardLedgerId ? [directorData.storyboardLedgerId] : [],
-        format, tier, durationS, overlayLogo: true, complexity, character,
+        format, tier, durationS, overlayLogo: true, complexity, character: castIds.length ? '' : character,
+        castAssetIds: castIds, castDescription: typeof directorData.castDescription === 'string' ? directorData.castDescription : '',
         lighting: selectedScene?.lighting ?? lightOptions[0], scenePresetId: selectedScene?.id ?? '',
         vehicleCategory, location: selectedScene?.location ?? '', setting: selectedScene?.setting ?? '',
         vehicleAction: selectedScene?.vehicleAction ?? 'Le véhicule avance lentement et régulièrement',
@@ -273,7 +283,8 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
 
         <section className="rounded-md border border-[#e2e2e5] bg-white p-4">
           <div className="space-y-4">
-            <fieldset><legend className="mb-2 text-[11px] font-semibold">Personnage</legend><div className="flex flex-wrap gap-1.5">{characterOptions.map((option) => <button type="button" key={option.value || 'none'} onClick={() => setCharacter(option.value)} aria-pressed={character === option.value} className={`rounded-full border px-2.5 py-1.5 text-[10px] transition ${character === option.value ? 'border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]' : 'border-[#e5e2dd] text-[#77736d] hover:border-[#c51e1c]'}`}>{option.value ? option.label.replace('Une ', '') : 'Aucun'}</button>)}</div></fieldset>
+            <fieldset><legend className="mb-1 text-[11px] font-semibold">Casting</legend><p className="mb-2 text-[9px] leading-4 text-[#88847d]">{castAssets.length ? `Jusqu’à ${MAX_CAST} personnes validées. Les mêmes personnes apparaissent dans toute la vidéo, sauf demande contraire dans la description.` : 'Aucune photo de casting validée. Ajoutez-en dans la médiathèque (catégorie Casting) pour garder les mêmes personnes d’un plan à l’autre.'}</p>{castAssets.length > 0 && <div className="grid max-h-48 grid-cols-3 gap-2 overflow-auto">{castAssets.map((member) => { const selected = castIds.includes(member.id); return <button type="button" key={member.id} onClick={() => { setCastIds((current) => selected ? current.filter((id) => id !== member.id) : current.length >= MAX_CAST ? current : [...current, member.id]); clearFormError(); }} aria-pressed={selected} className={`overflow-hidden rounded-md border text-left ${selected ? 'border-[#c51e1c] ring-1 ring-[#c51e1c]' : 'border-[#e5e2dd]'}`}><span className="relative block h-16 bg-[#f4f2ef]">{member.previewUrl && <Image src={member.previewUrl} alt="" fill sizes="100px" unoptimized className="object-cover" />}</span><span className="block truncate px-1.5 py-1 text-[9px] text-[#4d4a45]">{member.title ?? 'Personne'}</span></button>; })}</div>}</fieldset>
+            {castIds.length === 0 && <fieldset><legend className="mb-2 text-[11px] font-semibold">Personnage</legend><div className="flex flex-wrap gap-1.5">{characterOptions.map((option) => <button type="button" key={option.value || 'none'} onClick={() => setCharacter(option.value)} aria-pressed={character === option.value} className={`rounded-full border px-2.5 py-1.5 text-[10px] transition ${character === option.value ? 'border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]' : 'border-[#e5e2dd] text-[#77736d] hover:border-[#c51e1c]'}`}>{option.value ? option.label.replace('Une ', '') : 'Aucun'}</button>)}</div><p className="mt-2 text-[9px] leading-4 text-[#88847d]">Sans photo de casting, la ressemblance d’un plan à l’autre reste approximative.</p></fieldset>}
             <fieldset><legend className="mb-2 text-[11px] font-semibold">Lumière</legend><div className="flex flex-wrap gap-1.5">{lightingChoices.map(({ label, scene }) => <button type="button" key={label} onClick={() => setScenePresetId(scene.id)} aria-pressed={label === getLightingLabel(selectedScene?.lighting ?? '')} className={`rounded-full border px-2.5 py-1.5 text-[10px] transition ${label === getLightingLabel(selectedScene?.lighting ?? '') ? 'border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]' : 'border-[#e5e2dd] text-[#77736d] hover:border-[#c51e1c]'}`}>{label}</button>)}</div></fieldset>
           </div>
         </section>

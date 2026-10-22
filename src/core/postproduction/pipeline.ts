@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { HttpError } from '@/core/auth/guards';
 import { createStorageAdminClient } from '@/core/storage/supabase';
-import { makeFinalVideoArgs, makeMultiClipMontageArgs, makePhotoFidelityShotArgs, makeShotMontageArgs, normalizeVideoFormat, shouldOverlayLogo, type VideoFormat } from './ffmpeg-args';
+import { chooseMontageFps, makeFinalVideoArgs, makeMultiClipMontageArgs, parseFfmpegFps, makePhotoFidelityShotArgs, makeShotMontageArgs, normalizeVideoFormat, shouldOverlayLogo, type VideoFormat } from './ffmpeg-args';
 import { firstObservedAt, type ProcessingMetrics } from '@/core/versions/processing-metrics';
 
 const ffmpegPath = resolveFfmpegPath(process.platform, process.cwd());
@@ -166,8 +166,9 @@ export async function assembleShotMontage(versionId: string) {
     const requestedCuts = Array.isArray(brief.shotOutputDurations) ? brief.shotOutputDurations : null;
     const cutDurations = requestedCuts?.length === shots.length ? requestedCuts.map(Number) : shots.map((shot) => Number(shot.duration_seconds));
     const startOffsets = editorialStartOffsets(shots.map((shot) => Number(shot.duration_seconds)), cutDurations);
+    const montageFps = isStoryboard ? chooseMontageFps(await Promise.all(clipFiles.map((file) => probeVideoFps(ffmpegPath, file)))) : undefined;
     const args = isStoryboard
-      ? makeMultiClipMontageArgs({ shotFiles: clipFiles, shotDurations: cutDurations, shotStartOffsets: startOffsets, audioFile, logoFile, outputFile, finalDurationSeconds: Number(brief.finalDurationSeconds), ...(typeof brief.clipDurationSeconds === 'number' ? { clipDurationSeconds: brief.clipDurationSeconds as 5 | 10 | 15 | 20 } : {}), singleStoryboardMode: brief.singleStoryboardMode === true, format: briefFormat })
+      ? makeMultiClipMontageArgs({ shotFiles: clipFiles, shotDurations: cutDurations, shotStartOffsets: startOffsets, audioFile, logoFile, outputFile, fps: montageFps, finalDurationSeconds: Number(brief.finalDurationSeconds), ...(typeof brief.clipDurationSeconds === 'number' ? { clipDurationSeconds: brief.clipDurationSeconds as 5 | 10 | 15 | 20 } : {}), singleStoryboardMode: brief.singleStoryboardMode === true, format: briefFormat })
       : makeShotMontageArgs({ shotFiles: clipFiles as [string, string], logoFile, outputFile, overlayLogo, durationSeconds: 6, format: briefFormat });
     await runFfmpeg(ffmpegPath, args);
     const outputStat = await stat(outputFile);
@@ -289,6 +290,18 @@ export async function renderPhotoFidelityMontage(input: {
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+}
+
+/** Native frame rate of a clip, read from `ffmpeg -i` (exit code 1 is expected: no output file). Null if unreadable. */
+function probeVideoFps(executable: string, file: string) {
+  return new Promise<number | null>((resolve) => {
+    const child = spawn(executable, ['-hide_banner', '-i', file], { stdio: ['ignore', 'ignore', 'pipe'] });
+    let stderr = '';
+    const timeout = setTimeout(() => child.kill('SIGKILL'), 10_000);
+    child.stderr.on('data', (chunk: Buffer) => { if (stderr.length < 8_000) stderr += chunk.toString('utf8'); });
+    child.once('error', () => { clearTimeout(timeout); resolve(null); });
+    child.once('close', () => { clearTimeout(timeout); resolve(parseFfmpegFps(stderr)); });
+  });
 }
 
 function runFfmpeg(executable: string, args: string[]) {

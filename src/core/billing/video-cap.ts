@@ -17,6 +17,9 @@ export type VideoCostInput = {
   keyframeQualityCostUsd: number;
   videoQualityCostUsd: number;
   storyboardCostUsd: number;
+  /** Optional closing frames of rolling shots (image + quality check each). */
+  endFrameCount?: number;
+  endFrameCostUsd?: number;
 };
 
 export type VideoCostBreakdown = {
@@ -30,10 +33,12 @@ export type VideoCostBreakdown = {
 const round = (value: number) => Math.round(value * 10_000) / 10_000;
 
 export function nominalVideoCostUsd(input: VideoCostInput): VideoCostBreakdown {
-  const values = [input.generatedSeconds, input.videoPriceUsdPerSecond, input.shotCount, input.keyframeImageCostUsd, input.keyframeQualityCostUsd, input.videoQualityCostUsd, input.storyboardCostUsd];
+  const endFrameCount = input.endFrameCount ?? 0;
+  const endFrameCostUsd = input.endFrameCostUsd ?? 0;
+  const values = [input.generatedSeconds, input.videoPriceUsdPerSecond, input.shotCount, input.keyframeImageCostUsd, input.keyframeQualityCostUsd, input.videoQualityCostUsd, input.storyboardCostUsd, endFrameCount, endFrameCostUsd];
   if (values.some((value) => !Number.isFinite(value) || value < 0)) throw new Error('Paramètres de coût invalides.');
   const videoUsd = input.generatedSeconds * input.videoPriceUsdPerSecond;
-  const keyframesUsd = input.shotCount * input.keyframeImageCostUsd;
+  const keyframesUsd = input.shotCount * input.keyframeImageCostUsd + endFrameCount * endFrameCostUsd;
   const qualityUsd = input.shotCount * (input.keyframeQualityCostUsd + input.videoQualityCostUsd);
   const totalUsd = videoUsd + keyframesUsd + qualityUsd + input.storyboardCostUsd;
   return { videoUsd: round(videoUsd), keyframesUsd: round(keyframesUsd), qualityUsd: round(qualityUsd), storyboardUsd: round(input.storyboardCostUsd), totalUsd: round(totalUsd) };

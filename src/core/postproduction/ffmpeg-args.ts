@@ -33,6 +33,8 @@ type MultiClipMontageArgs = {
   audioFile?: string | null;
   /** Light common grade (contrast, saturation) to unify clips from different engines. */
   grade?: boolean;
+  /** Montage cadence chosen from the clips' native frame rates (see chooseMontageFps); defaults to 24. */
+  fps?: number;
 };
 
 type PhotoFidelityShotArgs = {
@@ -63,8 +65,33 @@ const MONTAGE_DIMENSIONS: Record<VideoFormat, [number, number]> = {
 /** Starting point to be calibrated with the DA: subtle, never a look that changes paint color. */
 // Film grain (noise=alls=3:allf=t) helps against the 'plastic' look but costs ~60 % more encode time:
 // enable it once the montage runs in a worker instead of a 60 s serverless function.
-/** Storyboard montages are delivered at a single cinema cadence. */
+/** Default montage cadence when the clips' native frame rate cannot be read. */
 export const MONTAGE_FPS = 24;
+/** Cadences the montage may keep. Converting 30 → 24 drops one frame in five and makes wheels and backgrounds judder. */
+export const MONTAGE_FPS_CHOICES = [24, 25, 30] as const;
+
+/** Reads the video frame rate printed by `ffmpeg -i` (ffprobe is not shipped with ffmpeg-static). */
+export function parseFfmpegFps(stderr: string): number | null {
+  const match = /Stream #[^\n]*Video:[^\n]*?([\d.]+) fps/.exec(stderr) ?? /Stream #[^\n]*Video:[^\n]*?([\d.]+) tbr/.exec(stderr);
+  const value = match ? Number(match[1]) : NaN;
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+/**
+ * Keeps the dominant native cadence of the clips (23.976 → 24, 29.97 → 30) instead of forcing 24 i/s.
+ * Ties go to the higher cadence (fewer dropped frames); unknown rates fall back to 24. Never interpolates.
+ */
+export function chooseMontageFps(rates: Array<number | null>): number {
+  const counts = new Map<number, number>();
+  for (const rate of rates) {
+    if (rate === null || !Number.isFinite(rate) || rate <= 0) continue;
+    const nearest = MONTAGE_FPS_CHOICES.reduce((best, choice) => Math.abs(choice - rate) < Math.abs(best - rate) ? choice : best, MONTAGE_FPS_CHOICES[0] as number);
+    if (Math.abs(nearest - rate) > 1.5) continue;
+    counts.set(nearest, (counts.get(nearest) ?? 0) + 1);
+  }
+  if (!counts.size) return MONTAGE_FPS;
+  return [...counts.entries()].sort((a, b) => b[1] - a[1] || b[0] - a[0])[0][0];
+}
 /** Encoding quality of the 1080p montage: CRF 20 keeps the file and the Supabase egress close to the 720p version. */
 export const MONTAGE_CRF = 20;
 /** The bitmap logo is never enlarged more than this: beyond it, the brand mark turns soft. Provide an HD logo to reach the target size. */
@@ -152,6 +179,7 @@ export function makeMultiClipMontageArgs(input: MultiClipMontageArgs) {
   const format = normalizeVideoFormat(input.format);
   const [width, height] = MONTAGE_DIMENSIONS[format];
   const grade = input.grade !== false;
+  const fps = MONTAGE_FPS_CHOICES.includes(input.fps as (typeof MONTAGE_FPS_CHOICES)[number]) ? input.fps! : MONTAGE_FPS;
   const args = ['-hide_banner', '-loglevel', 'error', '-y'];
   input.shotFiles.forEach((file) => args.push('-i', file));
   args.push('-loop', '1', '-i', input.logoFile);
@@ -160,13 +188,13 @@ export function makeMultiClipMontageArgs(input: MultiClipMontageArgs) {
   const filters = input.shotFiles.map((_, index) => {
     const offset = offsets[index] ?? 0;
     const head = offset > 0 ? `trim=start=${offset},` : '';
-    return `[${index}:v:0]${head}setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop_duration=${input.shotDurations[index]},trim=duration=${input.shotDurations[index]},scale=${width}:${height}:force_original_aspect_ratio=increase:flags=lanczos,crop=${width}:${height},setsar=1,fps=${MONTAGE_FPS}[v${index}]`;
+    return `[${index}:v:0]${head}setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop_duration=${input.shotDurations[index]},trim=duration=${input.shotDurations[index]},scale=${width}:${height}:force_original_aspect_ratio=increase:flags=lanczos,crop=${width}:${height},setsar=1,fps=${fps}[v${index}]`;
   });
   filters.push(`${input.shotFiles.map((_, index) => `[v${index}]`).join('')}concat=n=${input.shotFiles.length}:v=1:a=0[footage_all]`);
   filters.push(`[footage_all]trim=duration=${footageSeconds},setpts=PTS-STARTPTS${grade ? `,${MONTAGE_GRADE_FILTER}` : ''}[footage]`);
   // End card: logo aimed at ~32 % of the frame width, capped at 1.5x its native size so it never turns soft.
   const logoWidth = Math.round(Math.min(width, height * 1.6) * 0.32);
-  filters.push(`color=c=white:s=${width}x${height}:r=${MONTAGE_FPS}:d=2[card];[${input.shotFiles.length}:v:0]format=rgba,scale=w='min(${logoWidth},iw*${MAX_LOGO_UPSCALE})*(0.94+0.06*min(t/0.6,1))':h=-1:eval=frame:flags=lanczos[logo];[card][logo]overlay=(W-w)/2:(H-h)/2:format=auto,fade=t=in:st=0:d=0.45,fade=t=out:st=1.55:d=0.45,fps=${MONTAGE_FPS}[brand]`);
+  filters.push(`color=c=white:s=${width}x${height}:r=${fps}:d=2[card];[${input.shotFiles.length}:v:0]format=rgba,scale=w='min(${logoWidth},iw*${MAX_LOGO_UPSCALE})*(0.94+0.06*min(t/0.6,1))':h=-1:eval=frame:flags=lanczos[logo];[card][logo]overlay=(W-w)/2:(H-h)/2:format=auto,fade=t=in:st=0:d=0.45,fade=t=out:st=1.55:d=0.45,fps=${fps}[brand]`);
   filters.push('[footage][brand]concat=n=2:v=1:a=0[vout]');
   if (input.audioFile) {
     const fadeOutStart = Math.max(0, input.finalDurationSeconds - 1.5);
@@ -176,7 +204,7 @@ export function makeMultiClipMontageArgs(input: MultiClipMontageArgs) {
   args.push('-filter_complex', filters.join(';'), '-map', '[vout]');
   if (input.audioFile) args.push('-map', '[aout]', '-c:a', 'aac', '-b:a', '192k');
   else args.push('-an');
-  args.push('-c:v', 'libx264', '-preset', 'veryfast', '-crf', String(qualityCrf), '-pix_fmt', 'yuv420p', '-r', String(MONTAGE_FPS), '-movflags', '+faststart', '-t', String(input.finalDurationSeconds), input.outputFile);
+  args.push('-c:v', 'libx264', '-preset', 'veryfast', '-crf', String(qualityCrf), '-pix_fmt', 'yuv420p', '-r', String(fps), '-movflags', '+faststart', '-t', String(input.finalDurationSeconds), input.outputFile);
   return args;
 }
 

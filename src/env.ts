@@ -5,6 +5,8 @@ const schema = z.object({
   LLM_MAX_COST_USD: z.coerce.number().positive().optional(),
   // Optional per-video cap (AGENTS.md: no app-level block by default); an empty Vercel variable means "no cap" instead of breaking the app at boot.
   VIDEO_COST_CAP_USD: z.preprocess((value) => (typeof value === 'string' && value.trim() === '' ? undefined : value), z.coerce.number().positive().optional()),
+  // Optional end frame for rolling shots (A/B test). Only "true"/"1"/"on"/"oui" enable it; anything else = off.
+  KEYFRAME_END_FRAME_ROLLING: z.preprocess((value) => typeof value === 'string' && ['true', '1', 'on', 'oui', 'yes'].includes(value.trim().toLowerCase()), z.boolean()).default(false),
   NEXT_PUBLIC_SUPABASE_URL: z.string().url().optional(),
   NEXT_PUBLIC_SUPABASE_ANON_KEY: z.string().optional(), NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: z.string().optional(),
   SUPABASE_SERVICE_ROLE_KEY: z.string().optional(), SUPABASE_SECRET_KEY: z.string().optional(),

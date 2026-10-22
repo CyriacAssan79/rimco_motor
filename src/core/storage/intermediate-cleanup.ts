@@ -16,11 +16,11 @@ export type IntermediateVideoPath = { versionId: string; path: string };
 
 export function collectVideoArtifactPaths(
   versions: Array<{ raw_path: string | null; final_path: string | null }>,
-  shots: Array<{ raw_path: string | null; keyframe_path: string | null; video_quality_previous_path: string | null }>,
+  shots: Array<{ raw_path: string | null; keyframe_path: string | null; video_quality_previous_path: string | null; end_keyframe_path?: string | null }>,
 ) {
   return [...new Set([
     ...versions.flatMap((version) => [version.raw_path, version.final_path]),
-    ...shots.flatMap((shot) => [shot.raw_path, shot.keyframe_path, shot.video_quality_previous_path]),
+    ...shots.flatMap((shot) => [shot.raw_path, shot.keyframe_path, shot.video_quality_previous_path, shot.end_keyframe_path ?? null]),
   ].filter((path): path is string => Boolean(path)))];
 }
 

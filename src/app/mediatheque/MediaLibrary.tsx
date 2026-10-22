@@ -6,7 +6,7 @@ import { createSupabaseBrowserClient } from '@/core/supabase/browser';
 
 type Asset = {
   id: string;
-  kind: 'vehicle' | 'logo' | 'audio' | 'place' | 'decor' | 'wardrobe' | 'badge';
+  kind: 'vehicle' | 'logo' | 'audio' | 'place' | 'decor' | 'wardrobe' | 'badge' | 'character';
   title?: string;
   category?: string;
   make?: string;
@@ -28,6 +28,7 @@ const kinds: Array<[Asset['kind'], string]> = [
   ['vehicle', 'Véhicule'],
   ['place', 'Lieu'],
   ['decor', 'Décor'],
+  ['character', 'Casting'],
   ['wardrobe', 'Tenue'],
   ['badge', 'Badge'],
   ['logo', 'Logo'],
@@ -98,6 +99,7 @@ export function MediaLibrary() {
       if (!accepted.includes(file.type)) throw new Error('Format accepté : JPG, PNG ou WebP pour une image; MP3, WAV ou M4A pour un audio.');
       if (file.size > maxSize) throw new Error(`Le fichier dépasse la limite de ${kind === 'audio' ? '25' : '12'} Mo.`);
       if (kind === 'place' && !placeTitle.trim()) throw new Error('Indiquez un nom court pour ce lieu.');
+      if (kind === 'character' && placeTitle.trim().length < 3) throw new Error('Décrivez la personne en quelques mots (prénom, âge, tenue).');
       if (kind === 'vehicle' && (!make.trim() || !model.trim()) && !(isAdmin && selectedDossierId)) throw new Error('Renseignez la marque et le modèle ou sélectionnez un dossier véhicule.');
 
       const signed = await fetch('/api/media/upload-url', {
@@ -119,7 +121,7 @@ export function MediaLibrary() {
         ? { make: make.trim() || folder?.make || '', model: model.trim() || folder?.model || '', color: color.trim() || folder?.color || '', angle: angle.trim(), ...(isAdmin && selectedDossierId ? { title: angle.trim(), vehicleDossierId: selectedDossierId, photoRole } : {}) }
         : kind === 'logo'
           ? { variant: 'rouge' }
-          : { title: kind === 'place' && placeTitle.trim() ? placeTitle.trim() : file.name.replace(/\.[^.]+$/, ''), category: kind };
+          : { title: (kind === 'place' || kind === 'character') && placeTitle.trim() ? placeTitle.trim() : file.name.replace(/\.[^.]+$/, ''), category: kind };
       const saved = await fetch('/api/assets', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -229,6 +231,10 @@ export function MediaLibrary() {
             <p className="mt-2 text-[10px] text-[#88847d]">Créez une fiche une fois, puis rattachez-lui chaque photo validée de l’intérieur, de l’extérieur ou des détails.</p>
           </div>}
           {kind === 'place' && isAdmin && <label className="grid gap-1 text-xs font-semibold text-[#253b4e]">Nom du lieu<input value={placeTitle} onChange={(event) => setPlaceTitle(event.target.value)} maxLength={160} placeholder="Ex. Plateau, Abidjan" className="min-w-56 rounded-md border border-[#d2cec6] bg-[#fbfbfa] px-3 py-2" /></label>}
+          {kind === 'character' && <div className="grid gap-1">
+            <label className="grid gap-1 text-xs font-semibold text-[#253b4e]">Personne<input value={placeTitle} onChange={(event) => setPlaceTitle(event.target.value)} maxLength={160} placeholder="Ex. Awa, 30 ans, chemise blanche" className="min-w-64 rounded-md border border-[#d2cec6] bg-[#fbfbfa] px-3 py-2" /></label>
+            <p className="max-w-sm text-[10px] text-[#88847d]">Une personne par photo, en pied ou à mi-corps, sur fond simple. Validez uniquement avec une cession de droit à l’image signée.</p>
+          </div>}
         </div>
         <label className="cursor-pointer rounded-md bg-[#c51e1c] px-4 py-3 text-xs font-semibold text-white hover:bg-[#a71715] focus-within:outline focus-within:outline-2 focus-within:outline-offset-2">
           {busy ? 'Téléversement…' : 'Ajouter un média'}

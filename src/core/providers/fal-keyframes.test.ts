@@ -89,8 +89,8 @@ describe('fal keyframe helpers', () => {
 
   it('builds a clip review prompt from three sampled frames and the selected identity references', () => {
     const prompt = buildVideoQualityPrompt({ vehicleReferenceCount: 2, hasLocationReference: true, excludePeople: true });
-    expect(prompt).toContain('Images 1 to 3 are representative frames');
-    expect(prompt).toContain('Images 4 to 5 are approved views');
+    expect(prompt).toContain('Images 1 to 3 are frames sampled in order');
+    expect(prompt).toContain('images 4 to 5 = approved views');
     expect(prompt).toContain('image 6 = selected location');
     expect(prompt).toContain('split-screen');
     expect(prompt).toContain('visually unoccupied');

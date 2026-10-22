@@ -16,7 +16,7 @@ import { getSceneConceptDirection } from '@/core/scenes/concepts';
 import { z } from 'zod';
 import { deleteVersionsByVideoIds } from '@/core/versions/store';
 import { aggregateGenerationCost } from '@/core/billing/aggregate';
-import { isTierDurationSupported, photoFidelityShotSchema, singleShotStoryboardSchema, storyboardSchema, validatePhotoFidelityPlan, validatePremiumTwentySecondStoryboard, validateSingleShotStoryboard, validateStoryboard } from '@/core/storyboard';
+import { castDescriptionSchema, MAX_CAST_PER_VIDEO, isTierDurationSupported, photoFidelityShotSchema, singleShotStoryboardSchema, storyboardSchema, validatePhotoFidelityPlan, validatePremiumTwentySecondStoryboard, validateSingleShotStoryboard, validateStoryboard } from '@/core/storyboard';
 import { createLiveStoryboard } from '@/core/versions/storyboard-live';
 import { createLivePhotoFidelity } from '@/core/versions/photo-fidelity';
 import { getStoryboardModeRoute } from '@/core/providers/storyboard-routing';
@@ -34,6 +34,8 @@ const multiClipSchema = requestSchema.extend({
   placeIds: z.array(z.string().uuid()).max(12).default([]),
   storyboardLedgerIds: z.array(z.string().uuid()).max(20).default([]),
   storyboard: storyboardSchema,
+  castAssetIds: z.array(z.string().uuid()).max(MAX_CAST_PER_VIDEO).default([]),
+  castDescription: castDescriptionSchema.default(''),
 }).strict().refine((input) => input.clipDurationSeconds >= 10 || input.placeIds.length <= 1, {
   message: 'Une seule référence de lieu est autorisée pour une vidéo de moins de 10 secondes.',
   path: ['placeIds'],
@@ -47,6 +49,8 @@ const singleStoryboardSchema = requestSchema.extend({
   placeIds: z.array(z.string().uuid()).max(12).default([]),
   storyboardLedgerIds: z.array(z.string().uuid()).max(20).default([]),
   storyboard: singleShotStoryboardSchema,
+  castAssetIds: z.array(z.string().uuid()).max(MAX_CAST_PER_VIDEO).default([]),
+  castDescription: castDescriptionSchema.default(''),
 }).strict().refine((input) => input.placeIds.length <= 1, {
   message: 'Une vidéo en un seul plan utilise un seul lieu.',
   path: ['placeIds'],
@@ -236,7 +240,7 @@ export async function DELETE(request: Request) {
 
     const versionIds = videos.flatMap((video) => Array.isArray(video.video_versions) ? video.video_versions.map((version) => version.id) : []);
     const { data: shots, error: shotsError } = versionIds.length
-      ? await admin.from('video_shots').select('raw_path,keyframe_path,video_quality_previous_path').in('version_id', versionIds)
+      ? await admin.from('video_shots').select('raw_path,keyframe_path,video_quality_previous_path,end_keyframe_path').in('version_id', versionIds)
       : { data: [], error: null };
     if (shotsError) throw new HttpError(503, 'Impossible de préparer le nettoyage des fichiers de plans. Aucune vidéo n’a été supprimée.');
     const paths = collectVideoArtifactPaths(

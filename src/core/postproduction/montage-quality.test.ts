@@ -70,7 +70,7 @@ describe('prompts orientés mouvement', () => {
     expect(still).toContain('Captured mid-drive, not parked');
     const motion = buildKeyframeAnimationPrompt({ shot: base, vehicle: 'Haval H6 beige', durationS: 5, mood: 'premium', lighting: 'golden hour' });
     expect(motion).not.toContain('smallest physically credible motion');
-    expect(motion).toContain('must not look parked');
+    expect(motion).toContain('must never look parked');
   });
 
   it('garde le plan héros posé', () => {

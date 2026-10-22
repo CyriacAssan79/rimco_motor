@@ -4,7 +4,7 @@ import { errorResponse, getActor, HttpError } from '@/core/auth/guards';
 import { createSupabaseServerClient } from '@/core/supabase/server';
 import { createStorageAdminClient } from '@/core/storage/supabase';
 import { env } from '@/env';
-import { buildDirectorUserPrompt, buildSingleShotStoryboardInstruction, vehicleDescriptionForPrompt, buildStoryboardInstruction, DIRECTOR_SYSTEM_PREFIX, fitStoryboardDurations, isPremiumTenSecondAd, isTierDurationSupported, singleShotStoryboardSchema, storyboardSchema, validatePremiumTenSecondAdStoryboard, validatePremiumTwentySecondStoryboard, validateSingleShotStoryboard, validateStoryboard, type ClipDurationSeconds, type StoryboardShot } from '@/core/storyboard';
+import { buildDirectorUserPrompt, buildSingleShotStoryboardInstruction, castDescriptionSchema, MAX_CAST_PER_VIDEO, validateStoryboardCast, vehicleDescriptionForPrompt, buildStoryboardInstruction, DIRECTOR_SYSTEM_PREFIX, fitStoryboardDurations, isPremiumTenSecondAd, isTierDurationSupported, singleShotStoryboardSchema, storyboardSchema, validatePremiumTenSecondAdStoryboard, validatePremiumTwentySecondStoryboard, validateSingleShotStoryboard, validateStoryboard, type ClipDurationSeconds, type StoryboardShot } from '@/core/storyboard';
 import { getStoryboardModeRoute } from '@/core/providers/storyboard-routing';
 import { buildFalLlmInput, createFalLlmProvider, FalLlmBriefError, llmReservationUsd } from '@/core/providers/fal-llm';
 import { createFalClient } from '@fal-ai/client';
@@ -28,8 +28,9 @@ const requestSchema = z.object({
   character: z.string().trim().max(160).default(''),
   lighting: z.string().trim().max(160).default(''),
   mood: z.string().trim().max(160).default(''),
+  castAssetIds: z.array(z.string().uuid()).max(MAX_CAST_PER_VIDEO).default([]),
 });
-const singleShotStoryboardResponseSchema = z.object({ shots: singleShotStoryboardSchema }).strict();
+const singleShotStoryboardResponseSchema = z.object({ castDescription: castDescriptionSchema.optional(), shots: singleShotStoryboardSchema }).strict();
 
 export async function POST(request: Request) {
   const referenceId = crypto.randomUUID();
@@ -80,6 +81,12 @@ export async function POST(request: Request) {
       places = [...curated.map((place) => ({ id: place.id, title: place.title, category: place.category, path: place.path })), ...data];
       places = input.placeIds.map((id) => places.find((place) => place.id === id)).filter((place): place is typeof places[number] => Boolean(place));
     }
+    const castAssetIds = [...new Set(input.castAssetIds)];
+    const { data: castAssets, error: castError } = castAssetIds.length
+      ? await supabase.from('assets').select('id,title,kind,status,brand_id').in('id', castAssetIds).eq('kind', 'character').eq('status', 'validée').eq('brand_id', actor.brandId)
+      : { data: [] as Array<{ id: string; title: string | null }>, error: null };
+    if (castError || (castAssets ?? []).length !== castAssetIds.length) throw new HttpError(422, 'Une photo de casting sélectionnée n’est pas validée pour votre marque.');
+    const cast = castAssetIds.map((id) => castAssets!.find((asset) => asset.id === id)!).map((asset) => ({ id: asset.id, title: asset.title ?? 'Personne du casting' }));
     const route = getStoryboardModeRoute(input.mode);
     const selectedVehicle = (input.vehiclePhotoIds.length
       ? input.vehiclePhotoIds.map((id) => vehiclePhotos.find((photo) => photo.id === id)).filter((photo): photo is typeof vehiclePhotos[number] => Boolean(photo))
@@ -95,6 +102,7 @@ export async function POST(request: Request) {
       places: selectedPlaces.map((place) => ({ id: place.id, title: place.title ?? 'Lieu', category: place.category, timeOfDay: placeTimeOfDay(place) })),
       purpose: input.purpose, direction: input.direction, format: input.format,
       character: input.character, lighting: input.lighting, mood: input.mood,
+      cast,
     };
     const instruction = input.workflow === 'single'
       ? buildSingleShotStoryboardInstruction(instructionInput)
@@ -103,6 +111,7 @@ export async function POST(request: Request) {
     const directorSystemPrompt = `${DIRECTOR_SYSTEM_PREFIX} ${instruction}`;
     const directorUserPrompt = buildDirectorUserPrompt(input.direction);
     let shots: StoryboardShot[];
+    let castDescription = '';
     let storyboardLedgerId: string | null = null;
     let storyboardCostUsd = 0;
     let totalEstimatedPriceFcfa: number | null = null;
@@ -120,6 +129,8 @@ export async function POST(request: Request) {
       const drafts = durations.map((durationSeconds, index) => ({
         title: premiumCreative ? premiumTitles[index] : index === 0 ? 'Révélation du véhicule' : 'Détail et signature',
         shotType: premiumCreative ? (['establishing', 'rolling', 'detail', 'hero'] as const)[index] : index === 0 ? 'rolling' as const : 'hero' as const,
+        travelDirection: premiumCreative ? (['left_to_right', 'left_to_right', 'static', 'towards_camera'] as const)[index] : index === 0 ? 'left_to_right' as const : 'static' as const,
+        travelSpeed: 'cruise' as const,
         scene: premiumCreative ? ['Vue large du lieu', 'Suivi extérieur du véhicule', 'Détail extérieur appuyé par les photos', 'Trois-quarts avant en plan héros'][index] : index === 0 ? 'Plan d’ensemble cinématographique' : 'Plan rapproché sur le véhicule',
         framing: premiumCreative ? ['Plan large', 'Plan moyen trois-quarts', 'Gros plan autorisé par la photo', 'Plan héros trois-quarts avant'][index] : 'Plan moyen',
         location: selectedPlaces[index % Math.max(1, selectedPlaces.length)]?.title ?? 'Abidjan, Côte d’Ivoire',
@@ -152,7 +163,8 @@ export async function POST(request: Request) {
         });
         const responseSchema = input.workflow === 'single'
           ? singleShotStoryboardResponseSchema
-          : z.object({ shots: storyboardSchema }).strict().transform(({ shots }) => ({
+          : z.object({ castDescription: castDescriptionSchema.optional(), shots: storyboardSchema }).strict().transform(({ castDescription: description, shots }) => ({
+              castDescription: description,
               shots: premiumTenSecondAd
                 ? (validatePremiumTenSecondAdStoryboard(shots), shots)
                 : premiumTwentySecond
@@ -162,6 +174,7 @@ export async function POST(request: Request) {
         // Layer 1 (locked rules + approved references) goes in the system prompt; layer 2 (user brief) is the only user content.
         const result = await provider.buildStoryboardWithCost(directorUserPrompt, responseSchema, directorSystemPrompt);
         shots = result.fields.shots;
+        castDescription = cast.length ? '' : result.fields.castDescription ?? '';
         storyboardCostUsd = result.costUsd ?? (env.LLM_MAX_COST_USD ?? 0) * result.completedRequests;
         totalEstimatedPriceFcfa = estimateGridPriceFcfa(input.durationSeconds, input.mode, {
           standard: Number(pricing.grid_fcfa_per_second_standard), premium: Number(pricing.grid_fcfa_per_second_premium),
@@ -185,6 +198,10 @@ export async function POST(request: Request) {
         throw cause;
       }
     }
+    // Without a selected casting, castIds are meaningless: drop them instead of failing the storyboard.
+    if (!cast.length) shots = shots.map((shot) => { const rest = { ...shot }; delete rest.castIds; return rest; });
+    else if (env.PROVIDERS_MODE === 'mock') shots = shots.map((shot) => ({ ...shot, castIds: cast.map((member) => member.id) }));
+    validateStoryboardCast(shots, cast.map((member) => member.id));
     if (input.workflow === 'single') validateSingleShotStoryboard(shots, input.durationSeconds as ClipDurationSeconds, route.adapterFamily);
     else if (premiumTenSecondAd) validatePremiumTenSecondAdStoryboard(shots);
     else if (premiumTwentySecond) validatePremiumTwentySecondStoryboard(shots);
@@ -194,7 +211,7 @@ export async function POST(request: Request) {
     if (shots.some((shot) => !vehicleIds.has(shot.vehiclePhotoId) || (shot.locationPhotoId && !placeIds.has(shot.locationPhotoId)))) {
       throw new HttpError(422, 'Le storyboard référence une image non autorisée. Régénérez la proposition.');
     }
-    return NextResponse.json({ storyboard: shots, prompt: `${directorSystemPrompt}\n\n${directorUserPrompt}`, mode: input.mode, durationSeconds: input.durationSeconds, finalVideoSeconds: input.durationSeconds + 2, storyboardLedgerId, storyboardCostUsd, storyboardCostFcfa: Math.round(storyboardCostUsd * env.USD_TO_EUR_RATE * env.EUR_TO_FCFA * 1.3), totalEstimatedPriceFcfa });
+    return NextResponse.json({ storyboard: shots, castDescription, prompt: `${directorSystemPrompt}\n\n${directorUserPrompt}`, mode: input.mode, durationSeconds: input.durationSeconds, finalVideoSeconds: input.durationSeconds + 2, storyboardLedgerId, storyboardCostUsd, storyboardCostFcfa: Math.round(storyboardCostUsd * env.USD_TO_EUR_RATE * env.EUR_TO_FCFA * 1.3), totalEstimatedPriceFcfa });
   } catch (error) {
     if (error instanceof HttpError) return errorResponse(error);
     if (error instanceof z.ZodError) {

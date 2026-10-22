@@ -11,6 +11,8 @@ export function keyframeImageUploadTarget(input: {
   versionId: string;
   shotNumber: number;
   contentType: string;
+  /** `end` = closing frame of a rolling shot (end-frame mode). */
+  variant?: 'start' | 'end';
 }) {
   const extension = extensionByContentType[input.contentType as KeyframeImageContentType];
   if (!extension) throw new Error('Format d’image-clé non pris en charge.');
@@ -19,7 +21,7 @@ export function keyframeImageUploadTarget(input: {
 
   return {
     bucket: 'videos' as const,
-    path: `${input.videoId}/${input.versionId}/keyframe-${input.shotNumber}.${extension}`,
+    path: `${input.videoId}/${input.versionId}/keyframe-${input.shotNumber}${input.variant === 'end' ? '-end' : ''}.${extension}`,
     options: { contentType: input.contentType, upsert: true as const },
   };
 }

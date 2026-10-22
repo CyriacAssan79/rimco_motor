@@ -13,6 +13,8 @@ export type ReferenceVideoInput = {
   durationS: number;
   aspectRatio: string;
   endUserId?: string;
+  /** Optional last frame, used only by the image-to-video keyframe animation. */
+  endImageUrl?: string;
 };
 
 export type ReferenceVideoProvider = {

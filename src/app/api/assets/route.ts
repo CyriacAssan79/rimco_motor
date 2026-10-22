@@ -48,7 +48,7 @@ export async function GET(request: Request) {
   } catch (error) { return errorResponse(error); }
 }
 
-const createSchema = z.object({ kind: z.enum(['vehicle','logo','audio','place','decor','wardrobe','badge']), path: z.string().trim().min(1).max(500), title: z.string().trim().max(160).optional(), category: z.string().trim().max(80).optional(), make: z.string().max(100).optional(), model: z.string().max(100).optional(), color: z.string().max(100).optional(), angle: z.string().max(100).optional(), variant: z.string().max(100).optional(), vehicleDossierId: z.string().uuid().optional(), photoRole: z.enum(['exterior','interior','detail']).optional() }).superRefine((value, context) => {
+const createSchema = z.object({ kind: z.enum(['vehicle','logo','audio','place','decor','wardrobe','badge','character']), path: z.string().trim().min(1).max(500), title: z.string().trim().max(160).optional(), category: z.string().trim().max(80).optional(), make: z.string().max(100).optional(), model: z.string().max(100).optional(), color: z.string().max(100).optional(), angle: z.string().max(100).optional(), variant: z.string().max(100).optional(), vehicleDossierId: z.string().uuid().optional(), photoRole: z.enum(['exterior','interior','detail']).optional() }).superRefine((value, context) => {
   if (value.vehicleDossierId && value.kind !== 'vehicle') context.addIssue({ code: 'custom', message: 'Un dossier ne peut contenir que des photos de véhicule.', path: ['kind'] });
   if (value.photoRole && !value.vehicleDossierId) context.addIssue({ code: 'custom', message: 'Le type de vue nécessite un dossier véhicule.', path: ['vehicleDossierId'] });
 });
