@@ -17,7 +17,7 @@ import { expandSingleShotStoryboard, validateStoryboardCast, vehicleDescriptionF
 import { assembleShotMontage, extractRepresentativeVideoFrames } from '@/core/postproduction/pipeline';
 import { MAX_MONTAGE_ATTEMPTS, montageFailureDecision } from '@/core/postproduction/montage-failure';
 import { peopleForShot, storedCast, withCastReferences, type StoredCastMember } from './casting';
-import { collectQualityWarnings, qualityDecision, warningIssues, type QualityWarning } from './quality-gate';
+import { collectQualityWarnings, qualityDecision, storedQualityWarnings, warningIssues } from './quality-gate';
 import type { CreateVersionInput } from './live';
 import { animationSubmitStateAfterFailure, canSubmitAnimation } from './animation-submit-state';
 import { reserveGenerationCost, reserveKeyframeCost, settleUsageCost } from '@/core/billing/ledger';
@@ -1206,11 +1206,6 @@ export async function refreshLiveStoryboard(versionId: string, actor: Actor) {
     }
     return { id: versionId, status: 'postprocessing' as const, error: `${decision.userMessage} Nouvelle tentative automatique (${decision.attempts}/${MAX_MONTAGE_ATTEMPTS}).`, completedShots: latestShots.length, totalShots: latestShots.length };
   }
-}
-
-function storedQualityWarnings(briefJson: unknown): QualityWarning[] {
-  const value = briefJson && typeof briefJson === 'object' ? (briefJson as { qualityWarnings?: unknown }).qualityWarnings : null;
-  return Array.isArray(value) ? value as QualityWarning[] : [];
 }
 
 async function signedUrl(admin: ReturnType<typeof createStorageAdminClient>, path: string) {

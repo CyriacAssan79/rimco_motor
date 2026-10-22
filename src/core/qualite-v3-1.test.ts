@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildKeyframeAnimationPrompt, buildKeyframePrompt, buildKeyframeQualityPrompt, buildVideoQualityPrompt, GROUND_CONTACT, NO_BODYWORK_CONTACT, parseKeyframeQuality, SAME_PLACE_CHECK, videoQualityTimestamps } from '@/core/providers/fal-keyframes';
 import { buildSingleShotStoryboardInstruction, type StoryboardShot } from '@/core/storyboard';
-import { collectQualityWarnings, qualityDecision, warningIssues } from '@/core/versions/quality-gate';
+import { collectQualityWarnings, qualityDecision, storedQualityWarnings, warningIssues } from '@/core/versions/quality-gate';
 
 const rolling: StoryboardShot = { title: 'Suivi', shotType: 'rolling', travelDirection: 'left_to_right', travelSpeed: 'cruise', scene: 's', framing: 'f', location: 'l', action: 'a', camera: 'c', durationSeconds: 5, vehiclePhotoId: 'front', locationPhotoId: 'place' };
 const ok = { approved: true, issues: [], reason: 'OK' };
@@ -28,6 +28,16 @@ describe('E · mode avertissement', () => {
       { shotNumber: 1, title: 'A', stage: 'keyframe', issues: ['Roue de secours arrière absente'] },
       { shotNumber: 2, title: 'B', stage: 'video', issues: ['t=2.5s minor: reflet'] },
     ]);
+  });
+
+  it('relit les avertissements figés dans la version pour le valideur, en ignorant les entrées invalides', () => {
+    expect(storedQualityWarnings({ qualityWarnings: [
+      { shotNumber: 3, title: 'Héros', stage: 'video', issues: ['Roue arrière figée', 42] },
+      { shotNumber: 4, stage: 'autre', issues: [] },
+      null,
+    ] })).toEqual([{ shotNumber: 3, title: 'Héros', stage: 'video', issues: ['Roue arrière figée'] }]);
+    expect(storedQualityWarnings({})).toEqual([]);
+    expect(storedQualityWarnings(null)).toEqual([]);
   });
 });
 

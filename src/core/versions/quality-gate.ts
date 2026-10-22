@@ -44,6 +44,19 @@ function storedWarning(value: unknown): string[] | null {
   return record.warningIssues.filter((issue): issue is string => typeof issue === 'string');
 }
 
+/** Warnings frozen in brief_json.qualityWarnings before the montage (read by the Studio and the validator). */
+export function storedQualityWarnings(briefJson: unknown): QualityWarning[] {
+  const value = briefJson && typeof briefJson === 'object' ? (briefJson as { qualityWarnings?: unknown }).qualityWarnings : null;
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    if (!entry || typeof entry !== 'object') return [];
+    const record = entry as Record<string, unknown>;
+    if (record.stage !== 'keyframe' && record.stage !== 'video') return [];
+    const issues = Array.isArray(record.issues) ? record.issues.filter((issue): issue is string => typeof issue === 'string') : [];
+    return [{ shotNumber: Number(record.shotNumber) || 0, title: typeof record.title === 'string' ? record.title : '', stage: record.stage, issues }];
+  });
+}
+
 /** Warnings read back from video_shots.keyframe_quality / video_quality (jsonb, no migration). */
 export function collectQualityWarnings(shots: Array<{ shot_number: unknown; title?: unknown; keyframe_quality?: unknown; video_quality?: unknown }>): QualityWarning[] {
   return shots.flatMap((shot) => {
