@@ -8,7 +8,17 @@ import { createStorageAdminClient } from '@/core/storage/supabase';
 import { makeFinalVideoArgs, makeMultiClipMontageArgs, makePhotoFidelityShotArgs, makeShotMontageArgs, normalizeVideoFormat, shouldOverlayLogo, type VideoFormat } from './ffmpeg-args';
 import { firstObservedAt, type ProcessingMetrics } from '@/core/versions/processing-metrics';
 
-const ffmpegPath = join(process.cwd(), '.generated', 'ffmpeg');
+const ffmpegPath = resolveFfmpegPath(process.platform, process.cwd());
+
+/**
+ * Vercel (Linux) runs the binary copied by `scripts/prepare-ffmpeg.mjs`. Windows cannot launch a
+ * file without its `.exe` extension, so local development uses the ffmpeg-static binary directly.
+ */
+export function resolveFfmpegPath(platform: NodeJS.Platform, cwd: string): string {
+  return platform === 'win32'
+    ? join(cwd, 'node_modules', 'ffmpeg-static', 'ffmpeg.exe')
+    : join(cwd, '.generated', 'ffmpeg');
+}
 const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
 const MAX_VIDEO_BYTES = 100 * 1024 * 1024;
 const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
