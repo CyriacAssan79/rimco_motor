@@ -1,5 +1,11 @@
 # Décisions
 
+## Correctifs après les essais réels du 22/10 (voir docs/ESSAIS-2026-10-22.md)
+
+- **Prompt Kling limité à 2 500 caractères** : fal refuse au-delà (422). Le prompt d'animation est ajusté à la limite du moteur (`ANIMATION_PROMPT_MAX_LENGTH`) : versions courtes des consignes, puis retrait des phrases facultatives (humeur, lumière, étalonnage, enseignes), puis coupe en dernier recours. Wan et Seedance, sans limite documentée, gardent le prompt complet. Évolution prévue : raccourcir les consignes à la source plutôt que d'empiler des phrases.
+- **Rejet 400/422 de fal pendant le suivi** : plus de réconciliation manuelle, car rien n'a été généré ni facturé. Les autres erreurs terminales (401, 403, 404, réseau, 5xx) la gardent.
+- **Plan en échec** : son contrôle qualité n'est plus attendu, la version passe en échec au lieu de rester « en génération ».
+
 ## Patch qualité v3.1 : contrôle non bloquant, contact pneu-route (2026-10-22)
 
 - **Écart temporaire à l’architecture cible, assumé.** La cible veut une image-clé validée avant toute vidéo. Après les premiers essais du v3 (« Image-clé refusée après une reprise : lettres lisibles sur la façade… », « … roue de secours absente ; disposition du lieu différente ; panneau publicitaire »), le responsable a demandé que la vidéo soit générée même si l’image-clé n’est pas parfaite, en attendant une orchestration de vérification. Nouvelle variable `QUALITY_GATE_MODE` : `warn` (défaut) garde une image-clé ou un clip encore refusé après sa reprise automatique, avec ses défauts en avertissements ; `block` rétablit l’échec du plan. Le contrôle et la reprise restent actifs ; le valideur RIMCO reste la barrière finale. Les échecs techniques (fal sans réponse, réponse illisible du juge) restent bloquants car le coût est incertain. Coût accepté : un clip peut être payé sur une image-clé défectueuse.
