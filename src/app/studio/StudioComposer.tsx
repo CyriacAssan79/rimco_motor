@@ -30,11 +30,6 @@ function getLightingLabel(lighting: string): string {
   return lighting;
 }
 
-const characterOptions = [
-  { value: '', label: 'Sans personnage · recommandé pour le premier test' },
-  { value: 'Une conductrice ou un conducteur naturel, visible à travers la vitre', label: 'Conductrice ou conducteur' },
-  { value: 'Une personne en tenue professionnelle, discrète et naturelle, à proximité du véhicule', label: 'Personne en arrière-plan' },
-];
 
 function shotProgressLabel(shot: NonNullable<Job['shotProgress']>[number]) {
   if (shot.qualityStatus === 'checking') return 'Contrôle qualité';
@@ -57,11 +52,11 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
   const [assetId, setAssetId] = useState('');
   const [title, setTitle] = useState('');
   const [scenePresetId, setScenePresetId] = useState('');
-  const complexity = 'balanced';
   const [tier, setTier] = useState<'standard' | 'pro' | 'premium'>('standard');
   const [durationS, setDurationS] = useState(5);
   const [additionalDirection, setAdditionalDirection] = useState('');
-  const [character, setCharacter] = useState('');
+  const [audioAssets, setAudioAssets] = useState<Array<{ id: string; title?: string }>>([]);
+  const [audioAssetId, setAudioAssetId] = useState('');
   const [format, setFormat] = useState<Format>('16:9');
   const [job, setJob] = useState<Job | null>(null);
   const [error, setError] = useState('');
@@ -159,6 +154,11 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
       .then(async (response) => (response.ok ? ((await response.json()).assets ?? []) as CastAsset[] : []))
       .catch(() => [] as CastAsset[])
       .then((list) => { if (active) setCastAssets(list); });
+    // Music is optional too (patch v3.2): validated audio tracks of the brand, mixed with fades at the edit.
+    fetch('/api/assets?kind=audio&status=valid%C3%A9e')
+      .then(async (response) => (response.ok ? ((await response.json()).assets ?? []) as Array<{ id: string; title?: string }> : []))
+      .catch(() => [] as Array<{ id: string; title?: string }>)
+      .then((list) => { if (active) setAudioAssets(list); });
     return () => { active = false; };
   }, [assetsRetry]);
 
@@ -202,7 +202,7 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
       const workflow = durationS === 5 ? 'single' : 'multi_clip';
       const directorResponse = await fetch('/api/storyboard/suggest', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ workflow, vehicleDossierId: selectedDossier.id, vehicleDossierIds: selectedDossier.dossierIds ?? [selectedDossier.id], vehiclePhotoIds: selectedVehiclePhotoIds, placeIds: effectivePlaceIds, mode: tier, durationSeconds: durationS, purpose, direction: additionalDirection, character, lighting: selectedScene?.lighting ?? lightOptions[0], mood: selectedScene?.mood ?? '', format, castAssetIds: castIds }),
+        body: JSON.stringify({ workflow, vehicleDossierId: selectedDossier.id, vehicleDossierIds: selectedDossier.dossierIds ?? [selectedDossier.id], vehiclePhotoIds: selectedVehiclePhotoIds, placeIds: effectivePlaceIds, mode: tier, durationSeconds: durationS, purpose, direction: additionalDirection, lighting: selectedScene?.lighting ?? lightOptions[0], mood: selectedScene?.mood ?? '', format, castAssetIds: castIds }),
       });
       const directorData = await directorResponse.json();
       if (!directorResponse.ok) throw new Error(directorData.error ?? 'Le réalisateur IA n’a pas pu préparer la vidéo. Aucune vidéo n’a été lancée.');
@@ -216,7 +216,7 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
         vehiclePhotoIds: selectedVehiclePhotoIds, placeIds: workflow === 'single' ? effectivePlaceIds.slice(0, 1) : effectivePlaceIds,
         storyMode: tier, clipDurationSeconds: durationS, purpose, storyboard: shots,
         storyboardLedgerIds: directorData.storyboardLedgerId ? [directorData.storyboardLedgerId] : [],
-        format, tier, durationS, overlayLogo: true, complexity, character: castIds.length ? '' : character,
+        format, tier, durationS, overlayLogo: true, ...(audioAssetId ? { audioAssetId } : {}),
         castAssetIds: castIds, castDescription: typeof directorData.castDescription === 'string' ? directorData.castDescription : '',
         lighting: selectedScene?.lighting ?? lightOptions[0], scenePresetId: selectedScene?.id ?? '',
         vehicleCategory, location: selectedScene?.location ?? '', setting: selectedScene?.setting ?? '',
@@ -285,7 +285,8 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
         <section className="rounded-md border border-[#e2e2e5] bg-white p-4">
           <div className="space-y-4">
             <fieldset><legend className="mb-1 text-[11px] font-semibold">Casting</legend><p className="mb-2 text-[9px] leading-4 text-[#88847d]">{castAssets.length ? `Jusqu’à ${MAX_CAST} personnes validées. Les mêmes personnes apparaissent dans toute la vidéo, sauf demande contraire dans la description.` : 'Aucune photo de casting validée. Ajoutez-en dans la médiathèque (catégorie Casting) pour garder les mêmes personnes d’un plan à l’autre.'}</p>{castAssets.length > 0 && <div className="grid max-h-48 grid-cols-3 gap-2 overflow-auto">{castAssets.map((member) => { const selected = castIds.includes(member.id); return <button type="button" key={member.id} onClick={() => { setCastIds((current) => selected ? current.filter((id) => id !== member.id) : current.length >= MAX_CAST ? current : [...current, member.id]); clearFormError(); }} aria-pressed={selected} className={`overflow-hidden rounded-md border text-left ${selected ? 'border-[#c51e1c] ring-1 ring-[#c51e1c]' : 'border-[#e5e2dd]'}`}><span className="relative block h-16 bg-[#f4f2ef]">{member.previewUrl && <Image src={member.previewUrl} alt="" fill sizes="100px" unoptimized className="object-cover" />}</span><span className="block truncate px-1.5 py-1 text-[9px] text-[#4d4a45]">{member.title ?? 'Personne'}</span></button>; })}</div>}</fieldset>
-            {castIds.length === 0 && <fieldset><legend className="mb-2 text-[11px] font-semibold">Personnage</legend><div className="flex flex-wrap gap-1.5">{characterOptions.map((option) => <button type="button" key={option.value || 'none'} onClick={() => setCharacter(option.value)} aria-pressed={character === option.value} className={`rounded-full border px-2.5 py-1.5 text-[10px] transition ${character === option.value ? 'border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]' : 'border-[#e5e2dd] text-[#77736d] hover:border-[#c51e1c]'}`}>{option.value ? option.label.replace('Une ', '') : 'Aucun'}</button>)}</div><p className="mt-2 text-[9px] leading-4 text-[#88847d]">Sans photo de casting, la ressemblance d’un plan à l’autre reste approximative.</p></fieldset>}
+            <p className="text-[9px] leading-4 text-[#88847d]">Sans casting, le véhicule reste vide, sauf si la description demande des personnes.</p>
+            {audioAssets.length > 0 && <label className="grid gap-1.5 text-[11px] font-semibold">Musique<select value={audioAssetId} onChange={(event) => setAudioAssetId(event.target.value)} className="min-h-9 rounded-md border border-[#e9e7e2] bg-white px-2 text-[10px] font-normal outline-none focus:border-[#c51e1c]"><option value="">Sans musique</option>{audioAssets.map((track) => <option key={track.id} value={track.id}>{track.title ?? 'Piste validée'}</option>)}</select></label>}
             <fieldset><legend className="mb-2 text-[11px] font-semibold">Lumière</legend><div className="flex flex-wrap gap-1.5">{lightingChoices.map(({ label, scene }) => <button type="button" key={label} onClick={() => setScenePresetId(scene.id)} aria-pressed={label === getLightingLabel(selectedScene?.lighting ?? '')} className={`rounded-full border px-2.5 py-1.5 text-[10px] transition ${label === getLightingLabel(selectedScene?.lighting ?? '') ? 'border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]' : 'border-[#e5e2dd] text-[#77736d] hover:border-[#c51e1c]'}`}>{label}</button>)}</div></fieldset>
           </div>
         </section>

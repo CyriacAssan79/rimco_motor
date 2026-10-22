@@ -4,7 +4,7 @@ import { errorResponse, getActor, HttpError } from '@/core/auth/guards';
 import { createSupabaseServerClient } from '@/core/supabase/server';
 import { createStorageAdminClient } from '@/core/storage/supabase';
 import { env } from '@/env';
-import { buildDirectorUserPrompt, buildSingleShotStoryboardInstruction, castDescriptionSchema, MAX_CAST_PER_VIDEO, validateStoryboardCast, vehicleDescriptionForPrompt, buildStoryboardInstruction, DIRECTOR_SYSTEM_PREFIX, fitStoryboardDurations, isPremiumTenSecondAd, isTierDurationSupported, singleShotStoryboardSchema, storyboardSchema, validatePremiumTenSecondAdStoryboard, validatePremiumTwentySecondStoryboard, validateSingleShotStoryboard, validateStoryboard, type ClipDurationSeconds, type StoryboardShot } from '@/core/storyboard';
+import { buildDirectorUserPrompt, buildSingleShotStoryboardInstruction, castDescriptionSchema, MAX_CAST_PER_VIDEO, validateStoryboardCast, vehicleDescriptionForPrompt, buildStoryboardInstruction, isTierDurationSupported, singleShotStoryboardSchema, storyboardDurationIssue, storyboardSchema, validatePremiumTwentySecondStoryboard, validateSingleShotStoryboard, validateStoryboard, type ClipDurationSeconds, type StoryboardShot } from '@/core/storyboard';
 import { getStoryboardModeRoute } from '@/core/providers/storyboard-routing';
 import { buildFalLlmInput, createFalLlmProvider, FalLlmBriefError, llmReservationUsd } from '@/core/providers/fal-llm';
 import { createFalClient } from '@fal-ai/client';
@@ -54,7 +54,6 @@ export async function POST(request: Request) {
     const input = parsedInput.data;
     if (!isTierDurationSupported(input.mode, input.durationSeconds)) throw new HttpError(422, 'Le niveau Premium est disponible uniquement en 20 secondes.');
     if (input.mode === 'premium' && input.workflow !== 'multi_clip') throw new HttpError(422, 'Le niveau Premium utilise quatre plans de 5 secondes.');
-    const premiumTenSecondAd = input.workflow === 'multi_clip' && isPremiumTenSecondAd(input.mode, input.purpose, input.durationSeconds);
     const premiumTwentySecond = input.workflow === 'multi_clip' && input.mode === 'premium' && input.durationSeconds === 20;
     if (input.workflow === 'multi_clip' && input.durationSeconds < 10) throw new HttpError(422, 'Le workflow multi-plans demande au moins 10 secondes de clips.');
     const supabase = await createSupabaseServerClient();
@@ -88,13 +87,14 @@ export async function POST(request: Request) {
     if (castError || (castAssets ?? []).length !== castAssetIds.length) throw new HttpError(422, 'Une photo de casting sélectionnée n’est pas validée pour votre marque.');
     const cast = castAssetIds.map((id) => castAssets!.find((asset) => asset.id === id)!).map((asset) => ({ id: asset.id, title: asset.title ?? 'Personne du casting' }));
     const route = getStoryboardModeRoute(input.mode);
-    const selectedVehicle = (input.vehiclePhotoIds.length
+    // Patch v3.2 (B7): the director sees every selected photo and place; the old per-tier cap came from reference-to-video endpoints.
+    const selectedVehicle = input.vehiclePhotoIds.length
       ? input.vehiclePhotoIds.map((id) => vehiclePhotos.find((photo) => photo.id === id)).filter((photo): photo is typeof vehiclePhotos[number] => Boolean(photo))
-      : vehiclePhotos).slice(0, route.maxReferenceImages);
-    if (!selectedVehicle.length || input.vehiclePhotoIds.length > 0 && selectedVehicle.length !== Math.min(input.vehiclePhotoIds.length, route.maxReferenceImages)) {
+      : vehiclePhotos;
+    if (!selectedVehicle.length || input.vehiclePhotoIds.length > 0 && selectedVehicle.length !== input.vehiclePhotoIds.length) {
       throw new HttpError(422, 'Une ou plusieurs photos véhicule sélectionnées ne sont plus disponibles.');
     }
-    const selectedPlaces = places.slice(0, Math.max(0, route.maxReferenceImages - 1));
+    const selectedPlaces = places;
     const instructionInput = {
       durationSeconds: input.durationSeconds,
       vehicle: vehicleDescriptionForPrompt(dossier),
@@ -105,10 +105,10 @@ export async function POST(request: Request) {
       cast,
     };
     const instruction = input.workflow === 'single'
-      ? buildSingleShotStoryboardInstruction(instructionInput)
+      ? buildSingleShotStoryboardInstruction({ ...instructionInput, mode: input.mode })
       : buildStoryboardInstruction({ ...instructionInput, durationSeconds: input.durationSeconds, mode: input.mode });
 
-    const directorSystemPrompt = `${DIRECTOR_SYSTEM_PREFIX} ${instruction}`;
+    const directorSystemPrompt = instruction;
     const directorUserPrompt = buildDirectorUserPrompt(input.direction);
     let shots: StoryboardShot[];
     let castDescription = '';
@@ -119,13 +119,12 @@ export async function POST(request: Request) {
       const total = input.durationSeconds;
       const durations = input.workflow === 'single'
         ? [total]
-        : premiumTenSecondAd ? [2, 3, 2, 3]
         : input.mode === 'standard' ? Array.from({ length: total / 5 }, () => 5)
             : premiumTwentySecond ? [5, 5, 5, 5]
           : total === 10 ? [5, 5] : total === 15 ? [8, 7] : [10, 10];
       const premiumTitles = ['Décor et révélation', 'Suivi trois-quarts', 'Détail du véhicule', 'Plan héros'];
       const premiumActions = ['Le véhicule apparaît dans le lieu choisi.', 'La caméra suit le véhicule de façon fluide.', 'Un détail visible sur les photos devient le sujet du plan.', 'Le véhicule s’immobilise dans un cadrage trois-quarts élégant.'];
-      const premiumCreative = premiumTenSecondAd || premiumTwentySecond;
+      const premiumCreative = premiumTwentySecond;
       const drafts = durations.map((durationSeconds, index) => ({
         title: premiumCreative ? premiumTitles[index] : index === 0 ? 'Révélation du véhicule' : 'Détail et signature',
         shotType: premiumCreative ? (['establishing', 'rolling', 'detail', 'hero'] as const)[index] : index === 0 ? 'rolling' as const : 'hero' as const,
@@ -163,14 +162,13 @@ export async function POST(request: Request) {
         });
         const responseSchema = input.workflow === 'single'
           ? singleShotStoryboardResponseSchema
-          : z.object({ castDescription: castDescriptionSchema.optional(), shots: storyboardSchema }).strict().transform(({ castDescription: description, shots }) => ({
-              castDescription: description,
-              shots: premiumTenSecondAd
-                ? (validatePremiumTenSecondAdStoryboard(shots), shots)
-                : premiumTwentySecond
-                  ? (validatePremiumTwentySecondStoryboard(shots), shots)
-                : fitStoryboardDurations(shots, input.durationSeconds, route.adapterFamily),
-            }));
+          // Patch v3.2 (A5): wrong durations make the answer invalid (automatic corrected retry), never silently rewritten.
+          : z.object({ castDescription: castDescriptionSchema.optional(), shots: storyboardSchema }).strict().superRefine(({ shots }, context) => {
+              const issue = premiumTwentySecond
+                ? shots.length === 4 && shots.every((shot) => shot.durationSeconds === 5) ? null : 'Exactement 4 plans de 5 secondes.'
+                : storyboardDurationIssue(shots, input.durationSeconds, route.adapterFamily);
+              if (issue) context.addIssue({ code: 'custom', path: ['shots'], message: issue });
+            });
         // Layer 1 (locked rules + approved references) goes in the system prompt; layer 2 (user brief) is the only user content.
         const result = await provider.buildStoryboardWithCost(directorUserPrompt, responseSchema, directorSystemPrompt);
         shots = result.fields.shots;
@@ -203,7 +201,6 @@ export async function POST(request: Request) {
     else if (env.PROVIDERS_MODE === 'mock') shots = shots.map((shot) => ({ ...shot, castIds: cast.map((member) => member.id) }));
     validateStoryboardCast(shots, cast.map((member) => member.id));
     if (input.workflow === 'single') validateSingleShotStoryboard(shots, input.durationSeconds as ClipDurationSeconds, route.adapterFamily);
-    else if (premiumTenSecondAd) validatePremiumTenSecondAdStoryboard(shots);
     else if (premiumTwentySecond) validatePremiumTwentySecondStoryboard(shots);
     else validateStoryboard(shots, input.durationSeconds, route.adapterFamily);
     const vehicleIds = new Set(selectedVehicle.map((photo) => photo.id));

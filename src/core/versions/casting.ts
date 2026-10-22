@@ -19,8 +19,11 @@ export function peopleForShot(brief: Record<string, unknown>, shot: StoryboardSh
     const members = [...new Set(shot?.castIds ?? [])].map((id) => cast.find((member) => member.id === id)).filter((member): member is StoredCastMember => Boolean(member));
     return { excludePeople: members.length === 0, castMembers: members, castTitles: members.map((member) => member.title), castDescription: null as string | null };
   }
-  const excludePeople = shouldExcludePeople(String(brief.character ?? ''), String(brief.user_direction ?? ''));
-  const description = typeof brief.castDescription === 'string' && !excludePeople ? brief.castDescription : null;
+  const sheet = typeof brief.castDescription === 'string' && brief.castDescription.trim() ? brief.castDescription : null;
+  // Patch v3.2 (F9): people appear only through the casting or the director's sheet, written when the brief asks for
+  // people. Versions created before keep the historical keyword detection.
+  const excludePeople = brief.promptRules === 'v3.2' ? !sheet : shouldExcludePeople(String(brief.character ?? ''), String(brief.user_direction ?? ''));
+  const description = excludePeople ? null : sheet;
   return { excludePeople, castMembers: [] as StoredCastMember[], castTitles: [] as string[], castDescription: description };
 }
 

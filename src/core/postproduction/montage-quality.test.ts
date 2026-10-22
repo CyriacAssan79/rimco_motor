@@ -66,16 +66,16 @@ describe('prompts orientés mouvement', () => {
   it('ne reprend plus le cadrage de la photo studio et décrit un véhicule en mouvement', () => {
     const still = buildKeyframePrompt({ shot: base, vehicle: 'Haval H6 beige', lighting: 'golden hour', format: '16:9', retryReason: null, vehicleReferenceCount: 3, hasLocationReference: true });
     expect(still).not.toContain('preserve its framing');
-    expect(still).toContain('ignore its original background, studio floor and studio lighting');
-    expect(still).toContain('Captured mid-drive, not parked');
+    expect(still).toContain("ignore the photos' backgrounds and studio light");
+    expect(still).toContain('Captured mid-drive');
     const motion = buildKeyframeAnimationPrompt({ shot: base, vehicle: 'Haval H6 beige', durationS: 5, mood: 'premium', lighting: 'golden hour' });
     expect(motion).not.toContain('smallest physically credible motion');
-    expect(motion).toContain('must never look parked');
+    expect(motion).toContain('Never a parked car');
   });
 
   it('garde le plan héros posé', () => {
     const motion = buildKeyframeAnimationPrompt({ shot: { ...base, shotType: 'hero' }, vehicle: 'Haval H6 beige', durationS: 5, mood: 'premium', lighting: 'golden hour' });
-    expect(motion).toContain('settles to a stop');
+    expect(motion).toContain('holds still');
   });
 
   it('traite le brief utilisateur comme une donnée encadrée', () => {

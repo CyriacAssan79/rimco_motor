@@ -13,7 +13,7 @@ import { createSupabaseServerClient } from '@/core/supabase/server';
 import { env } from '@/env';
 import { estimateGridPriceFcfa } from '@/core/pricing';
 import { firstObservedAt, type ProcessingMetrics } from './processing-metrics';
-import { expandSingleShotStoryboard, validateStoryboardCast, vehicleDescriptionForPrompt, finalVideoSeconds, isPremiumTenSecondAd, premiumTenSecondAdDurations, shotToPrompt, type ClipDurationSeconds, type StoryboardShot, validatePremiumTenSecondAdStoryboard, validatePremiumTwentySecondStoryboard, validateSingleShotStoryboard, validateStoryboard, validateTierDuration } from '@/core/storyboard';
+import { expandSingleShotStoryboard, validateStoryboardCast, vehicleDescriptionForPrompt, finalVideoSeconds,  type ClipDurationSeconds, type StoryboardShot, validatePremiumTwentySecondStoryboard, validateSingleShotStoryboard, validateStoryboard, validateTierDuration } from '@/core/storyboard';
 import { assembleShotMontage, extractRepresentativeVideoFrames } from '@/core/postproduction/pipeline';
 import { MAX_MONTAGE_ATTEMPTS, montageFailureDecision } from '@/core/postproduction/montage-failure';
 import { peopleForShot, storedCast, withCastReferences, type StoredCastMember } from './casting';
@@ -100,23 +100,18 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
   const keyframeMode = shouldGenerateKeyframes(input.storyMode);
   const animationEndpoint = KEYFRAME_VIDEO_ENDPOINTS[route.adapterFamily];
   const isSingleShot = input.workflow === 'single';
-  const premiumTenSecondAd = input.workflow === 'multi_clip' && isPremiumTenSecondAd(input.storyMode, input.purpose, input.clipDurationSeconds);
   const premiumTwentySecond = input.workflow === 'multi_clip' && input.storyMode === 'premium' && input.clipDurationSeconds === 20;
   // Patch v3.1 (D): the clip quality gate runs on every tier, not only Premium (variable name kept for a small diff).
   const premiumQualityMode = keyframeMode;
   validateTierDuration(input.storyMode, input.clipDurationSeconds);
   if (isSingleShot) validateSingleShotStoryboard(input.storyboard, input.clipDurationSeconds, route.adapterFamily);
-  else if (premiumTenSecondAd) validatePremiumTenSecondAdStoryboard(input.storyboard);
   else if (premiumTwentySecond) validatePremiumTwentySecondStoryboard(input.storyboard);
   else {
     validateStoryboard(input.storyboard, input.clipDurationSeconds, route.adapterFamily);
   }
   const generationShots = isSingleShot
     ? expandSingleShotStoryboard(input.storyboard[0], input.clipDurationSeconds, route.adapterFamily)
-    : premiumTenSecondAd
-      ? input.storyboard.map((shot) => ({ ...shot, durationSeconds: 4 }))
-      : input.storyboard;
-  const premiumDurations = premiumTenSecondAd ? premiumTenSecondAdDurations() : null;
+    : input.storyboard;
   const dossierIds = [...new Set([input.vehicleDossierId, ...input.vehicleDossierIds])];
   const [{ data: dossiers, error: dossierError }, { data: model, error: modelError }, { data: animationModel, error: animationModelError }] = await Promise.all([
     authenticated.from('vehicle_dossiers').select('id,make,model,color,variant,brand_id,assets(id,kind,path,title,angle,photo_role,status)').in('id', dossierIds).eq('brand_id', actor.brandId),
@@ -132,11 +127,11 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
   const asset = vehiclePhotos.find((photo) => photo.id === input.assetId) ?? vehiclePhotos[0];
   if (!asset) throw new HttpError(422, 'Le dossier ne contient aucune photo validée.');
   if (modelError || !model || model.adapter_family !== route.adapterFamily) throw new HttpError(503, `Le modèle ${route.label} n’est pas activé dans la configuration fal.`);
-  if (!model.pricing_verified_at || Date.now() - new Date(model.pricing_verified_at).getTime() > 7 * 24 * 60 * 60 * 1000) throw new HttpError(503, `Le tarif de ${route.label} doit être vérifié et daté avant tout lancement.`);
+  // Patch v3.2 (B3): an unverified price no longer blocks a launch; it is logged and recorded for the admin.
+  const pricingWarning = pricingWarningFor([model, ...(keyframeMode && animationModel ? [animationModel] : [])], route.label);
   if (keyframeMode && (animationModelError || !animationModel || animationModel.adapter_family !== route.adapterFamily || animationModel.tier !== input.storyMode)) throw new HttpError(503, `Le modèle image-clé ${route.label} n’est pas activé dans la configuration fal.`);
   const videoModel = keyframeMode ? animationModel : model;
   if (!videoModel) throw new HttpError(503, `Le modèle vidéo ${route.label} n’est pas configuré.`);
-  if (keyframeMode && (!videoModel.pricing_verified_at || Date.now() - new Date(videoModel.pricing_verified_at).getTime() > 7 * 24 * 60 * 60 * 1000)) throw new HttpError(503, `Le tarif du modèle vidéo ${route.label} doit être vérifié et daté avant tout lancement.`);
   if (!videoModel.allowed_formats?.includes(input.format)) throw new HttpError(422, `${route.label} ne prend pas en charge le format ${input.format}.`);
   if (generationShots.some((shot) => !videoModel.allowed_durations?.includes(shot.durationSeconds))) throw new HttpError(422, `La durée d’un clip n’est pas prise en charge par ${route.label}. Réduisez le nombre de plans ou choisissez une autre durée totale.`);
   if (input.audioAssetId) {
@@ -193,7 +188,7 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
     user_direction: input.description,
     location: input.location,
     setting: input.setting,
-    character: premiumTenSecondAd ? 'none; absolutely no visible driver, passenger, person, face, or human silhouette, including inside the vehicle' : castMode ? `Approved casting only: ${castAssets.map((member) => member.title).join('; ')}` : input.character || 'as explicitly requested in the user direction; otherwise none',
+    character: castMode ? `Approved casting only: ${castAssets.map((member) => member.title).join('; ')}` : input.character || 'as explicitly requested in the user direction; otherwise none',
     lighting: input.lighting,
     camera_movement: input.cameraMovement,
     mood: input.mood,
@@ -201,16 +196,11 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
     duration_s: input.clipDurationSeconds,
     complexity: input.complexity,
   });
-  const prompts = generationShots.map((shot, index) => {
-    const reference = vehiclePhotos.find((photo) => photo.id === shot.vehiclePhotoId);
-    return shotToPrompt(brief, shot, index, generationShots.length, '@', {
-      role: reference?.photo_role,
-      angle: reference?.angle,
-    });
-  });
+  // Every tier goes through keyframes; this path without keyframe is kept only for safety and uses the capped animation prompt.
+  const prompts = keyframeMode ? [] : generationShots.map((shot) => buildKeyframeAnimationPrompt({ shot, vehicle: vehicleDescription, durationS: shot.durationSeconds, mood: String(brief.mood ?? ''), lighting: String(brief.lighting ?? ''), excludePeople: true }));
   // Lighting per shot follows its place photo (a night place is never lit « comme le matin »).
-  const castDescription = castMode || premiumTenSecondAd ? '' : (input.castDescription ?? '').replace(/[<>{}]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 400);
-  const peopleBrief: Record<string, unknown> = { ...brief, castAssets, castDescription };
+  const castDescription = castMode ? '' : (input.castDescription ?? '').replace(/[<>{}]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 400);
+  const peopleBrief: Record<string, unknown> = { ...brief, castAssets, castDescription, promptRules: 'v3.2' };
   const endFrameShots = keyframeMode ? generationShots.map((shot) => needsEndKeyframe(shot, env.KEYFRAME_END_FRAME_ROLLING)) : generationShots.map(() => false);
   const endFrameCount = endFrameShots.filter(Boolean).length;
   const shotLighting = generationShots.map((shot) => {
@@ -261,7 +251,7 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
     department: actor.department, status: 'generating',
   }).select('id').single();
   if (videoError || !video) throw new HttpError(500, 'Impossible de créer la vidéo. Réessayez.');
-  const storedBrief = { ...brief, storyboard: generationShots, approvedStoryboard: input.storyboard, generationTier: input.storyMode, overlayLogo: input.overlayLogo, audioAssetId: input.audioAssetId ?? null, multiClipMode: !isSingleShot, singleStoryboardMode: isSingleShot, storyMode: input.storyMode, clipDurationSeconds: input.clipDurationSeconds, finalDurationSeconds: finalVideoSeconds(input.clipDurationSeconds), purpose: input.purpose, vehicleDossierId: input.vehicleDossierId, vehiclePhotoIds: selectedVehiclePhotos.map((photo) => photo.id), keyframeReferencesByShot, placeIds: input.placeIds, ...(premiumTenSecondAd ? { premiumAdCutMode: true, shotOutputDurations: premiumDurations!.editorial, videoRetryReserveSeconds: generatedSeconds } : {}), castAssets, castDescription, endFrameMode: endFrameCount > 0, ...(premiumQualityMode ? { videoQualityMode: true } : {}), costPlanUsd: { ...nominalCost, capUsd: env.VIDEO_COST_CAP_USD ?? null }, shotLighting, processingMetrics: { requestedAt: new Date().toISOString() }, shotProcessingMetrics: {}, ...(input.comparisonCampaignId ? { comparisonCampaignId: input.comparisonCampaignId } : {}) };
+  const storedBrief = { ...brief, storyboard: generationShots, approvedStoryboard: input.storyboard, generationTier: input.storyMode, overlayLogo: input.overlayLogo, audioAssetId: input.audioAssetId ?? null, multiClipMode: !isSingleShot, singleStoryboardMode: isSingleShot, storyMode: input.storyMode, clipDurationSeconds: input.clipDurationSeconds, finalDurationSeconds: finalVideoSeconds(input.clipDurationSeconds), purpose: input.purpose, vehicleDossierId: input.vehicleDossierId, vehiclePhotoIds: selectedVehiclePhotos.map((photo) => photo.id), keyframeReferencesByShot, placeIds: input.placeIds,  castAssets, castDescription, endFrameMode: endFrameCount > 0, promptRules: 'v3.2', ...(pricingWarning ? { pricingWarning } : {}), ...(premiumQualityMode ? { videoQualityMode: true } : {}), costPlanUsd: { ...nominalCost, capUsd: env.VIDEO_COST_CAP_USD ?? null }, shotLighting, processingMetrics: { requestedAt: new Date().toISOString() }, shotProcessingMetrics: {}, ...(input.comparisonCampaignId ? { comparisonCampaignId: input.comparisonCampaignId } : {}) };
   const { data: version, error: versionError } = await admin.from('video_versions').insert({
     video_id: video.id, number: 1, brief_json: storedBrief, generated_prompt: displayPrompts.join('\n\n--- Plan suivant ---\n\n'),
     ai_model_id: videoModel.id, fal_credential_id: falCredential.id, status: 'queued', generation_seconds: finalVideoSeconds(input.clipDurationSeconds),
@@ -1207,6 +1197,17 @@ export async function refreshLiveStoryboard(versionId: string, actor: Actor) {
     }
     return { id: versionId, status: 'postprocessing' as const, error: `${decision.userMessage} Nouvelle tentative automatique (${decision.attempts}/${MAX_MONTAGE_ATTEMPTS}).`, completedShots: latestShots.length, totalShots: latestShots.length };
   }
+}
+
+const PRICING_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+
+/** Patch v3.2 (B3): warning (log + version record) when a model price is missing or older than 30 days. */
+function pricingWarningFor(models: Array<{ name?: string | null; pricing_verified_at?: string | null }>, label: string): string | null {
+  const stale = models.filter((model) => !model.pricing_verified_at || Date.now() - new Date(model.pricing_verified_at).getTime() > PRICING_MAX_AGE_MS);
+  if (!stale.length) return null;
+  const message = `Tarif ${label} non revérifié depuis plus de 30 jours (${stale.map((model) => model.name ?? 'modèle').join(', ')}) : à contrôler dans fal.ai.`;
+  console.warn('pricing_unverified', JSON.stringify({ label, models: stale.map((model) => model.name) }));
+  return message;
 }
 
 async function signedUrl(admin: ReturnType<typeof createStorageAdminClient>, path: string) {

@@ -70,11 +70,11 @@ describe('B · contact pneu-route', () => {
     expect(buildKeyframePrompt({ shot: rolling, vehicle: 'H6', lighting: 'day', format: '16:9', retryReason: null })).toContain(GROUND_CONTACT);
     const hero = buildKeyframeAnimationPrompt({ shot: { ...rolling, shotType: 'hero', travelDirection: 'static' }, vehicle: 'H6', durationS: 5, mood: 'm', lighting: 'l' });
     expect(hero).toContain(GROUND_CONTACT);
-    expect(buildKeyframeAnimationPrompt({ shot: rolling, vehicle: 'H6', durationS: 5, mood: 'm', lighting: 'l' })).toContain('without artificial bouncing');
+    expect(buildKeyframeAnimationPrompt({ shot: rolling, vehicle: 'H6', durationS: 5, mood: 'm', lighting: 'l' })).toContain('the body has weight');
   });
   it('évite les personnes appuyées sur la carrosserie', () => {
-    expect(buildKeyframePrompt({ shot: rolling, vehicle: 'H6', lighting: 'day', format: '16:9', retryReason: null, castTitles: ['Awa'] })).toContain(NO_BODYWORK_CONTACT);
-    expect(buildSingleShotStoryboardInstruction({ durationSeconds: 5, vehicle: 'H6', vehiclePhotos: [{ id: 'front', role: 'exterior', title: 'Avant' }], places: [], purpose: 'advertising', cast: [{ id: 'awa', title: 'Awa' }] })).toContain('never lean on');
+    expect(buildKeyframePrompt({ shot: { ...rolling, shotType: 'hero', travelDirection: 'static' }, vehicle: 'H6', lighting: 'day', format: '16:9', retryReason: null, castTitles: ['Awa'] })).toContain(NO_BODYWORK_CONTACT);
+    expect(buildSingleShotStoryboardInstruction({ durationSeconds: 5, vehicle: 'H6', vehiclePhotos: [{ id: 'front', role: 'exterior', title: 'Avant' }], places: [], purpose: 'advertising', cast: [{ id: 'awa', title: 'Awa' }] })).toContain('never leaning on the car');
   });
 });
 
@@ -117,15 +117,15 @@ describe('Limite de longueur du prompt Kling (422 observé le 22/10)', () => {
     ...extra,
   });
 
-  it('ramène sous 2 500 caractères le plan roulant qui dépassait chez Kling', () => {
+  it('tient sous 2 500 caractères le plan roulant qui dépassait chez Kling, sans rien retirer (v3.2)', () => {
     const full = animation(rolling);
-    expect(full.length).toBeGreaterThan(ANIMATION_PROMPT_MAX_LENGTH.kling!);
+    expect(full.length).toBeLessThanOrEqual(2000);
     const fitted = animation(rolling, { maxLength: ANIMATION_PROMPT_MAX_LENGTH.kling });
-    expect(fitted.length).toBeLessThanOrEqual(2500);
+    expect(fitted).toBe(full);
     expect(fitted).toContain('Action: a.');
-    expect(fitted).toContain('Tyres roll without slipping');
-    expect(fitted).toContain('Keep exactly the same people');
-    expect(fitted).toContain('Avoid morphing');
+    expect(fitted).toContain('Tyres roll on the road without slipping');
+    expect(fitted).toContain('Same people as in the first frame');
+    expect(fitted).toContain('Mood:');
   });
 
   it('tient la limite dans le pire cas (champs au maximum, reprise et image de fin)', () => {

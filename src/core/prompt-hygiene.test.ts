@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BRAND_COLOR_DIRECTION, compactStoryboardText, shotDraftSchema, vehicleDescriptionForPrompt } from '@/core/storyboard';
+import { compactStoryboardText, shotDraftSchema, vehicleDescriptionForPrompt } from '@/core/storyboard';
 import { buildKeyframeAnimationPrompt, buildKeyframePrompt } from '@/core/providers/fal-keyframes';
 
 const shot = shotDraftSchema.parse({ title: 'Suivi', shotType: 'rolling', scene: 'Lagoon boulevard', framing: 'Medium tracking shot', location: 'Pont HKB, Abidjan', action: 'The SUV drives toward camera', camera: 'Low gimbal tracking backward', durationSeconds: 5, vehiclePhotoId: 'photo-1', locationPhotoId: null });
@@ -14,8 +14,8 @@ describe('hygiène des prompts', () => {
   });
 
   it('garde entiers les champs visuels un peu plus longs que la consigne du réalisateur', () => {
-    const camera = 'Low gimbal tracking shot moving backward in front of the SUV at matching speed, keeping a near-constant frame size, then easing gently to a stop on the final hero frame';
-    expect(camera.length).toBeGreaterThan(160);
+    const camera = 'Low gimbal tracking shot moving backward in front of the SUV, keeping a near-constant frame size, then easing gently to a stop';
+    expect(camera.length).toBeGreaterThan(120);
     expect(shotDraftSchema.parse({ ...shot, camera }).camera).toBe(camera);
   });
 
@@ -24,12 +24,12 @@ describe('hygiène des prompts', () => {
     expect(vehicleDescriptionForPrompt({ make: 'Haval', model: 'H6', color: null })).toBe('Haval H6');
   });
 
-  it('applique la charte bleu/rouge à l’image-clé et à l’animation sans recolorer le véhicule', () => {
+  it('ne demande plus de palette aux modèles (décision du 22/10) et garde la couleur du véhicule', () => {
     const keyframe = buildKeyframePrompt({ shot, vehicle: 'Haval H6 Beige', lighting: 'Lumière douce de fin de journée', format: '16:9', retryReason: null });
     const animation = buildKeyframeAnimationPrompt({ shot, vehicle: 'Haval H6 Beige', durationS: 5, mood: 'Premium', lighting: 'Lumière douce de fin de journée' });
     for (const prompt of [keyframe, animation]) {
-      expect(prompt).toContain(BRAND_COLOR_DIRECTION);
-      expect(prompt).toMatch(/never change the vehicle paint color/);
+      expect(prompt).not.toMatch(/90 %|blue tones/);
+      expect(prompt).toMatch(/paint/);
     }
   });
 });

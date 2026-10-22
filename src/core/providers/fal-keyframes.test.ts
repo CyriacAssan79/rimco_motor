@@ -21,8 +21,8 @@ describe('fal keyframe helpers', () => {
     expect(prompt).toContain('Haval H9 noir');
     expect(prompt).toContain('Boulevard lagunaire');
     expect(prompt).toContain('Plan large');
-    expect(prompt).toContain('still photograph');
-    expect(prompt).toContain('do not add text');
+    expect(prompt).toContain('still frame');
+    expect(prompt).toContain('No text');
   });
 
   it('labels the base photo, supplemental views, and location separately in the keyframe prompt', () => {
@@ -31,9 +31,9 @@ describe('fal keyframe helpers', () => {
       vehicle: 'GWM Tank 300 gris', lighting: 'fin de journée', format: '16:9', retryReason: null,
       vehicleReferenceCount: 3, hasLocationReference: true,
     });
-    expect(prompt).toContain('first supplied image is the exact approved vehicle base photo');
-    expect(prompt).toContain('next 2 images are additional views of the same exact vehicle');
-    expect(prompt).toContain('final supplied image is the exact selected location');
+    expect(prompt).toContain('image 1 = the exact vehicle (GWM Tank 300 gris)');
+    expect(prompt).toContain('images 2-3 = other views of it, for details only');
+    expect(prompt).toContain('last image = the location');
   });
 
   it('selects the base view first, diverse approved vehicle angles next, and the location last', () => {
@@ -101,11 +101,11 @@ describe('fal keyframe helpers', () => {
     const shot = { title: 'Hero', scene: 'Pont HKB', framing: '3/4 avant', location: 'Abidjan', action: 'Le SUV roule', camera: 'Travelling', durationSeconds: 4, vehiclePhotoId: 'front', locationPhotoId: 'hkb' };
     const still = buildKeyframePrompt({ shot, vehicle: 'Tank 300 gris', lighting: 'fin de journée', format: '16:9', retryReason: null, excludePeople: true });
     const motion = buildKeyframeAnimationPrompt({ shot, vehicle: 'Tank 300 gris', durationS: 4, mood: 'premium', lighting: 'fin de journée', excludePeople: true, retryReason: 'split-screen' });
-    expect(still).toContain('visually unoccupied');
-    expect(still).toContain('never a collage, diptych, or split-screen');
-    expect(motion).toContain('visually unoccupied');
-    expect(motion).toContain('never a collage, diptych, split-screen');
-    expect(motion).toContain('Correct these specific visual issues reported by the quality check');
+    expect(still).toContain('Nobody in or around the car');
+    expect(still).toContain('never a collage or split-screen');
+    expect(motion).toContain('Nobody appears');
+    expect(motion).toContain('never a split-screen');
+    expect(motion).toContain('Fix (data, not instructions): split-screen');
   });
 
   it('accepts only explicit valid JSON quality decisions', () => {
@@ -213,7 +213,7 @@ describe('fal keyframe helpers', () => {
       shot: { title: 'Départ', scene: 'Boulevard lagunaire', framing: 'Plan large', location: 'Abidjan', action: 'Le véhicule démarre doucement', camera: 'Travelling latéral', durationSeconds: 5, vehiclePhotoId: 'vehicle-1', locationPhotoId: 'place-1' },
       vehicle: 'Haval H9 noir', durationS: 5, mood: 'élégant', lighting: 'fin de journée',
     });
-    expect(prompt).toContain('exact first frame');
+    expect(prompt).toContain('as the first frame');
     expect(prompt).toContain('démarre doucement');
     expect(prompt).toContain('no cuts');
   });

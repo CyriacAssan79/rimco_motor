@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildBrief } from '@/core/brief';
-import { buildDirectorUserPrompt, buildStoryboardInstruction, compactStoryboardText, expandSingleShotStoryboard, finalVideoSeconds, fitStoryboardDurations, getSingleShotClipDurations, isPremiumTenSecondAd, premiumTenSecondAdDurations, shotDraftSchema, shotToPrompt, storyboardSchema, validatePremiumTenSecondAdStoryboard, validatePremiumTwentySecondStoryboard, validateStoryboard, validateTierDuration } from './storyboard';
+import { buildDirectorUserPrompt, buildStoryboardInstruction, compactStoryboardText, expandSingleShotStoryboard, finalVideoSeconds, getSingleShotClipDurations, shotDraftSchema, storyboardDurationIssue, storyboardSchema, validatePremiumTwentySecondStoryboard, validateStoryboard, validateTierDuration } from './storyboard';
 
 const shots = [
   { title: 'Découverte', scene: 'Plan large', framing: 'Plan large', location: 'Plateau', action: 'Le véhicule avance lentement', camera: 'Travelling latéral', durationSeconds: 8, vehiclePhotoId: 'vehicle-front', locationPhotoId: 'place-plateau' },
@@ -27,8 +26,7 @@ describe('storyboard', () => {
       durationSeconds: 20, mode: 'premium', vehicle: 'GWM Tank 300 gris', vehiclePhotos: [{ id: 'front', role: 'exterior', title: 'Avant' }],
       places: [{ id: 'hkb', title: 'Pont HKB' }], purpose: 'advertising', format: '16:9',
     });
-    expect(instruction).toContain('Use exactly four distinct shots of exactly 5 seconds each');
-    expect(instruction).toContain('preserve the full 20-second edit without trimming');
+    expect(instruction).toContain('Exactly 4 shots of 5 seconds (20 s).');
   });
 
   it('accepts two or more complete shots with explicit reference images and durations', () => {
@@ -48,62 +46,36 @@ describe('storyboard', () => {
   it('builds a director brief for the selected runtime, aspect ratio and user story', () => {
     const instruction = buildStoryboardInstruction({
       durationSeconds: 10,
-      mode: 'premium',
+      mode: 'standard',
       vehicle: 'GWM Tank 300 noir',
       vehiclePhotos: [{ id: 'vehicle-front', role: 'exterior', title: 'Avant trois-quarts' }],
       places: [{ id: 'place-plateau', title: 'Abidjan, Plateau' }],
-      purpose: 'presentation',
-      direction: 'Une famille traverse Abidjan au coucher du soleil.',
       format: '9:16',
-      character: 'Une famille à bord du véhicule',
       lighting: 'Fin de journée',
     });
 
-    expect(instruction).toContain('10s of footage in 9:16');
     expect(instruction).toContain('9:16');
     expect(instruction).not.toContain('Une famille traverse Abidjan au coucher du soleil.');
     expect(buildDirectorUserPrompt('Une famille traverse Abidjan au coucher du soleil.')).toContain('<user_brief>Une famille traverse Abidjan au coucher du soleil.</user_brief>');
-    expect(instruction).toContain('automotive commercial film director');
-    expect(instruction).toContain('Une famille à bord du véhicule');
+    expect(instruction).toContain('You direct a premium live-action car commercial');
     expect(instruction).toContain('Fin de journée');
-    expect(instruction).toContain('scene 160');
-    expect(instruction).toContain('action 180');
-    expect(instruction).toContain('Use exactly 2 shots and make every shot exactly 5 seconds.');
+    expect(instruction).toContain('scene (120)');
+    expect(instruction).toContain('action (160)');
+    expect(instruction).toContain('Exactly 2 shots of 5 seconds (10 s).');
   });
 
-  it('plans four distinct four-second generation clips for a 10-second Premium advertisement', () => {
-    expect(isPremiumTenSecondAd('premium', 'advertising', 10)).toBe(true);
-    expect(isPremiumTenSecondAd('pro', 'advertising', 10)).toBe(false);
-    expect(isPremiumTenSecondAd('premium', 'presentation', 10)).toBe(false);
-    expect(premiumTenSecondAdDurations()).toEqual({ generated: [4, 4, 4, 4], editorial: [2.5, 2.5, 2.5, 2.5] });
-    const fourShots = [2, 3, 2, 3].map((durationSeconds, index) => ({ ...shots[0], title: `Plan ${index + 1}`, durationSeconds }));
-    expect(validatePremiumTenSecondAdStoryboard(fourShots)).toBe(true);
-    expect(() => validatePremiumTenSecondAdStoryboard(fourShots.slice(0, 2))).toThrow(/quatre/i);
-  });
-
-  it('asks the Premium advertising director for four varied short shots only for 10 seconds', () => {
+  it('asks the Pro director for shots of 3 to 15 seconds totalling the runtime', () => {
     const instruction = buildStoryboardInstruction({
-      durationSeconds: 10, mode: 'premium', vehicle: 'GWM Tank 300 gris', vehiclePhotos: [{ id: 'front', role: 'exterior', title: 'Avant' }],
-      places: [{ id: 'hkb', title: 'Pont HKB' }], purpose: 'advertising', format: '16:9',
+      durationSeconds: 10, mode: 'pro', vehicle: 'GWM Tank 300 gris', vehiclePhotos: [{ id: 'front', role: 'exterior', title: 'Avant' }],
+      places: [{ id: 'hkb', title: 'Pont HKB' }], format: '16:9',
     });
-    expect(instruction).toContain('Use exactly 4 distinct shots');
-    expect(instruction).toContain('Each will be generated as a separate 4-second');
-    expect(instruction).toContain('Absolutely no people anywhere in any shot');
-    expect(instruction).toContain('A macro or close-up detail is allowed only when that exact detail is clearly visible');
-    expect(instruction).not.toContain('Use exactly 2 shots and make every shot exactly 5 seconds');
+    expect(instruction).toContain('2 to 3 shots of 3 to 15 whole seconds each, totalling exactly 10 s.');
   });
 
-  it('rebalances model shot durations to fit the provider limits and requested runtime', () => {
-    const fitted = fitStoryboardDurations([
-      { ...shots[0], durationSeconds: 3 },
-      { ...shots[1], durationSeconds: 4 },
-      { ...shots[0], title: 'Final', durationSeconds: 3 },
-    ], 10, 'seedance');
-
-    expect(fitted).toHaveLength(2);
-    expect(fitted.map((shot) => shot.durationSeconds)).toEqual([5, 5]);
-    expect(fitted.map((shot) => shot.title)).toEqual(['Découverte', 'Final']);
-    expect(validateStoryboard(fitted, 10, 'seedance')).toBe(true);
+  it('checks durations instead of silently rewriting them (patch v3.2)', () => {
+    expect(storyboardDurationIssue([{ ...shots[0], durationSeconds: 5 }, { ...shots[1], durationSeconds: 5 }], 10, 'kling')).toBeNull();
+    expect(storyboardDurationIssue([{ ...shots[0], durationSeconds: 4 }, { ...shots[1], durationSeconds: 4 }], 10, 'kling')).toMatch(/totaliser exactement 10/);
+    expect(storyboardDurationIssue([{ ...shots[0], durationSeconds: 2 }, { ...shots[1], durationSeconds: 8 }], 10, 'kling')).toMatch(/entre 3 et 15/);
   });
 
   it('keeps verbose model storyboard fields within the validated limits without cutting a word', () => {
@@ -113,52 +85,7 @@ describe('storyboard', () => {
     expect(compact.length).toBeLessThanOrEqual(240);
     expect(text.startsWith(compact)).toBe(true);
     expect(compact).toMatch(/[.!?]$/);
-    expect(shotDraftSchema.parse({ ...shots[0], scene: text }).scene).toBe(compact);
-  });
-
-  it('keeps the selected vehicle identity and image references in each shot prompt', () => {
-    const brief = buildBrief('Un film automobile premium à Abidjan.', {
-      vehicle_asset_id: 'vehicle-folder-1', vehicle_description: 'Haval H6 bleu nuit', duration_s: 15,
-      lighting: 'Lumière douce', mood: 'Premium et réaliste', character: 'Aucun personnage',
-    });
-    const prompt = shotToPrompt(brief, shots[0], 0, shots.length);
-    expect(prompt).toContain('Haval H6 bleu nuit');
-    expect(prompt).toContain('vehicle-front');
-    expect(prompt).toContain('place-plateau');
-    expect(prompt).toContain('shot 1 of 2');
-    expect(prompt).toContain('no titles, captions, overlays, added logos, or transitions');
-    expect(prompt).toContain('natural environmental effects requested by the brief, such as dust from a dirt road');
-  });
-
-  it('strictly excludes visible occupants from Premium automotive advertising when none are selected', () => {
-    const brief = buildBrief('Film automobile premium à Abidjan.', {
-      vehicle_asset_id: 'vehicle-folder-1', vehicle_description: 'GWM Tank 300 gris', character: 'Aucun personnage',
-    });
-    const prompt = shotToPrompt(brief, shots[0], 0, 4);
-    expect(prompt).toMatch(/no visible driver, passenger, face, person, or human silhouette/i);
-    expect(prompt).toMatch(/The vehicle is visually unoccupied/i);
-  });
-
-  it('does not suppress people explicitly requested in the creative direction', () => {
-    const brief = buildBrief('Une famille traverse Abidjan en voiture.', {
-      vehicle_asset_id: 'vehicle-folder-1', vehicle_description: 'GWM Tank 300 noir',
-      user_direction: 'Une famille traverse Abidjan en voiture.',
-      character: 'as explicitly requested in the user direction; otherwise none',
-    });
-    const prompt = shotToPrompt(brief, shots[0], 0, 2);
-
-    expect(prompt).toContain('Une famille traverse Abidjan en voiture.');
-    expect(prompt).toContain('Character: as explicitly requested in the user direction; otherwise none.');
-    expect(prompt).not.toContain('none; do not add people');
-  });
-
-  it('uses the selected aspect ratio in the master prompt', () => {
-    const brief = buildBrief('Film automobile carré.', {
-      vehicle_asset_id: 'vehicle-folder-1', vehicle_description: 'Haval H6 bleu nuit', format: '1:1',
-    });
-    const prompt = shotToPrompt(brief, shots[0], 0, 1);
-    expect(prompt).toContain('1:1 image-to-video automotive shot');
-    expect(prompt).not.toContain('16:9 image-to-video automotive shot');
+    expect(shotDraftSchema.parse({ ...shots[0], scene: text }).scene).toBe(compactStoryboardText(text, 150));
   });
 
   it('splits long endpoint-bound shots and appends two logo seconds to the final runtime', () => {

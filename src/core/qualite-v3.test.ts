@@ -5,8 +5,9 @@ vi.mock('@fal-ai/client', () => ({ createFalClient: () => ({ queue: { submit: mo
 
 import {
   buildEndKeyframePrompt, buildKeyframeAnimationPrompt, buildKeyframePrompt, buildKeyframeQualityPrompt, buildVideoQualityPrompt,
-  keyframeVideoProviders, KEYFRAME_VIDEO_ENDPOINTS, needsEndKeyframe, NO_READABLE_TEXT_CHECK, travelSentence, WHEEL_PHYSICS, BLANK_SIGNAGE,
+  keyframeVideoProviders, KEYFRAME_VIDEO_ENDPOINTS, needsEndKeyframe, NO_READABLE_TEXT_CHECK, travelSentence, WHEEL_PHYSICS,
 } from '@/core/providers/fal-keyframes';
+import { NO_TEXT_IMAGE, NO_TEXT_VIDEO } from '@/core/prompts/rules';
 import { buildSingleShotStoryboardInstruction, buildStoryboardInstruction, shotDraftSchema, validateStoryboardCast, type StoryboardShot } from '@/core/storyboard';
 import { peopleForShot, withCastReferences } from '@/core/versions/casting';
 import { chooseMontageFps, makeMultiClipMontageArgs, parseFfmpegFps } from '@/core/postproduction/ffmpeg-args';
@@ -52,7 +53,7 @@ describe('P3 · mouvement naturel', () => {
   });
 
   it('écrit une phrase de déplacement contraignante', () => {
-    expect(travelSentence(rolling)).toBe('The vehicle travels from left to right across the frame at a steady cruising speed.');
+    expect(travelSentence(rolling)).toBe('The car travels from left to right across the frame at a steady cruising speed.');
     expect(travelSentence(hero)).toContain('stopped');
     expect(travelSentence({ shotType: 'rolling' })).toBe('');
   });
@@ -60,7 +61,7 @@ describe('P3 · mouvement naturel', () => {
   it('impose la physique des roues aux plans roulants seulement, sans travelling à vitesse égale', () => {
     const moving = buildKeyframeAnimationPrompt({ shot: rolling, vehicle: 'Haval H6', durationS: 5, mood: 'premium', lighting: 'day' });
     expect(moving).toContain(WHEEL_PHYSICS);
-    expect(moving).toContain('visibly covers ground');
+    expect(moving).toContain('covers ground');
     expect(moving).not.toContain('at matching speed');
     const still = buildKeyframeAnimationPrompt({ shot: hero, vehicle: 'Haval H6', durationS: 5, mood: 'premium', lighting: 'day' });
     expect(still).not.toContain(WHEEL_PHYSICS);
@@ -70,8 +71,8 @@ describe('P3 · mouvement naturel', () => {
     const base = { durationSeconds: 20 as const, mode: 'premium' as const, vehicle: 'Haval H6', vehiclePhotos: [{ id: 'front', role: 'exterior', title: 'Avant' }], places: [], purpose: 'advertising' as const, format: '16:9' as const };
     const instruction = buildStoryboardInstruction(base);
     expect(instruction).toContain('travelDirection');
-    expect(instruction).toContain('180-degree rule');
-    expect(instruction).toContain('at most one side-tracking shot');
+    expect(instruction).toContain('Keep one lateral direction for the whole film');
+    expect(instruction).toContain('At most one side-tracking shot');
   });
 
   it('contrôle que la voiture avance dans les plans roulants', () => {
@@ -83,8 +84,8 @@ describe('P3 · mouvement naturel', () => {
 describe('P6 · aucun texte dans les décors', () => {
   it('rend vierges les enseignes du lieu dans l’image clé et l’animation', () => {
     const still = buildKeyframePrompt({ shot: rolling, vehicle: 'Haval H6', lighting: 'day', format: '16:9', retryReason: null, vehicleReferenceCount: 2, hasLocationReference: true });
-    expect(still).toContain(BLANK_SIGNAGE);
-    expect(buildKeyframeAnimationPrompt({ shot: rolling, vehicle: 'Haval H6', durationS: 5, mood: 'm', lighting: 'l' })).toContain(BLANK_SIGNAGE);
+    expect(still).toContain(NO_TEXT_IMAGE);
+    expect(buildKeyframeAnimationPrompt({ shot: rolling, vehicle: 'Haval H6', durationS: 5, mood: 'm', lighting: 'l' })).toContain(NO_TEXT_VIDEO);
   });
 
   it('fait signaler par les juges tout texte lisible, y compris recopié du lieu', () => {
@@ -125,10 +126,10 @@ describe('P2 · casting', () => {
 
   it('demande les mêmes visages et tenues dans l’image clé et l’animation', () => {
     const still = buildKeyframePrompt({ shot: rolling, vehicle: 'Haval H6', lighting: 'day', format: '16:9', retryReason: null, vehicleReferenceCount: 1, hasLocationReference: true, castTitles: ['Awa'] });
-    expect(still).toContain('casting photo of the real people in this shot');
-    expect(still).toContain('exactly the same face, skin tone, hairstyle, build and clothing');
+    expect(still).toContain('images 2-2 = casting photos');
+    expect(still).toContain('same face, hair, skin tone and clothes');
     const motion = buildKeyframeAnimationPrompt({ shot: rolling, vehicle: 'Haval H6', durationS: 5, mood: 'm', lighting: 'l', castTitles: ['Awa'] });
-    expect(motion).toContain('same people as in the first frame');
+    expect(motion).toContain('Same people as in the first frame');
   });
 
   it('sans casting, réutilise la fiche texte du réalisateur dans chaque plan', () => {
@@ -178,7 +179,7 @@ describe('P5 · image de fin des plans roulants', () => {
   it('décrit la même prise, voiture plus loin dans son sens de marche', () => {
     const prompt = buildEndKeyframePrompt({ shot: rolling, durationS: 5, format: '16:9', excludePeople: true });
     expect(prompt).toContain('further to the right along the road');
-    expect(prompt).toContain(BLANK_SIGNAGE);
+    expect(prompt).toContain('every sign in the place is blank');
     expect(buildKeyframeAnimationPrompt({ shot: rolling, vehicle: 'H6', durationS: 5, mood: 'm', lighting: 'l', hasEndFrame: true })).toContain('exact last frame');
   });
 
