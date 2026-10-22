@@ -27,7 +27,7 @@ import { createFalClient } from '@fal-ai/client';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { getActiveFalCredential, getFalCredentialById, pruneRetiredFalCredentials } from '@/core/providers/fal-credential-vault';
-import { falErrorStatusCode, isFalPollDue, planFalPollFailure } from '@/core/providers/fal-polling';
+import { falErrorStatusCode, isFalInputRejection, isFalPollDue, planFalPollFailure } from '@/core/providers/fal-polling';
 
 const MAX_VIDEO_BYTES = 100 * 1024 * 1024;
 const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
@@ -50,7 +50,7 @@ async function recordPollFailure(input: {
     provider_poll_failure_count: plan.failureCount,
     provider_next_poll_at: plan.nextPollAt,
     provider_last_poll_error: detail,
-    provider_reconciliation_required: terminal,
+    provider_reconciliation_required: terminal && !isFalInputRejection(input.cause),
     updated_at: input.now,
     error_message: terminal ? `Le suivi fal a échoué (${falErrorStatusCode(input.cause) ?? 'réseau'}) : ${detail}` : null,
   };

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isFalPollDue, isTransientFalPollFailure, planFalPollFailure } from './fal-polling';
+import { isFalInputRejection, isFalPollDue, isTransientFalPollFailure, planFalPollFailure } from './fal-polling';
 
 describe('fal polling retry policy', () => {
   it.each([400, 401, 403, 404, 422])('fails immediately on provider status %s', (status) => {
@@ -24,5 +24,19 @@ describe('fal polling retry policy', () => {
     expect(isFalPollDue('2026-10-19T00:00:15.000Z', now)).toBe(false);
     expect(isFalPollDue('2026-10-19T00:00:15.000Z', now + 15_000)).toBe(true);
     expect(isFalPollDue(null, now)).toBe(true);
+  });
+});
+
+describe('rejet du contenu par fal', () => {
+  it.each([400, 422])('le statut %s ne demande pas de réconciliation des coûts', (status) => {
+    expect(isFalInputRejection({ status })).toBe(true);
+  });
+
+  it.each([401, 403, 404, 500, 503])('le statut %s garde la réconciliation manuelle', (status) => {
+    expect(isFalInputRejection({ status })).toBe(false);
+  });
+
+  it('une erreur réseau sans statut garde la réconciliation manuelle', () => {
+    expect(isFalInputRejection(new Error('fetch failed'))).toBe(false);
   });
 });

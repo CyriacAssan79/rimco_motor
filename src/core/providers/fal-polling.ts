@@ -15,6 +15,15 @@ export function falErrorStatusCode(error: unknown): number | null {
   return typeof value === 'number' ? value : null;
 }
 
+/**
+ * fal rejected the request content (400/422, e.g. a prompt over the model limit): nothing was generated,
+ * so no cost has to be reconciled. Any other terminal error keeps the manual reconciliation.
+ */
+export function isFalInputRejection(error: unknown): boolean {
+  const status = falErrorStatusCode(error);
+  return status === 400 || status === 422;
+}
+
 export function isTransientFalPollFailure(error: unknown): boolean {
   const status = falErrorStatusCode(error);
   return status === null || status === 429 || status >= 500 && status <= 599;
