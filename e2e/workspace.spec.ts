@@ -6,8 +6,8 @@ const adminPassword = process.env.E2E_ADMIN_PASSWORD;
 
 if (mockWithoutSupabase) {
   test('le studio de simulation est utilisable sans compte Supabase', async ({ page }) => {
-    await page.goto('/studio');
-    await expect(page.getByRole('heading', { name: 'Créer une vidéo' })).toBeVisible();
+    await page.goto('/');
+    await expect(page.getByRole('heading', { name: /^Bonjour / })).toBeVisible();
     await expect(page.getByText('Mode simulation', { exact: false })).toBeVisible();
     await expect(page.getByText('Durée de la vidéo')).toBeVisible();
     await expect(page.getByText('Niveau de génération')).toBeVisible();
@@ -18,14 +18,14 @@ if (mockWithoutSupabase) {
 
   test('une génération simulée arrive à son état prêt', async ({ page }) => {
     test.setTimeout(90_000);
-    await page.goto('/studio');
+    await page.goto('/');
     await page.getByLabel('Véhicule').selectOption({ index: 1 });
     await expect(page.getByLabel('Véhicule')).not.toHaveValue('');
     await expect(page.getByText(/vue\(s\) rattachée/)).toBeVisible();
     await expect(page.getByRole('button', { name: /Générer la vidéo/ })).toBeEnabled({ timeout: 15_000 });
     const title = `Essai RIMCO ${Date.now()}`;
     await page.getByLabel('Titre de la vidéo').fill(title);
-    await page.getByLabel(/Précision complémentaire/).fill('Une lumière naturelle douce sur un boulevard calme.');
+    await page.getByLabel('Description de la vidéo').fill('Une lumière naturelle douce sur un boulevard calme.');
     const createRequest = page.waitForRequest((request) => request.url().endsWith('/api/versions') && request.method() === 'POST');
     await page.getByRole('button', { name: /Générer la vidéo/ }).click();
     expect((await createRequest).postDataJSON()).toMatchObject({ overlayLogo: true, title });
@@ -43,12 +43,10 @@ if (mockWithoutSupabase) {
     await expect(page).toHaveURL('/', { timeout: 10_000 });
   }
 
-  test('connexion administrateur puis accès au studio de création', async ({ page }) => {
+  test('connexion administrateur : le studio de création est sur l’accueil', async ({ page }) => {
     await signIn(page, adminEmail, adminPassword);
     await expect(page).toHaveURL('/');
     await expect(page.getByRole('heading', { name: /^Bonjour / })).toBeVisible();
-    await page.getByRole('link', { name: 'Créer la vidéo' }).click();
-    await expect(page.getByRole('heading', { name: 'Créer une vidéo' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Votre vidéo' })).toBeVisible();
     await expect(page.getByLabel('Véhicule')).toBeVisible();
     await expect(page.getByText('Durée de la vidéo')).toBeVisible();
@@ -58,7 +56,7 @@ if (mockWithoutSupabase) {
   test('administrateur lance une génération storyboard simulée', async ({ page }) => {
     test.setTimeout(90_000);
     await signIn(page, adminEmail, adminPassword);
-    await page.goto('/studio');
+    await page.goto('/');
     await page.getByLabel('Véhicule').selectOption({ index: 1 });
     await expect(page.getByLabel('Véhicule')).not.toHaveValue('');
     await expect(page.getByText(/vue\(s\) rattachée/)).toBeVisible();

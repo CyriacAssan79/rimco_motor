@@ -9,7 +9,6 @@ type Role = 'collaborateur' | 'valideur' | 'admin';
 type NavItem = { label: string; href: string; icon: string; roles?: Role[]; badge?: boolean };
 const nav: NavItem[] = [
   { label: 'Accueil', href: '/', icon: 'home' },
-  { label: 'Studio de création', href: '/studio', icon: 'spark', roles: ['collaborateur', 'admin'] },
   { label: 'File de génération', href: '/file-generation', icon: 'queue', roles: ['collaborateur', 'admin'] },
   { label: 'À valider', href: '/a-valider', icon: 'check', roles: ['valideur', 'admin'], badge: true },
   { label: 'Bibliothèque', href: '/bibliotheque', icon: 'film' },
@@ -61,7 +60,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   if (pathname === '/connexion') return <>{children}</>;
   const role = actor?.role ?? 'collaborateur';
   const visibleNav = nav.filter((item) => !item.roles || item.roles.includes(role));
-  const page = visibleNav.find((item) => item.href === pathname)?.label ?? 'Studio de création';
+  const page = visibleNav.find((item) => item.href === pathname)?.label ?? 'Accueil';
   const roleLabel = role === 'admin' ? 'Administrateur' : role === 'valideur' ? 'Valideur' : 'Collaborateur';
   return <div className="min-h-screen bg-[var(--background)] text-[var(--ink)]">
     <aside className="fixed inset-y-0 left-0 z-20 hidden w-[232px] flex-col border-r border-[var(--border)] bg-white px-3 py-5 text-[#17171a] lg:flex">

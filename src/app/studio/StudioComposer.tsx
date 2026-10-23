@@ -1,95 +1,212 @@
-'use client';
+"use client";
 
-import { useEffect, useRef, useState, type FormEvent } from 'react';
-import Link from 'next/link';
-import Image from 'next/image';
-import { formatFcfa } from '@/core/pricing';
-import { getScenePresets, getScenePreset, inferVehicleCategory } from '@/core/scenes/catalog';
-import { MAX_STORYBOARD_DIRECTION_LENGTH } from '@/core/storyboard-direction';
+import { useEffect, useRef, useState, type FormEvent } from "react";
+import Link from "next/link";
+import Image from "next/image";
+import { formatFcfa } from "@/core/pricing";
+import {
+  getScenePresets,
+  getScenePreset,
+  inferVehicleCategory,
+} from "@/core/scenes/catalog";
+import { MAX_STORYBOARD_DIRECTION_LENGTH } from "@/core/storyboard-direction";
 
-type Format = '16:9' | '9:16' | '1:1';
-type Job = { id: string; status: string; error?: string; prompt?: string; completedShots?: number; totalShots?: number; completedKeyframes?: number; totalKeyframes?: number; checkedQualityShots?: number; totalQualityShots?: number; shotProgress?: Array<{ number: number; title: string; status: string; qualityStatus: string }>; keyframes?: Array<{ number: number; title: string; url: string }>; estimatedPriceFcfa?: number; processingStage?: string; stageElapsedSeconds?: number | null; nextPollInSeconds?: number; reconciliationRequired?: boolean; qualityWarnings?: Array<{ shotNumber: number; title: string; stage: 'keyframe' | 'video'; issues: string[] }> };
-type Model = { id: string; tier: string; formats: Format[]; durations: number[]; estimatedPricesFcfa: Record<string, number>; isDefault: boolean };
-type VehicleDossier = { id: string | null; key: string; dossierIds?: string[]; make: string; model: string; color?: string | null; variant?: string | null; photos: Array<{ id: string; photoRole: string; title: string; angle?: string | null; previewUrl?: string | null }> };
-type PlaceAsset = { id: string; title?: string; category?: string; previewUrl?: string | null; isCurated?: boolean };
+type Format = "16:9" | "9:16" | "1:1";
+type Job = {
+  id: string;
+  status: string;
+  error?: string;
+  prompt?: string;
+  completedShots?: number;
+  totalShots?: number;
+  completedKeyframes?: number;
+  totalKeyframes?: number;
+  checkedQualityShots?: number;
+  totalQualityShots?: number;
+  shotProgress?: Array<{
+    number: number;
+    title: string;
+    status: string;
+    qualityStatus: string;
+  }>;
+  keyframes?: Array<{ number: number; title: string; url: string }>;
+  estimatedPriceFcfa?: number;
+  processingStage?: string;
+  stageElapsedSeconds?: number | null;
+  nextPollInSeconds?: number;
+  reconciliationRequired?: boolean;
+  qualityWarnings?: Array<{
+    shotNumber: number;
+    title: string;
+    stage: "keyframe" | "video";
+    issues: string[];
+  }>;
+};
+type Model = {
+  id: string;
+  tier: string;
+  formats: Format[];
+  durations: number[];
+  estimatedPricesFcfa: Record<string, number>;
+  isDefault: boolean;
+};
+type VehicleDossier = {
+  id: string | null;
+  key: string;
+  dossierIds?: string[];
+  make: string;
+  model: string;
+  color?: string | null;
+  variant?: string | null;
+  photos: Array<{
+    id: string;
+    photoRole: string;
+    title: string;
+    angle?: string | null;
+    previewUrl?: string | null;
+  }>;
+};
+type PlaceAsset = {
+  id: string;
+  title?: string;
+  category?: string;
+  previewUrl?: string | null;
+  isCurated?: boolean;
+};
 type CastAsset = { id: string; title?: string; previewUrl?: string | null };
 const MAX_CAST = 2;
-type StoryShot = { title: string; shotType?: 'establishing' | 'rolling' | 'detail' | 'hero'; travelDirection?: string; travelSpeed?: string; castIds?: string[]; scene: string; framing: string; location: string; action: string; camera: string; durationSeconds: number; vehiclePhotoId: string; locationPhotoId?: string | null };
+type StoryShot = {
+  title: string;
+  shotType?: "establishing" | "rolling" | "detail" | "hero";
+  travelDirection?: string;
+  travelSpeed?: string;
+  castIds?: string[];
+  scene: string;
+  framing: string;
+  location: string;
+  action: string;
+  camera: string;
+  durationSeconds: number;
+  vehiclePhotoId: string;
+  locationPhotoId?: string | null;
+};
 const durationOptions = [5, 10, 15, 20];
 const premiumDurationOptions = [20];
-const lightOptions = ['Lumière naturelle claire du matin'];
+const lightOptions = ["Lumière naturelle claire du matin"];
 
 function getLightingLabel(lighting: string): string {
-  const normalized = lighting.toLocaleLowerCase('fr');
-  if (normalized.includes('lever du jour')) return 'Lever du jour';
-  if (normalized.includes('fin de journée')) return 'Fin de journée';
-  if (normalized.includes('nuit')) return 'Nuit';
-  if (normalized.includes('soirée')) return 'Soirée';
-  if (normalized.includes('intérieur')) return 'Intérieur';
-  if (normalized.includes('matin')) return 'Matin';
+  const normalized = lighting.toLocaleLowerCase("fr");
+  if (normalized.includes("lever du jour")) return "Lever du jour";
+  if (normalized.includes("fin de journée")) return "Fin de journée";
+  if (normalized.includes("nuit")) return "Nuit";
+  if (normalized.includes("soirée")) return "Soirée";
+  if (normalized.includes("intérieur")) return "Intérieur";
+  if (normalized.includes("matin")) return "Matin";
   return lighting;
 }
 
-
-function shotProgressLabel(shot: NonNullable<Job['shotProgress']>[number]) {
-  if (shot.qualityStatus === 'checking') return 'Contrôle qualité';
-  if (shot.qualityStatus === 'passed') return 'Validé';
-  if (shot.qualityStatus === 'retrying') return 'Reprise du plan';
-  if (shot.qualityStatus === 'failed' || shot.status === 'failed') return 'Échec qualité';
-  if (shot.status === 'generating') return 'Animation';
-  if (shot.status === 'ready') return 'Prêt au montage';
-  if (shot.status === 'postprocessing') return 'Contrôle qualité';
-  return 'Image-clé';
+function shotProgressLabel(shot: NonNullable<Job["shotProgress"]>[number]) {
+  if (shot.qualityStatus === "checking") return "Contrôle qualité";
+  if (shot.qualityStatus === "passed") return "Validé";
+  if (shot.qualityStatus === "retrying") return "Reprise du plan";
+  if (shot.qualityStatus === "failed" || shot.status === "failed")
+    return "Échec qualité";
+  if (shot.status === "generating") return "Animation";
+  if (shot.status === "ready") return "Prêt au montage";
+  if (shot.status === "postprocessing") return "Contrôle qualité";
+  return "Image-clé";
 }
 
-export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
+export function StudioComposer({ mode }: { mode: "mock" | "live" }) {
   const [availableModels, setAvailableModels] = useState<Model[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
-  const [modelsError, setModelsError] = useState('');
+  const [modelsError, setModelsError] = useState("");
   const [assetsLoading, setAssetsLoading] = useState(true);
-  const [assetsError, setAssetsError] = useState('');
+  const [assetsError, setAssetsError] = useState("");
   const [assetsRetry, setAssetsRetry] = useState(0);
-  const [assetId, setAssetId] = useState('');
-  const [title, setTitle] = useState('');
-  const [scenePresetId, setScenePresetId] = useState('');
-  const [tier, setTier] = useState<'standard' | 'pro' | 'premium'>('standard');
+  const [assetId, setAssetId] = useState("");
+  const [title, setTitle] = useState("");
+  const [scenePresetId, setScenePresetId] = useState("");
+  const [tier, setTier] = useState<"standard" | "pro" | "premium">("standard");
   const [durationS, setDurationS] = useState(5);
-  const [additionalDirection, setAdditionalDirection] = useState('');
-  const [audioAssets, setAudioAssets] = useState<Array<{ id: string; title?: string }>>([]);
-  const [audioAssetId, setAudioAssetId] = useState('');
-  const [format, setFormat] = useState<Format>('16:9');
+  const [additionalDirection, setAdditionalDirection] = useState("");
+  const [audioAssets, setAudioAssets] = useState<
+    Array<{ id: string; title?: string }>
+  >([]);
+  const [audioAssetId, setAudioAssetId] = useState("");
+  const [format, setFormat] = useState<Format>("16:9");
   const [job, setJob] = useState<Job | null>(null);
-  const [error, setError] = useState('');
+  const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const purpose = 'advertising' as const;
+  const purpose = "advertising" as const;
   const [vehicleDossiers, setVehicleDossiers] = useState<VehicleDossier[]>([]);
   const [places, setPlaces] = useState<PlaceAsset[]>([]);
-  const [vehicleDossierId, setVehicleDossierId] = useState('');
+  const [vehicleDossierId, setVehicleDossierId] = useState("");
   const [placeIds, setPlaceIds] = useState<string[]>([]);
-  const [locationAssetId, setLocationAssetId] = useState('');
+  const [locationAssetId, setLocationAssetId] = useState("");
   const [castAssets, setCastAssets] = useState<CastAsset[]>([]);
   const [castIds, setCastIds] = useState<string[]>([]);
 
-  const selectedDossier = vehicleDossiers.find((vehicle) => vehicle.key === vehicleDossierId);
-  const availableDurationOptions = tier === 'premium' ? premiumDurationOptions : durationOptions;
-  const effectivePlaceIds = durationS >= 10 ? placeIds : (locationAssetId ? [locationAssetId] : placeIds.slice(0, 1));
-  const multiClip = Boolean(selectedDossier && (tier === 'premium' || durationS >= 10 && (selectedDossier.photos.length > 1 || effectivePlaceIds.length > 1)));
-  const selectedPhoto = selectedDossier?.photos.find((photo) => photo.id === assetId) ?? selectedDossier?.photos[0];
-  const selectedAsset = selectedPhoto ? { ...selectedPhoto, make: selectedDossier?.make, model: selectedDossier?.model, color: selectedDossier?.color } : undefined;
-  const vehicleCategory = inferVehicleCategory(selectedAsset?.make, selectedAsset?.model);
+  const selectedDossier = vehicleDossiers.find(
+    (vehicle) => vehicle.key === vehicleDossierId,
+  );
+  const availableDurationOptions =
+    tier === "premium" ? premiumDurationOptions : durationOptions;
+  const effectivePlaceIds =
+    durationS >= 10
+      ? placeIds
+      : locationAssetId
+        ? [locationAssetId]
+        : placeIds.slice(0, 1);
+  const multiClip = Boolean(
+    selectedDossier &&
+    (tier === "premium" ||
+      (durationS >= 10 &&
+        (selectedDossier.photos.length > 1 || effectivePlaceIds.length > 1))),
+  );
+  const selectedPhoto =
+    selectedDossier?.photos.find((photo) => photo.id === assetId) ??
+    selectedDossier?.photos[0];
+  const selectedAsset = selectedPhoto
+    ? {
+        ...selectedPhoto,
+        make: selectedDossier?.make,
+        model: selectedDossier?.model,
+        color: selectedDossier?.color,
+      }
+    : undefined;
+  const vehicleCategory = inferVehicleCategory(
+    selectedAsset?.make,
+    selectedAsset?.model,
+  );
   const relevantScenes = getScenePresets(vehicleCategory);
   const allScenes = getScenePresets();
-  const universalScenes = allScenes.filter((scene) => scene.category === 'autre' && !relevantScenes.some((recommended) => recommended.id === scene.id));
+  const universalScenes = allScenes.filter(
+    (scene) =>
+      scene.category === "autre" &&
+      !relevantScenes.some((recommended) => recommended.id === scene.id),
+  );
   const sceneChoices = [...relevantScenes, ...universalScenes].slice(0, 8);
   const selectedScene = getScenePreset(scenePresetId) ?? relevantScenes[0];
-  const storyboardModel = availableModels.find((model) => model.tier === tier && model.durations.includes(durationS) && model.formats.includes(format));
-  const estimatedPriceFcfa = storyboardModel?.estimatedPricesFcfa[String(durationS)];
-  const generationActive = Boolean(job && !['ready', 'failed', 'cancelled'].includes(job.status));
-  const lightingChoices = Array.from(new Map(sceneChoices.map((scene) => [getLightingLabel(scene.lighting), scene])).entries())
-    .map(([label, scene]) => ({ label, scene }));
+  const storyboardModel = availableModels.find(
+    (model) =>
+      model.tier === tier &&
+      model.durations.includes(durationS) &&
+      model.formats.includes(format),
+  );
+  const estimatedPriceFcfa =
+    storyboardModel?.estimatedPricesFcfa[String(durationS)];
+  const generationActive = Boolean(
+    job && !["ready", "failed", "cancelled"].includes(job.status),
+  );
+  const lightingChoices = Array.from(
+    new Map(
+      sceneChoices.map((scene) => [getLightingLabel(scene.lighting), scene]),
+    ).entries(),
+  ).map(([label, scene]) => ({ label, scene }));
 
   function clearFormError() {
-    setError('');
+    setError("");
   }
 
   useEffect(() => {
@@ -98,14 +215,15 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
   }, [availableDurationOptions, durationS, mode, storyboardModel, tier]);
 
   useEffect(() => {
-    if (mode !== 'live') return;
+    if (mode !== "live") return;
     let active = true;
     setModelsLoading(true);
-    setModelsError('');
-    fetch('/api/models/available')
+    setModelsError("");
+    fetch("/api/models/available")
       .then(async (response) => {
         const data = await response.json();
-        if (!response.ok) throw new Error(data.error ?? 'Impossible de charger les modèles.');
+        if (!response.ok)
+          throw new Error(data.error ?? "Impossible de charger les modèles.");
         return data;
       })
       .then((data) => {
@@ -115,21 +233,41 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
       })
       .catch((loadError) => {
         if (!active) return;
-        setModelsError(loadError instanceof Error ? loadError.message : 'Impossible de charger les modèles.');
+        setModelsError(
+          loadError instanceof Error
+            ? loadError.message
+            : "Impossible de charger les modèles.",
+        );
       })
-      .finally(() => { if (active) setModelsLoading(false); });
-    return () => { active = false; };
+      .finally(() => {
+        if (active) setModelsLoading(false);
+      });
+    return () => {
+      active = false;
+    };
   }, [mode]);
 
   useEffect(() => {
     let active = true;
     setAssetsLoading(true);
-    setAssetsError('');
-    Promise.all([fetch('/api/vehicles'), fetch('/api/assets?kind=place&status=valid%C3%A9e')])
+    setAssetsError("");
+    Promise.all([
+      fetch("/api/vehicles"),
+      fetch("/api/assets?kind=place&status=valid%C3%A9e"),
+    ])
       .then(async ([vehiclesResponse, placesResponse]) => {
-        const [vehiclesData, placesData] = await Promise.all([vehiclesResponse.json(), placesResponse.json()]);
-        if (!vehiclesResponse.ok) throw new Error(vehiclesData.error ?? 'Impossible de charger les véhicules.');
-        if (!placesResponse.ok) throw new Error(placesData.error ?? 'Impossible de charger les lieux.');
+        const [vehiclesData, placesData] = await Promise.all([
+          vehiclesResponse.json(),
+          placesResponse.json(),
+        ]);
+        if (!vehiclesResponse.ok)
+          throw new Error(
+            vehiclesData.error ?? "Impossible de charger les véhicules.",
+          );
+        if (!placesResponse.ok)
+          throw new Error(
+            placesData.error ?? "Impossible de charger les lieux.",
+          );
         if (!active) return;
         const vehicleList: VehicleDossier[] = vehiclesData.vehicles ?? [];
         setVehicleDossiers(vehicleList);
@@ -140,26 +278,53 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
         }
         if (vehicleList[0]) {
           setVehicleDossierId(vehicleList[0].key);
-          setAssetId(vehicleList[0].photos[0]?.id ?? '');
-          setScenePresetId(getScenePresets(inferVehicleCategory(vehicleList[0].make, vehicleList[0].model))[0]?.id ?? '');
+          setAssetId(vehicleList[0].photos[0]?.id ?? "");
+          setScenePresetId(
+            getScenePresets(
+              inferVehicleCategory(vehicleList[0].make, vehicleList[0].model),
+            )[0]?.id ?? "",
+          );
         }
       })
       .catch((loadError) => {
         if (!active) return;
-        setAssetsError(loadError instanceof Error ? loadError.message : 'Impossible de charger les véhicules.');
+        setAssetsError(
+          loadError instanceof Error
+            ? loadError.message
+            : "Impossible de charger les véhicules.",
+        );
       })
-      .finally(() => { if (active) setAssetsLoading(false); });
+      .finally(() => {
+        if (active) setAssetsLoading(false);
+      });
     // Casting is optional: a loading error only hides the picker.
-    fetch('/api/assets?kind=character&status=valid%C3%A9e')
-      .then(async (response) => (response.ok ? ((await response.json()).assets ?? []) as CastAsset[] : []))
+    fetch("/api/assets?kind=character&status=valid%C3%A9e")
+      .then(async (response) =>
+        response.ok
+          ? (((await response.json()).assets ?? []) as CastAsset[])
+          : [],
+      )
       .catch(() => [] as CastAsset[])
-      .then((list) => { if (active) setCastAssets(list); });
+      .then((list) => {
+        if (active) setCastAssets(list);
+      });
     // Music is optional too (patch v3.2): validated audio tracks of the brand, mixed with fades at the edit.
-    fetch('/api/assets?kind=audio&status=valid%C3%A9e')
-      .then(async (response) => (response.ok ? ((await response.json()).assets ?? []) as Array<{ id: string; title?: string }> : []))
+    fetch("/api/assets?kind=audio&status=valid%C3%A9e")
+      .then(async (response) =>
+        response.ok
+          ? (((await response.json()).assets ?? []) as Array<{
+              id: string;
+              title?: string;
+            }>)
+          : [],
+      )
       .catch(() => [] as Array<{ id: string; title?: string }>)
-      .then((list) => { if (active) setAudioAssets(list); });
-    return () => { active = false; };
+      .then((list) => {
+        if (active) setAudioAssets(list);
+      });
+    return () => {
+      active = false;
+    };
   }, [assetsRetry]);
 
   const jobId = job?.id;
@@ -168,144 +333,833 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
   const reconciliationRequired = job?.reconciliationRequired;
   const refreshingJob = useRef(false);
   useEffect(() => {
-    if (!jobId || !jobStatus || ['ready', 'failed', 'cancelled'].includes(jobStatus) || reconciliationRequired) return;
+    if (
+      !jobId ||
+      !jobStatus ||
+      ["ready", "failed", "cancelled"].includes(jobStatus) ||
+      reconciliationRequired
+    )
+      return;
     let timer: number;
     let active = true;
     const schedule = (delaySeconds: number) => {
-      timer = window.setTimeout(async () => {
-      if (!active) return;
-      if (refreshingJob.current) { schedule(5); return; }
-      refreshingJob.current = true;
-      try {
-        const response = await fetch(`/api/versions/${jobId}/refresh`, { cache: 'no-store', signal: AbortSignal.timeout(25_000) });
-        const data = await response.json();
-        setJob((previous) => previous ? { ...previous, ...data, error: response.ok ? data.error : data.error ?? 'Le suivi est momentanément indisponible. Nouvelle tentative automatique.' } : previous);
-        if (response.ok && !data.reconciliationRequired && !['ready', 'failed', 'cancelled'].includes(data.status)) schedule(data.nextPollInSeconds ?? 15);
-        else if (!response.ok) schedule(15);
-      } catch {
-        setJob((previous) => previous ? { ...previous, error: 'Le suivi est momentanément indisponible. Nouvelle tentative automatique.' } : previous);
-        schedule(15);
-      } finally { refreshingJob.current = false; }
-      }, Math.max(5, Math.min(180, delaySeconds)) * 1000);
+      timer = window.setTimeout(
+        async () => {
+          if (!active) return;
+          if (refreshingJob.current) {
+            schedule(5);
+            return;
+          }
+          refreshingJob.current = true;
+          try {
+            const response = await fetch(`/api/versions/${jobId}/refresh`, {
+              cache: "no-store",
+              signal: AbortSignal.timeout(25_000),
+            });
+            const data = await response.json();
+            setJob((previous) =>
+              previous
+                ? {
+                    ...previous,
+                    ...data,
+                    error: response.ok
+                      ? data.error
+                      : (data.error ??
+                        "Le suivi est momentanément indisponible. Nouvelle tentative automatique."),
+                  }
+                : previous,
+            );
+            if (
+              response.ok &&
+              !data.reconciliationRequired &&
+              !["ready", "failed", "cancelled"].includes(data.status)
+            )
+              schedule(data.nextPollInSeconds ?? 15);
+            else if (!response.ok) schedule(15);
+          } catch {
+            setJob((previous) =>
+              previous
+                ? {
+                    ...previous,
+                    error:
+                      "Le suivi est momentanément indisponible. Nouvelle tentative automatique.",
+                  }
+                : previous,
+            );
+            schedule(15);
+          } finally {
+            refreshingJob.current = false;
+          }
+        },
+        Math.max(5, Math.min(180, delaySeconds)) * 1000,
+      );
     };
     schedule(nextPollInSeconds ?? 15);
-    return () => { active = false; window.clearTimeout(timer); };
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
   }, [jobStatus, jobId, nextPollInSeconds, reconciliationRequired]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setError('');
+    setError("");
     setBusy(true);
     try {
-      if (!selectedDossier?.id || !selectedDossier.photos.length) throw new Error('Choisissez un véhicule avec au moins une photo validée.');
-      const selectedVehiclePhotoIds = [assetId, ...selectedDossier.photos.map((photo) => photo.id).filter((id) => id !== assetId)].filter(Boolean);
-      const workflow = durationS === 5 ? 'single' : 'multi_clip';
-      const directorResponse = await fetch('/api/storyboard/suggest', {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ workflow, vehicleDossierId: selectedDossier.id, vehicleDossierIds: selectedDossier.dossierIds ?? [selectedDossier.id], vehiclePhotoIds: selectedVehiclePhotoIds, placeIds: effectivePlaceIds, mode: tier, durationSeconds: durationS, purpose, direction: additionalDirection, lighting: selectedScene?.lighting ?? lightOptions[0], mood: selectedScene?.mood ?? '', format, castAssetIds: castIds }),
+      if (!selectedDossier?.id || !selectedDossier.photos.length)
+        throw new Error(
+          "Choisissez un véhicule avec au moins une photo validée.",
+        );
+      const selectedVehiclePhotoIds = [
+        assetId,
+        ...selectedDossier.photos
+          .map((photo) => photo.id)
+          .filter((id) => id !== assetId),
+      ].filter(Boolean);
+      const workflow = durationS === 5 ? "single" : "multi_clip";
+      const directorResponse = await fetch("/api/storyboard/suggest", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          workflow,
+          vehicleDossierId: selectedDossier.id,
+          vehicleDossierIds: selectedDossier.dossierIds ?? [selectedDossier.id],
+          vehiclePhotoIds: selectedVehiclePhotoIds,
+          placeIds: effectivePlaceIds,
+          mode: tier,
+          durationSeconds: durationS,
+          purpose,
+          direction: additionalDirection,
+          lighting: selectedScene?.lighting ?? lightOptions[0],
+          mood: selectedScene?.mood ?? "",
+          format,
+          castAssetIds: castIds,
+        }),
       });
       const directorData = await directorResponse.json();
-      if (!directorResponse.ok) throw new Error(directorData.error ?? 'Le réalisateur IA n’a pas pu préparer la vidéo. Aucune vidéo n’a été lancée.');
+      if (!directorResponse.ok)
+        throw new Error(
+          directorData.error ??
+            "Le réalisateur IA n’a pas pu préparer la vidéo. Aucune vidéo n’a été lancée.",
+        );
       const shots = directorData.storyboard as StoryShot[] | undefined;
-      if (!shots?.length) throw new Error('Le réalisateur IA n’a pas proposé de plans valides. Aucune vidéo n’a été lancée. Réessayez.');
-      const firstPhoto = selectedDossier.photos.find((photo) => photo.id === shots[0].vehiclePhotoId) ?? selectedDossier.photos[0];
+      if (!shots?.length)
+        throw new Error(
+          "Le réalisateur IA n’a pas proposé de plans valides. Aucune vidéo n’a été lancée. Réessayez.",
+        );
+      const firstPhoto =
+        selectedDossier.photos.find(
+          (photo) => photo.id === shots[0].vehiclePhotoId,
+        ) ?? selectedDossier.photos[0];
       const payload: Record<string, unknown> = {
-        workflow: workflow === 'single' ? 'single_storyboard' : 'multi_clip',
-        description: additionalDirection, title, assetId: firstPhoto.id,
-        vehicleDossierId: selectedDossier.id, vehicleDossierIds: selectedDossier.dossierIds ?? [selectedDossier.id],
-        vehiclePhotoIds: selectedVehiclePhotoIds, placeIds: workflow === 'single' ? effectivePlaceIds.slice(0, 1) : effectivePlaceIds,
-        storyMode: tier, clipDurationSeconds: durationS, purpose, storyboard: shots,
-        storyboardLedgerIds: directorData.storyboardLedgerId ? [directorData.storyboardLedgerId] : [],
-        format, tier, durationS, overlayLogo: true, ...(audioAssetId ? { audioAssetId } : {}),
-        castAssetIds: castIds, castDescription: typeof directorData.castDescription === 'string' ? directorData.castDescription : '',
-        lighting: selectedScene?.lighting ?? lightOptions[0], scenePresetId: selectedScene?.id ?? '',
-        vehicleCategory, location: selectedScene?.location ?? '', setting: selectedScene?.setting ?? '',
-        vehicleAction: selectedScene?.vehicleAction ?? 'Le véhicule avance lentement et régulièrement',
-        cameraMovement: selectedScene?.cameraMovement ?? '', mood: selectedScene?.mood ?? '',
+        workflow: workflow === "single" ? "single_storyboard" : "multi_clip",
+        description: additionalDirection,
+        title,
+        assetId: firstPhoto.id,
+        vehicleDossierId: selectedDossier.id,
+        vehicleDossierIds: selectedDossier.dossierIds ?? [selectedDossier.id],
+        vehiclePhotoIds: selectedVehiclePhotoIds,
+        placeIds:
+          workflow === "single"
+            ? effectivePlaceIds.slice(0, 1)
+            : effectivePlaceIds,
+        storyMode: tier,
+        clipDurationSeconds: durationS,
+        purpose,
+        storyboard: shots,
+        storyboardLedgerIds: directorData.storyboardLedgerId
+          ? [directorData.storyboardLedgerId]
+          : [],
+        format,
+        tier,
+        durationS,
+        overlayLogo: true,
+        ...(audioAssetId ? { audioAssetId } : {}),
+        castAssetIds: castIds,
+        castDescription:
+          typeof directorData.castDescription === "string"
+            ? directorData.castDescription
+            : "",
+        lighting: selectedScene?.lighting ?? lightOptions[0],
+        scenePresetId: selectedScene?.id ?? "",
+        vehicleCategory,
+        location: selectedScene?.location ?? "",
+        setting: selectedScene?.setting ?? "",
+        vehicleAction:
+          selectedScene?.vehicleAction ??
+          "Le véhicule avance lentement et régulièrement",
+        cameraMovement: selectedScene?.cameraMovement ?? "",
+        mood: selectedScene?.mood ?? "",
       };
-      const response = await fetch('/api/versions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
+      const response = await fetch("/api/versions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+      });
       const data = await response.json();
-      if (!response.ok) throw new Error(data.error ?? 'La génération n’a pas pu démarrer.');
-      setJob({ id: data.id, status: data.status, prompt: data.prompt, completedShots: data.completedShots, totalShots: data.totalShots, completedKeyframes: data.completedKeyframes, totalKeyframes: data.totalKeyframes, keyframes: data.keyframes, estimatedPriceFcfa: data.estimatedPriceFcfa });
+      if (!response.ok)
+        throw new Error(data.error ?? "La génération n’a pas pu démarrer.");
+      setJob({
+        id: data.id,
+        status: data.status,
+        prompt: data.prompt,
+        completedShots: data.completedShots,
+        totalShots: data.totalShots,
+        completedKeyframes: data.completedKeyframes,
+        totalKeyframes: data.totalKeyframes,
+        keyframes: data.keyframes,
+        estimatedPriceFcfa: data.estimatedPriceFcfa,
+      });
     } catch (submitError) {
-      setError(submitError instanceof Error ? submitError.message : 'Une erreur est survenue.');
+      setError(
+        submitError instanceof Error
+          ? submitError.message
+          : "Une erreur est survenue.",
+      );
     } finally {
       setBusy(false);
     }
   }
 
   return (
-    <form onSubmit={submit} className="grid min-w-0 items-start gap-5 xl:grid-cols-[minmax(0,1fr)_300px]">
+    <form
+      onSubmit={submit}
+      className="grid min-w-0 items-start gap-5 xl:grid-cols-[minmax(0,1fr)_300px]"
+    >
       <div className="min-w-0 space-y-5">
         <section className="overflow-hidden rounded-md border border-black/[.055] bg-white">
-          <div className="min-h-[250px] p-5 md:min-h-[320px] md:p-7">
-            <div className="flex items-center justify-between gap-3">
-              <span className="rounded-full bg-[#f2f1ef] px-3 py-1 text-[11px] text-[#77736d]">Décrivez la vidéo que vous voulez, je m’occupe du reste.</span>
-              <span className="hidden text-[10px] font-semibold uppercase tracking-[.12em] text-[#aaa59d] md:inline">Brief de création</span>
-            </div>
-            {additionalDirection.trim() && <p className="mt-6 max-w-2xl whitespace-pre-wrap text-sm leading-6 text-[#4d4a45]">{additionalDirection.trim()}</p>}
-          </div>
           <div className="border-t border-[#eeeae4] p-4 md:p-5">
-            <textarea value={additionalDirection} onChange={(event) => { setAdditionalDirection(event.target.value); clearFormError(); }} maxLength={MAX_STORYBOARD_DIRECTION_LENGTH} rows={3} placeholder="Décrivez votre vidéo…" aria-label="Description de la vidéo" className="w-full resize-y rounded-md border border-[#e9e7e2] bg-[#fcfcfb] p-3 text-sm leading-6 outline-none focus:border-[#c51e1c]" />
-            <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-              <button type="button" onClick={() => { setAdditionalDirection('Une vidéo publicitaire automobile élégante, avec une mise en valeur progressive du véhicule.'); clearFormError(); }} className="text-xs font-semibold text-[#c51e1c] underline underline-offset-4">Insérer un exemple</button>
-              <button type="button" onClick={() => document.getElementById('generation-options')?.scrollIntoView({ behavior: 'smooth', block: 'start' })} className="rounded-md bg-[#c51e1c] px-4 py-2.5 text-xs font-semibold text-white transition hover:bg-[#a71715]">Envoyer la description ↑</button>
-            </div>
+            <textarea
+              value={additionalDirection}
+              onChange={(event) => {
+                setAdditionalDirection(event.target.value);
+                clearFormError();
+              }}
+              maxLength={MAX_STORYBOARD_DIRECTION_LENGTH}
+              rows={3}
+              placeholder="Décrivez votre vidéo…"
+              aria-label="Description de la vidéo"
+              className="w-full resize-y rounded-md border border-[#e9e7e2] bg-[#fcfcfb] p-3 text-sm leading-6 outline-none focus:border-[#c51e1c]"
+            />
+            <p className="mt-3 rounded-md border border-[#e7d7b9] bg-[#fbf6ed] p-3 text-[11px] leading-5 text-[#765d39]">
+              <strong>Bon à savoir :</strong> les choix faits dans les options
+              (véhicule, lieu, casting, lumière, format, niveau) sont
+              généralement prioritaires sur la description. En cas de
+              contradiction, c’est la sélection qui s’applique.
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                setAdditionalDirection(
+                  "Une vidéo publicitaire automobile élégante, avec une mise en valeur progressive du véhicule.",
+                );
+                clearFormError();
+              }}
+              className="mt-3 text-xs font-semibold text-[#c51e1c] underline underline-offset-4"
+            >
+              Insérer un exemple
+            </button>
           </div>
         </section>
 
-      {job && <section className="rounded-md border border-black/[.055] bg-white p-5">
-        <div className="flex items-center justify-between"><h2 className="text-sm font-semibold">État de la vidéo</h2><span className="text-[10px] font-semibold uppercase text-[#a47731]">{job.status === 'ready' ? 'Prête' : job.status === 'failed' ? 'Échec' : job.status === 'cancelled' ? 'Annulée' : job.reconciliationRequired ? 'Vérification requise' : 'En cours'}</span></div>
-        <p className="mt-2 text-xs leading-5 text-[#88847d]">{job.reconciliationRequired ? job.error ?? 'La génération doit être vérifiée avant toute relance. Aucune nouvelle soumission ne sera envoyée automatiquement.' : job.status === 'ready' ? 'Votre vidéo est prête à consulter.' : job.status === 'failed' ? job.error ?? 'La génération a échoué. Vous pouvez relancer une nouvelle vidéo.' : job.status === 'cancelled' ? 'La génération a été annulée.' : job.error ?? `${job.processingStage ? `${({ queued: 'En file d’attente', keyframing: `Création des images-clés${job.completedKeyframes != null && job.totalKeyframes != null ? ` · ${job.completedKeyframes}/${job.totalKeyframes}` : ''}`, generating: 'Génération vidéo', quality_checking: 'Contrôle qualité', transferring: 'Transfert du fichier', postprocessing: 'Logo et finalisation' } as Record<string, string>)[job.processingStage] ?? 'Génération en cours'}${job.stageElapsedSeconds != null ? ` · ${job.stageElapsedSeconds} s` : ''}` : 'Génération en cours'}${job.totalQualityShots ? ` · ${job.checkedQualityShots ?? 0}/${job.totalQualityShots} plans contrôlés` : ''}. Actualisation automatique selon le délai de suivi du fournisseur.`}</p>
-        {job.shotProgress && <div className="mt-3 grid gap-1.5 sm:grid-cols-2">{job.shotProgress.map((shot) => <p key={shot.number} className="flex items-center justify-between gap-3 rounded border border-[#eeeae4] px-2.5 py-2 text-[10px] text-[#716d66]"><span className="truncate">Plan {shot.number} · {shot.title}</span><span className="shrink-0 font-semibold">{shotProgressLabel(shot)}</span></p>)}</div>}
-        {job.keyframes && job.keyframes.length > 0 && <div className="mt-4 border-t border-[#eeeae4] pt-4"><p className="mb-3 text-[10px] font-semibold uppercase tracking-wide text-[#716d66]">Images-clés retenues</p><div className="grid grid-cols-2 gap-3 sm:grid-cols-3">{job.keyframes.map((keyframe) => <figure key={keyframe.number} className="overflow-hidden rounded border border-[#eeeae4]"><Image src={keyframe.url} alt={`Image-clé ${keyframe.number} : ${keyframe.title}`} width={400} height={225} unoptimized className="aspect-video w-full object-cover" /><figcaption className="px-2 py-1.5 text-[10px] text-[#716d66]">{keyframe.number}. {keyframe.title}</figcaption></figure>)}</div></div>}
-        {job.qualityWarnings && job.qualityWarnings.length > 0 && <div role="status" className="mt-4 rounded-md border border-[#eadfc7] bg-[#fbf6ed] p-3"><p className="text-[10px] font-semibold uppercase tracking-wide text-[#675432]">Points signalés par le contrôle automatique</p><ul className="mt-2 space-y-1 text-[10px] leading-4 text-[#765d39]">{job.qualityWarnings.map((warning) => <li key={`${warning.shotNumber}-${warning.stage}`}>⚠ Plan {warning.shotNumber}{warning.title ? ` · ${warning.title}` : ''} ({warning.stage === 'keyframe' ? 'image-clé' : 'clip'}) : {warning.issues.join(' ; ') || 'à vérifier'}</li>)}</ul><p className="mt-2 text-[9px] text-[#88847d]">La vidéo a été générée malgré ces points ; à vérifier avant validation.</p></div>}
-        {typeof job.estimatedPriceFcfa === 'number' && <p className="mt-3 border-t border-[#eeeae4] pt-3 text-xs font-semibold text-[#716d66]">{`Montant total estimé · environ ${formatFcfa(job.estimatedPriceFcfa)}`}</p>}{job.prompt && <details className="mt-4 border-t border-[#eeeae4] pt-3"><summary className="cursor-pointer text-xs font-semibold text-[#716d66]">Voir le prompt généré</summary><p className="mt-2 whitespace-pre-wrap text-xs leading-5 text-[#77736d]">{job.prompt}</p></details>}{job.status === 'ready' && <Link href="/bibliotheque" className="mt-4 block rounded-lg bg-[#c51e1c] px-3 py-2.5 text-center text-xs font-semibold text-white">Voir ma vidéo →</Link>}
-      </section>}
+        {job && (
+          <section className="rounded-md border border-black/[.055] bg-white p-5">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-semibold">État de la vidéo</h2>
+              <span className="text-[10px] font-semibold uppercase text-[#a47731]">
+                {job.status === "ready"
+                  ? "Prête"
+                  : job.status === "failed"
+                    ? "Échec"
+                    : job.status === "cancelled"
+                      ? "Annulée"
+                      : job.reconciliationRequired
+                        ? "Vérification requise"
+                        : "En cours"}
+              </span>
+            </div>
+            <p className="mt-2 text-xs leading-5 text-[#88847d]">
+              {job.reconciliationRequired
+                ? (job.error ??
+                  "La génération doit être vérifiée avant toute relance. Aucune nouvelle soumission ne sera envoyée automatiquement.")
+                : job.status === "ready"
+                  ? "Votre vidéo est prête à consulter."
+                  : job.status === "failed"
+                    ? (job.error ??
+                      "La génération a échoué. Vous pouvez relancer une nouvelle vidéo.")
+                    : job.status === "cancelled"
+                      ? "La génération a été annulée."
+                      : (job.error ??
+                        `${job.processingStage ? `${({ queued: "En file d’attente", keyframing: `Création des images-clés${job.completedKeyframes != null && job.totalKeyframes != null ? ` · ${job.completedKeyframes}/${job.totalKeyframes}` : ""}`, generating: "Génération vidéo", quality_checking: "Contrôle qualité", transferring: "Transfert du fichier", postprocessing: "Logo et finalisation" } as Record<string, string>)[job.processingStage] ?? "Génération en cours"}${job.stageElapsedSeconds != null ? ` · ${job.stageElapsedSeconds} s` : ""}` : "Génération en cours"}${job.totalQualityShots ? ` · ${job.checkedQualityShots ?? 0}/${job.totalQualityShots} plans contrôlés` : ""}. Actualisation automatique selon le délai de suivi du fournisseur.`)}
+            </p>
+            {job.shotProgress && (
+              <div className="mt-3 grid gap-1.5 sm:grid-cols-2">
+                {job.shotProgress.map((shot) => (
+                  <p
+                    key={shot.number}
+                    className="flex items-center justify-between gap-3 rounded border border-[#eeeae4] px-2.5 py-2 text-[10px] text-[#716d66]"
+                  >
+                    <span className="truncate">
+                      Plan {shot.number} · {shot.title}
+                    </span>
+                    <span className="shrink-0 font-semibold">
+                      {shotProgressLabel(shot)}
+                    </span>
+                  </p>
+                ))}
+              </div>
+            )}
+            {job.keyframes && job.keyframes.length > 0 && (
+              <div className="mt-4 border-t border-[#eeeae4] pt-4">
+                <p className="mb-3 text-[10px] font-semibold uppercase tracking-wide text-[#716d66]">
+                  Images-clés retenues
+                </p>
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                  {job.keyframes.map((keyframe) => (
+                    <figure
+                      key={keyframe.number}
+                      className="overflow-hidden rounded border border-[#eeeae4]"
+                    >
+                      <Image
+                        src={keyframe.url}
+                        alt={`Image-clé ${keyframe.number} : ${keyframe.title}`}
+                        width={400}
+                        height={225}
+                        unoptimized
+                        className="aspect-video w-full object-cover"
+                      />
+                      <figcaption className="px-2 py-1.5 text-[10px] text-[#716d66]">
+                        {keyframe.number}. {keyframe.title}
+                      </figcaption>
+                    </figure>
+                  ))}
+                </div>
+              </div>
+            )}
+            {job.qualityWarnings && job.qualityWarnings.length > 0 && (
+              <div
+                role="status"
+                className="mt-4 rounded-md border border-[#eadfc7] bg-[#fbf6ed] p-3"
+              >
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-[#675432]">
+                  Points signalés par le contrôle automatique
+                </p>
+                <ul className="mt-2 space-y-1 text-[10px] leading-4 text-[#765d39]">
+                  {job.qualityWarnings.map((warning) => (
+                    <li key={`${warning.shotNumber}-${warning.stage}`}>
+                      ⚠ Plan {warning.shotNumber}
+                      {warning.title ? ` · ${warning.title}` : ""} (
+                      {warning.stage === "keyframe" ? "image-clé" : "clip"}) :{" "}
+                      {warning.issues.join(" ; ") || "à vérifier"}
+                    </li>
+                  ))}
+                </ul>
+                <p className="mt-2 text-[9px] text-[#88847d]">
+                  La vidéo a été générée malgré ces points ; à vérifier avant
+                  validation.
+                </p>
+              </div>
+            )}
+            {typeof job.estimatedPriceFcfa === "number" && (
+              <p className="mt-3 border-t border-[#eeeae4] pt-3 text-xs font-semibold text-[#716d66]">{`Montant total estimé · environ ${formatFcfa(job.estimatedPriceFcfa)}`}</p>
+            )}
+            {job.prompt && (
+              <details className="mt-4 border-t border-[#eeeae4] pt-3">
+                <summary className="cursor-pointer text-xs font-semibold text-[#716d66]">
+                  Voir le prompt généré
+                </summary>
+                <p className="mt-2 whitespace-pre-wrap text-xs leading-5 text-[#77736d]">
+                  {job.prompt}
+                </p>
+              </details>
+            )}
+            {job.status === "ready" && (
+              <Link
+                href="/bibliotheque"
+                className="mt-4 block rounded-lg bg-[#c51e1c] px-3 py-2.5 text-center text-xs font-semibold text-white"
+              >
+                Voir ma vidéo →
+              </Link>
+            )}
+          </section>
+        )}
       </div>
 
-      <aside id="generation-options" className="min-w-0 space-y-3 xl:sticky xl:top-5">
+      <aside
+        id="generation-options"
+        className="min-w-0 space-y-3 xl:sticky xl:top-5"
+      >
         <section className="rounded-md border border-[#e2e2e5] bg-white p-4">
-          <fieldset><legend className="mb-2 text-[11px] font-semibold">Durée de la vidéo</legend><div className="flex flex-wrap gap-1.5">{availableDurationOptions.map((seconds) => <button type="button" key={seconds} onClick={() => { setDurationS(seconds); clearFormError(); if (seconds < 10 && placeIds.length > 1) setPlaceIds((current) => current.slice(0, 1)); }} aria-pressed={durationS === seconds} className={`rounded-full border px-2.5 py-1.5 text-[10px] ${durationS === seconds ? 'border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]' : 'border-[#e5e2dd] text-[#77736d]'}`}>{seconds} s</button>)}</div><p className="mt-2 text-[9px] text-[#88847d]">{tier === 'premium' ? 'Premium : quatre plans de 5 s + 2 s de logo animé = 22 s au total.' : `${durationS} s de clips + 2 s de logo animé = ${durationS + 2} s au total.`}</p></fieldset>
+          <fieldset>
+            <legend className="mb-2 text-[11px] font-semibold">
+              Durée de la vidéo
+            </legend>
+            <div className="flex flex-wrap gap-1.5">
+              {availableDurationOptions.map((seconds) => (
+                <button
+                  type="button"
+                  key={seconds}
+                  onClick={() => {
+                    setDurationS(seconds);
+                    clearFormError();
+                    if (seconds < 10 && placeIds.length > 1)
+                      setPlaceIds((current) => current.slice(0, 1));
+                  }}
+                  aria-pressed={durationS === seconds}
+                  className={`rounded-full border px-2.5 py-1.5 text-[10px] ${durationS === seconds ? "border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]" : "border-[#e5e2dd] text-[#77736d]"}`}
+                >
+                  {seconds} s
+                </button>
+              ))}
+            </div>
+            <p className="mt-2 text-[9px] text-[#88847d]">
+              {tier === "premium"
+                ? "Premium : quatre plans de 5 s + 2 s de logo animé = 22 s au total."
+                : `${durationS} s de clips + 2 s de logo animé = ${durationS + 2} s au total.`}
+            </p>
+          </fieldset>
         </section>
 
         <section className="rounded-md border border-[#e2e2e5] bg-white p-4 text-[#161619]">
-          <div className="flex items-center justify-between gap-2"><h2 className="font-display text-sm font-semibold uppercase tracking-[.04em]">Votre vidéo</h2><span className="rounded-full bg-[#f2f1ef] px-2 py-1 text-[9px] text-[#88847d]">{title.trim() ? 'Prête à lancer' : 'Description à saisir'}</span></div>
-          <label className="mt-4 grid gap-1.5 text-[11px] font-semibold">Titre de la vidéo<input value={title} onChange={(event) => setTitle(event.target.value)} maxLength={120} placeholder="Ex. Starlight EV · lancement Abidjan" className="min-h-10 rounded-md border border-[#e9e7e2] bg-white px-3 py-2 text-xs font-normal outline-none focus:border-[#c51e1c]" /></label>
-          <label className="mt-4 grid gap-1.5 text-[11px] font-semibold">Véhicule<select value={vehicleDossierId} onChange={(event) => { const nextVehicle = vehicleDossiers.find((vehicle) => vehicle.key === event.target.value); setVehicleDossierId(event.target.value); setAssetId(nextVehicle?.photos[0]?.id ?? ''); clearFormError(); setScenePresetId(getScenePresets(inferVehicleCategory(nextVehicle?.make, nextVehicle?.model))[0]?.id ?? ''); }} disabled={assetsLoading || !vehicleDossiers.length} className="min-h-10 rounded-md border border-[#e9e7e2] bg-white px-3 py-2 text-xs font-normal outline-none focus:border-[#c51e1c]"><option value="">{assetsLoading ? 'Chargement…' : 'Choisissez un véhicule'}</option>{vehicleDossiers.filter((vehicle) => vehicle.photos.length > 0 && vehicle.id).map((vehicle) => <option key={vehicle.key} value={vehicle.key}>{vehicle.make} {vehicle.model}{vehicle.color ? ` · ${vehicle.color}` : ''}</option>)}</select></label>
-          {selectedAsset && <div className="mt-3 rounded-md bg-[#f8f7f4] p-2"><div className="flex items-center gap-3"><span className="grid size-12 shrink-0 place-items-center overflow-hidden bg-[#ededeb]">{selectedAsset.previewUrl ? <Image src={selectedAsset.previewUrl} alt={`${selectedAsset.make ?? 'Véhicule'} ${selectedAsset.model ?? ''}`} width={48} height={48} unoptimized className="size-full object-cover" /> : <span className="text-xl text-[#831810]" aria-hidden="true">◈</span>}</span><span className="min-w-0"><b className="block truncate text-xs">{selectedAsset.make} {selectedAsset.model}</b><small className="mt-1 block truncate text-[10px] text-[#99958e]">{selectedAsset.color ?? 'Photos validées'} · {selectedDossier?.photos.length ?? 0} vue(s) rattachée(s)</small></span></div><div className="mt-2 flex gap-2 overflow-x-auto">{selectedDossier?.photos.map((photo, index) => <button type="button" key={photo.id} onClick={() => setAssetId(photo.id)} aria-pressed={photo.id === (selectedPhoto?.id ?? assetId)} className={`relative h-14 w-20 shrink-0 overflow-hidden rounded border ${photo.id === (selectedPhoto?.id ?? assetId) ? 'border-[#c51e1c] ring-1 ring-[#c51e1c]' : 'border-[#e5e2dd]'}`}>{photo.previewUrl && <Image src={photo.previewUrl} alt={photo.angle ?? photo.title ?? `Vue ${index + 1}`} fill sizes="80px" unoptimized className="object-cover" />}<span className="absolute inset-x-0 bottom-0 truncate bg-black/55 px-1 py-0.5 text-left text-[8px] text-white">{photo.angle ?? photo.title ?? `Vue ${index + 1}`}</span></button>)}</div></div>}
-          {assetsError && <div role="alert" className="mt-3 rounded-md bg-red-50 p-3 text-xs text-red-700">{assetsError}<button type="button" onClick={() => setAssetsRetry((value) => value + 1)} className="ml-2 font-semibold underline">Réessayer</button></div>}
-          {!assetsLoading && !assetsError && !vehicleDossiers.length && <Link href="/mediatheque" className="mt-3 block rounded-md border border-dashed border-[#dad7d1] p-3 text-center text-xs text-[#817d76]">＋ Ajouter une photo validée</Link>}
+          <div className="flex items-center justify-between gap-2">
+            <h2 className="font-display text-sm font-semibold uppercase tracking-[.04em]">
+              Votre vidéo
+            </h2>
+            <span className="rounded-full bg-[#f2f1ef] px-2 py-1 text-[9px] text-[#88847d]">
+              {title.trim() ? "Prête à lancer" : "Description à saisir"}
+            </span>
+          </div>
+          <label className="mt-4 grid gap-1.5 text-[11px] font-semibold">
+            Titre de la vidéo
+            <input
+              value={title}
+              onChange={(event) => setTitle(event.target.value)}
+              maxLength={120}
+              placeholder="Ex. Starlight EV · lancement Abidjan"
+              className="min-h-10 rounded-md border border-[#e9e7e2] bg-white px-3 py-2 text-xs font-normal outline-none focus:border-[#c51e1c]"
+            />
+          </label>
+          <label className="mt-4 grid gap-1.5 text-[11px] font-semibold">
+            Véhicule
+            <select
+              value={vehicleDossierId}
+              onChange={(event) => {
+                const nextVehicle = vehicleDossiers.find(
+                  (vehicle) => vehicle.key === event.target.value,
+                );
+                setVehicleDossierId(event.target.value);
+                setAssetId(nextVehicle?.photos[0]?.id ?? "");
+                clearFormError();
+                setScenePresetId(
+                  getScenePresets(
+                    inferVehicleCategory(nextVehicle?.make, nextVehicle?.model),
+                  )[0]?.id ?? "",
+                );
+              }}
+              disabled={assetsLoading || !vehicleDossiers.length}
+              className="min-h-10 rounded-md border border-[#e9e7e2] bg-white px-3 py-2 text-xs font-normal outline-none focus:border-[#c51e1c]"
+            >
+              <option value="">
+                {assetsLoading ? "Chargement…" : "Choisissez un véhicule"}
+              </option>
+              {vehicleDossiers
+                .filter((vehicle) => vehicle.photos.length > 0 && vehicle.id)
+                .map((vehicle) => (
+                  <option key={vehicle.key} value={vehicle.key}>
+                    {vehicle.make} {vehicle.model}
+                    {vehicle.color ? ` · ${vehicle.color}` : ""}
+                  </option>
+                ))}
+            </select>
+          </label>
+          {selectedAsset && (
+            <div className="mt-3 rounded-md bg-[#f8f7f4] p-2">
+              <div className="flex items-center gap-3">
+                <span className="grid size-12 shrink-0 place-items-center overflow-hidden bg-[#ededeb]">
+                  {selectedAsset.previewUrl ? (
+                    <Image
+                      src={selectedAsset.previewUrl}
+                      alt={`${selectedAsset.make ?? "Véhicule"} ${selectedAsset.model ?? ""}`}
+                      width={48}
+                      height={48}
+                      unoptimized
+                      className="size-full object-cover"
+                    />
+                  ) : (
+                    <span className="text-xl text-[#831810]" aria-hidden="true">
+                      ◈
+                    </span>
+                  )}
+                </span>
+                <span className="min-w-0">
+                  <b className="block truncate text-xs">
+                    {selectedAsset.make} {selectedAsset.model}
+                  </b>
+                  <small className="mt-1 block truncate text-[10px] text-[#99958e]">
+                    {selectedAsset.color ?? "Photos validées"} ·{" "}
+                    {selectedDossier?.photos.length ?? 0} vue(s) rattachée(s)
+                  </small>
+                </span>
+              </div>
+              <div className="mt-2 flex gap-2 overflow-x-auto">
+                {selectedDossier?.photos.map((photo, index) => (
+                  <button
+                    type="button"
+                    key={photo.id}
+                    onClick={() => setAssetId(photo.id)}
+                    aria-pressed={photo.id === (selectedPhoto?.id ?? assetId)}
+                    className={`relative h-14 w-20 shrink-0 overflow-hidden rounded border ${photo.id === (selectedPhoto?.id ?? assetId) ? "border-[#c51e1c] ring-1 ring-[#c51e1c]" : "border-[#e5e2dd]"}`}
+                  >
+                    {photo.previewUrl && (
+                      <Image
+                        src={photo.previewUrl}
+                        alt={photo.angle ?? photo.title ?? `Vue ${index + 1}`}
+                        fill
+                        sizes="80px"
+                        unoptimized
+                        className="object-cover"
+                      />
+                    )}
+                    <span className="absolute inset-x-0 bottom-0 truncate bg-black/55 px-1 py-0.5 text-left text-[8px] text-white">
+                      {photo.angle ?? photo.title ?? `Vue ${index + 1}`}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          {assetsError && (
+            <div
+              role="alert"
+              className="mt-3 rounded-md bg-red-50 p-3 text-xs text-red-700"
+            >
+              {assetsError}
+              <button
+                type="button"
+                onClick={() => setAssetsRetry((value) => value + 1)}
+                className="ml-2 font-semibold underline"
+              >
+                Réessayer
+              </button>
+            </div>
+          )}
+          {!assetsLoading && !assetsError && !vehicleDossiers.length && (
+            <Link
+              href="/mediatheque"
+              className="mt-3 block rounded-md border border-dashed border-[#dad7d1] p-3 text-center text-xs text-[#817d76]"
+            >
+              ＋ Ajouter une photo validée
+            </Link>
+          )}
         </section>
 
         <section className="rounded-md border border-[#e2e2e5] bg-white p-4">
-          <fieldset><legend className="mb-1 text-[11px] font-semibold">Lieu réel · Côte d’Ivoire</legend><p className="mb-3 text-[9px] leading-4 text-[#88847d]">{durationS >= 10 ? 'À partir de 10 secondes, vous pouvez sélectionner plusieurs lieux.' : 'Pour les clips de moins de 10 secondes, un seul lieu est utilisé.'}</p>{places.length ? <div className="grid max-h-64 grid-cols-2 gap-2 overflow-auto">{places.map((place) => { const selected = durationS >= 10 ? placeIds.includes(place.id) : locationAssetId === place.id; return <button type="button" key={place.id} onClick={() => { if (durationS >= 10) { setPlaceIds((current) => selected ? current.length > 1 ? current.filter((id) => id !== place.id) : current : [...current, place.id]); setLocationAssetId(selected ? placeIds.find((id) => id !== place.id) ?? place.id : place.id); } else { setLocationAssetId(selected ? locationAssetId : place.id); setPlaceIds([place.id]); } clearFormError(); }} aria-pressed={selected} className={`overflow-hidden rounded-md border text-left ${selected ? 'border-[#c51e1c] ring-1 ring-[#c51e1c]' : 'border-[#e5e2dd]'}`}><span className="relative block h-16 bg-[#f4f2ef]">{place.previewUrl && <Image src={place.previewUrl} alt="" fill sizes="140px" unoptimized className="object-cover" />}</span><span className="block truncate px-2 pt-1.5 text-[9px] font-medium text-[#4d4a45]">{place.title ?? 'Lieu'}</span><span className="block truncate px-2 pb-1.5 text-[8px] text-[#99958e]">{place.category ?? 'Côte d’Ivoire'}</span></button>; })}</div> : <p className="text-[10px] text-[#88847d]">Aucun lieu validé disponible.</p>}</fieldset>
+          <fieldset>
+            <legend className="mb-1 text-[11px] font-semibold">
+              Lieu réel · Côte d’Ivoire
+            </legend>
+            <p className="mb-3 text-[9px] leading-4 text-[#88847d]">
+              {durationS >= 10
+                ? "À partir de 10 secondes, vous pouvez sélectionner plusieurs lieux."
+                : "Pour les clips de moins de 10 secondes, un seul lieu est utilisé."}
+            </p>
+            {places.length ? (
+              <div className="grid max-h-64 grid-cols-2 gap-2 overflow-auto">
+                {places.map((place) => {
+                  const selected =
+                    durationS >= 10
+                      ? placeIds.includes(place.id)
+                      : locationAssetId === place.id;
+                  return (
+                    <button
+                      type="button"
+                      key={place.id}
+                      onClick={() => {
+                        if (durationS >= 10) {
+                          setPlaceIds((current) =>
+                            selected
+                              ? current.length > 1
+                                ? current.filter((id) => id !== place.id)
+                                : current
+                              : [...current, place.id],
+                          );
+                          setLocationAssetId(
+                            selected
+                              ? (placeIds.find((id) => id !== place.id) ??
+                                  place.id)
+                              : place.id,
+                          );
+                        } else {
+                          setLocationAssetId(
+                            selected ? locationAssetId : place.id,
+                          );
+                          setPlaceIds([place.id]);
+                        }
+                        clearFormError();
+                      }}
+                      aria-pressed={selected}
+                      className={`overflow-hidden rounded-md border text-left ${selected ? "border-[#c51e1c] ring-1 ring-[#c51e1c]" : "border-[#e5e2dd]"}`}
+                    >
+                      <span className="relative block h-16 bg-[#f4f2ef]">
+                        {place.previewUrl && (
+                          <Image
+                            src={place.previewUrl}
+                            alt=""
+                            fill
+                            sizes="140px"
+                            unoptimized
+                            className="object-cover"
+                          />
+                        )}
+                      </span>
+                      <span className="block truncate px-2 pt-1.5 text-[9px] font-medium text-[#4d4a45]">
+                        {place.title ?? "Lieu"}
+                      </span>
+                      <span className="block truncate px-2 pb-1.5 text-[8px] text-[#99958e]">
+                        {place.category ?? "Côte d’Ivoire"}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="text-[10px] text-[#88847d]">
+                Aucun lieu validé disponible.
+              </p>
+            )}
+          </fieldset>
         </section>
 
         <section className="rounded-md border border-[#e2e2e5] bg-white p-4">
           <div className="space-y-4">
-            <fieldset><legend className="mb-1 text-[11px] font-semibold">Casting</legend><p className="mb-2 text-[9px] leading-4 text-[#88847d]">{castAssets.length ? `Jusqu’à ${MAX_CAST} personnes validées. Les mêmes personnes apparaissent dans toute la vidéo, sauf demande contraire dans la description.` : 'Aucune photo de casting validée. Ajoutez-en dans la médiathèque (catégorie Casting) pour garder les mêmes personnes d’un plan à l’autre.'}</p>{castAssets.length > 0 && <div className="grid max-h-48 grid-cols-3 gap-2 overflow-auto">{castAssets.map((member) => { const selected = castIds.includes(member.id); return <button type="button" key={member.id} onClick={() => { setCastIds((current) => selected ? current.filter((id) => id !== member.id) : current.length >= MAX_CAST ? current : [...current, member.id]); clearFormError(); }} aria-pressed={selected} className={`overflow-hidden rounded-md border text-left ${selected ? 'border-[#c51e1c] ring-1 ring-[#c51e1c]' : 'border-[#e5e2dd]'}`}><span className="relative block h-16 bg-[#f4f2ef]">{member.previewUrl && <Image src={member.previewUrl} alt="" fill sizes="100px" unoptimized className="object-cover" />}</span><span className="block truncate px-1.5 py-1 text-[9px] text-[#4d4a45]">{member.title ?? 'Personne'}</span></button>; })}</div>}</fieldset>
-            <p className="text-[9px] leading-4 text-[#88847d]">Sans casting, le véhicule reste vide, sauf si la description demande des personnes.</p>
-            {audioAssets.length > 0 && <label className="grid gap-1.5 text-[11px] font-semibold">Musique<select value={audioAssetId} onChange={(event) => setAudioAssetId(event.target.value)} className="min-h-9 rounded-md border border-[#e9e7e2] bg-white px-2 text-[10px] font-normal outline-none focus:border-[#c51e1c]"><option value="">Sans musique</option>{audioAssets.map((track) => <option key={track.id} value={track.id}>{track.title ?? 'Piste validée'}</option>)}</select></label>}
-            <fieldset><legend className="mb-2 text-[11px] font-semibold">Lumière</legend><div className="flex flex-wrap gap-1.5">{lightingChoices.map(({ label, scene }) => <button type="button" key={label} onClick={() => setScenePresetId(scene.id)} aria-pressed={label === getLightingLabel(selectedScene?.lighting ?? '')} className={`rounded-full border px-2.5 py-1.5 text-[10px] transition ${label === getLightingLabel(selectedScene?.lighting ?? '') ? 'border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]' : 'border-[#e5e2dd] text-[#77736d] hover:border-[#c51e1c]'}`}>{label}</button>)}</div></fieldset>
+            <fieldset>
+              <legend className="mb-1 text-[11px] font-semibold">
+                Casting
+              </legend>
+              <p className="mb-2 text-[9px] leading-4 text-[#88847d]">
+                {castAssets.length
+                  ? `Jusqu’à ${MAX_CAST} personnes validées. Les mêmes personnes apparaissent dans toute la vidéo, sauf demande contraire dans la description.`
+                  : "Aucune photo de casting validée. Ajoutez-en dans la médiathèque (catégorie Casting) pour garder les mêmes personnes d’un plan à l’autre."}
+              </p>
+              {castAssets.length > 0 && (
+                <div className="grid max-h-48 grid-cols-3 gap-2 overflow-auto">
+                  {castAssets.map((member) => {
+                    const selected = castIds.includes(member.id);
+                    return (
+                      <button
+                        type="button"
+                        key={member.id}
+                        onClick={() => {
+                          setCastIds((current) =>
+                            selected
+                              ? current.filter((id) => id !== member.id)
+                              : current.length >= MAX_CAST
+                                ? current
+                                : [...current, member.id],
+                          );
+                          clearFormError();
+                        }}
+                        aria-pressed={selected}
+                        className={`overflow-hidden rounded-md border text-left ${selected ? "border-[#c51e1c] ring-1 ring-[#c51e1c]" : "border-[#e5e2dd]"}`}
+                      >
+                        <span className="relative block h-16 bg-[#f4f2ef]">
+                          {member.previewUrl && (
+                            <Image
+                              src={member.previewUrl}
+                              alt=""
+                              fill
+                              sizes="100px"
+                              unoptimized
+                              className="object-cover"
+                            />
+                          )}
+                        </span>
+                        <span className="block truncate px-1.5 py-1 text-[9px] text-[#4d4a45]">
+                          {member.title ?? "Personne"}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </fieldset>
+            <p className="text-[9px] leading-4 text-[#88847d]">
+              Sans casting, le véhicule reste vide, sauf si la description
+              demande des personnes.
+            </p>
+            {audioAssets.length > 0 && (
+              <label className="grid gap-1.5 text-[11px] font-semibold">
+                Musique
+                <select
+                  value={audioAssetId}
+                  onChange={(event) => setAudioAssetId(event.target.value)}
+                  className="min-h-9 rounded-md border border-[#e9e7e2] bg-white px-2 text-[10px] font-normal outline-none focus:border-[#c51e1c]"
+                >
+                  <option value="">Sans musique</option>
+                  {audioAssets.map((track) => (
+                    <option key={track.id} value={track.id}>
+                      {track.title ?? "Piste validée"}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            <fieldset>
+              <legend className="mb-2 text-[11px] font-semibold">
+                Lumière
+              </legend>
+              <div className="flex flex-wrap gap-1.5">
+                {lightingChoices.map(({ label, scene }) => (
+                  <button
+                    type="button"
+                    key={label}
+                    onClick={() => setScenePresetId(scene.id)}
+                    aria-pressed={
+                      label === getLightingLabel(selectedScene?.lighting ?? "")
+                    }
+                    className={`rounded-full border px-2.5 py-1.5 text-[10px] transition ${label === getLightingLabel(selectedScene?.lighting ?? "") ? "border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]" : "border-[#e5e2dd] text-[#77736d] hover:border-[#c51e1c]"}`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </fieldset>
           </div>
         </section>
 
         <section className="rounded-md border border-[#e2e2e5] bg-white p-4">
-          <fieldset><legend className="mb-2 text-[11px] font-semibold">Format</legend><div className="flex flex-wrap gap-1.5">{(['16:9', '9:16', '1:1'] as const).map((value) => <button type="button" key={value} onClick={() => { setFormat(value); clearFormError(); }} aria-pressed={format === value} className={`rounded-full border px-2.5 py-1.5 text-[10px] ${format === value ? 'border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]' : 'border-[#e5e2dd] text-[#77736d]'}`}>{value}</button>)}</div></fieldset>
-          <fieldset className="mt-4"><legend className="mb-2 text-[11px] font-semibold">Niveau de génération</legend><div className="grid grid-cols-3 gap-1.5">{([{ value: 'standard', label: 'Standard' }, { value: 'pro', label: 'Pro' }, { value: 'premium', label: 'Premium' }] as const).map((option) => <button type="button" key={option.value} onClick={() => { setTier(option.value); if (option.value === 'premium') setDurationS(20); clearFormError(); }} aria-pressed={tier === option.value} className={`rounded-full border px-2.5 py-1.5 text-[10px] ${tier === option.value ? 'border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]' : 'border-[#e5e2dd] text-[#77736d]'}`}>{option.label}</button>)}</div><p className="mt-2 text-[9px] text-[#88847d]">Clips générés : {durationS} s · vidéo finale avec logo : {durationS + 2} s.</p></fieldset>
-          {mode === 'live' && modelsError && <p role="alert" className="mt-4 rounded-md bg-red-50 p-3 text-[10px] text-red-700">{modelsError}</p>}
-          {mode === 'live' && !modelsLoading && !modelsError && !storyboardModel && <p role="alert" className="mt-4 rounded-md bg-red-50 p-3 text-[10px] text-red-700">Aucune option disponible pour cette durée et ce format. Choisissez un autre niveau ou format.</p>}
-          {mode === 'mock' && <p className="mt-4 rounded-md bg-[#fbf6ed] p-3 text-[10px] leading-4 text-[#765d39]">Simulation active : aucune vidéo payante ne sera générée.</p>}
-          {mode === 'live' && estimatedPriceFcfa != null && <p className="mt-4 border-t border-[#eeeae4] pt-4 text-[10px] text-[#88847d]">Estimation vidéo · environ {formatFcfa(estimatedPriceFcfa)}</p>}
-          <p className="mt-4 border-t border-[#eeeae4] pt-4 text-[10px] leading-4 text-[#88847d]">La vidéo sera générée directement. Les plans et les lieux suivront automatiquement vos choix.</p>
+          <fieldset>
+            <legend className="mb-2 text-[11px] font-semibold">Format</legend>
+            <div className="flex flex-wrap gap-1.5">
+              {(["16:9", "9:16", "1:1"] as const).map((value) => (
+                <button
+                  type="button"
+                  key={value}
+                  onClick={() => {
+                    setFormat(value);
+                    clearFormError();
+                  }}
+                  aria-pressed={format === value}
+                  className={`rounded-full border px-2.5 py-1.5 text-[10px] ${format === value ? "border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]" : "border-[#e5e2dd] text-[#77736d]"}`}
+                >
+                  {value}
+                </button>
+              ))}
+            </div>
+          </fieldset>
+          <fieldset className="mt-4">
+            <legend className="mb-2 text-[11px] font-semibold">
+              Niveau de génération
+            </legend>
+            <div className="grid grid-cols-3 gap-1.5">
+              {(
+                [
+                  { value: "standard", label: "Standard" },
+                  { value: "pro", label: "Pro" },
+                  { value: "premium", label: "Premium" },
+                ] as const
+              ).map((option) => (
+                <button
+                  type="button"
+                  key={option.value}
+                  onClick={() => {
+                    setTier(option.value);
+                    if (option.value === "premium") setDurationS(20);
+                    clearFormError();
+                  }}
+                  aria-pressed={tier === option.value}
+                  className={`rounded-full border px-2.5 py-1.5 text-[10px] ${tier === option.value ? "border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]" : "border-[#e5e2dd] text-[#77736d]"}`}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+            <p className="mt-2 text-[9px] text-[#88847d]">
+              Clips générés : {durationS} s · vidéo finale avec logo :{" "}
+              {durationS + 2} s.
+            </p>
+          </fieldset>
+          {mode === "live" && modelsError && (
+            <p
+              role="alert"
+              className="mt-4 rounded-md bg-red-50 p-3 text-[10px] text-red-700"
+            >
+              {modelsError}
+            </p>
+          )}
+          {mode === "live" &&
+            !modelsLoading &&
+            !modelsError &&
+            !storyboardModel && (
+              <p
+                role="alert"
+                className="mt-4 rounded-md bg-red-50 p-3 text-[10px] text-red-700"
+              >
+                Aucune option disponible pour cette durée et ce format.
+                Choisissez un autre niveau ou format.
+              </p>
+            )}
+          {mode === "mock" && (
+            <p className="mt-4 rounded-md bg-[#fbf6ed] p-3 text-[10px] leading-4 text-[#765d39]">
+              Simulation active : aucune vidéo payante ne sera générée.
+            </p>
+          )}
+          {mode === "live" && estimatedPriceFcfa != null && (
+            <p className="mt-4 border-t border-[#eeeae4] pt-4 text-[10px] text-[#88847d]">
+              Estimation vidéo · environ {formatFcfa(estimatedPriceFcfa)}
+            </p>
+          )}
+          <p className="mt-4 border-t border-[#eeeae4] pt-4 text-[10px] leading-4 text-[#88847d]">
+            La vidéo sera générée directement. Les plans et les lieux suivront
+            automatiquement vos choix.
+          </p>
         </section>
-        <p className="px-1 text-[10px] leading-4 text-[#88847d]">{multiClip ? 'Les vues et lieux sélectionnés déterminent les plans, assemblés automatiquement.' : 'Un plan créatif. Si nécessaire, le modèle le répartit en plusieurs clips avant le montage final.'}</p>
+        <p className="px-1 text-[10px] leading-4 text-[#88847d]">
+          {multiClip
+            ? "Les vues et lieux sélectionnés déterminent les plans, assemblés automatiquement."
+            : "Un plan créatif. Si nécessaire, le modèle le répartit en plusieurs clips avant le montage final."}
+        </p>
       </aside>
       <div className="space-y-3 xl:col-span-2">
-        {error && <div role="alert" className="rounded-md border border-red-100 bg-red-50 p-4 text-xs leading-5 text-red-800"><p>{error}</p><button type="submit" disabled={busy} className="mt-2 font-semibold underline underline-offset-2">Réessayer la génération</button></div>}
-        <button type="submit" disabled={busy || generationActive || !selectedDossier?.id || !selectedDossier.photos.length || mode === 'live' && (!storyboardModel || modelsLoading)} aria-describedby={generationActive ? 'generation-lock-message' : undefined} className="w-full rounded-md bg-[#c51e1c] px-4 py-4 text-sm font-semibold text-white transition hover:bg-[#a71715] disabled:cursor-not-allowed disabled:opacity-50">{busy ? 'Le réalisateur prépare la vidéo…' : generationActive ? 'Génération en cours…' : `Générer la vidéo · ${durationS} s`}</button>
-        <p className="text-center text-[10px] text-[#88847d]">Lancement direct : les vues et lieux sélectionnés déterminent automatiquement les plans.</p>
+        {error && (
+          <div
+            role="alert"
+            className="rounded-md border border-red-100 bg-red-50 p-4 text-xs leading-5 text-red-800"
+          >
+            <p>{error}</p>
+            <button
+              type="submit"
+              disabled={busy}
+              className="mt-2 font-semibold underline underline-offset-2"
+            >
+              Réessayer la génération
+            </button>
+          </div>
+        )}
+        <button
+          type="submit"
+          disabled={
+            busy ||
+            generationActive ||
+            !selectedDossier?.id ||
+            !selectedDossier.photos.length ||
+            (mode === "live" && (!storyboardModel || modelsLoading))
+          }
+          aria-describedby={
+            generationActive ? "generation-lock-message" : undefined
+          }
+          className="w-full rounded-md bg-[#c51e1c] px-4 py-4 text-sm font-semibold text-white transition hover:bg-[#a71715] disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {busy
+            ? "Le réalisateur prépare la vidéo…"
+            : generationActive
+              ? "Génération en cours…"
+              : `Générer la vidéo · ${durationS} s`}
+        </button>
+        <p className="text-center text-[10px] text-[#88847d]">
+          Lancement direct : les vues et lieux sélectionnés déterminent
+          automatiquement les plans.
+        </p>
       </div>
     </form>
   );

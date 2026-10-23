@@ -24,6 +24,7 @@ import { resolveGenerationTier } from '@/core/versions/generation-tier';
 import { elapsedSeconds, processingDurations, processingStage, type ProcessingMetrics } from '@/core/versions/processing-metrics';
 import { limitRelationToLatest } from '@/core/versions/library-query';
 import { storedQualityWarnings } from '@/core/versions/quality-gate';
+import { extractGenerationInputs, generationInputAssetIds } from '@/core/versions/generation-inputs';
 
 const deleteSchema = z.object({ videoIds: z.array(z.string().uuid()).min(1).max(50) }).strict().refine((input) => new Set(input.videoIds).size === input.videoIds.length, { message: 'La sélection contient des doublons.' });
 const multiClipSchema = requestSchema.extend({
@@ -75,7 +76,7 @@ export async function GET(request: Request) {
       const records = allVersions().filter((item) => item.userId === actor.id || actor.role === 'admin');
       const versions = records.map((latest) => {
         const status = latest.reviewStatus === 'approved' ? 'ready' : latest.reviewStatus === 'rejected' ? 'rejected' : latest.reviewStatus === 'pending' ? 'review' : latest.status;
-        return { id: latest.id, videoId: latest.videoId, title: latest.title ?? latest.brief.vehicle_description, status, tier: latest.tier ?? null, durationSeconds: latest.brief.duration_s, priceFcfa: latest.priceFcfa, prompt: latest.prompt, previewUrl: latest.status === 'ready' ? latest.videoUrl : undefined, videoUrl: latest.status === 'ready' ? latest.videoUrl : undefined, createdAt: latest.createdAt };
+        return { id: latest.id, videoId: latest.videoId, title: latest.title ?? latest.brief.vehicle_description, status, tier: latest.tier ?? null, durationSeconds: latest.brief.duration_s, priceFcfa: latest.priceFcfa, prompt: latest.prompt, inputs: extractGenerationInputs(latest.brief), previewUrl: latest.status === 'ready' ? latest.videoUrl : undefined, videoUrl: latest.status === 'ready' ? latest.videoUrl : undefined, createdAt: latest.createdAt };
       }).filter((item) => !requestedStatus || item.status === requestedStatus);
       return NextResponse.json({ versions });
     }
@@ -94,6 +95,14 @@ export async function GET(request: Request) {
     }
     const { data, error } = await query;
     if (error) throw error;
+    const latestBrief = (video: NonNullable<typeof data>[number]) => {
+      const rows = Array.isArray(video.video_versions) ? video.video_versions : [];
+      const brief = [...rows].sort((a, b) => b.number - a.number)[0]?.brief_json;
+      return brief && typeof brief === 'object' ? brief as Record<string, unknown> : {};
+    };
+    const inputAssetIds = [...new Set((data ?? []).flatMap((video) => generationInputAssetIds(latestBrief(video))))];
+    const { data: inputAssets } = inputAssetIds.length ? await admin.from('assets').select('id,title').in('id', inputAssetIds) : { data: [] };
+    const assetTitles = new Map((inputAssets ?? []).filter((asset) => asset.title).map((asset) => [asset.id as string, asset.title as string]));
     const versions = await Promise.all((data ?? []).map(async (video) => {
       const rows = Array.isArray(video.video_versions) ? video.video_versions : [];
       const latest = [...rows].sort((a, b) => b.number - a.number)[0];
@@ -147,7 +156,7 @@ export async function GET(request: Request) {
       const metrics = briefData.processingMetrics && typeof briefData.processingMetrics === 'object' ? briefData.processingMetrics as ProcessingMetrics : {};
       const stage = qualityCheckActive ? 'quality_checking' : processingStage(latest?.status ?? status, metrics);
       const stageStartedAt = stage === 'queued' ? metrics.providerSubmittedAt : stage === 'keyframing' ? metrics.keyframingStartedAt : stage === 'generating' ? metrics.generationStartedAt ?? metrics.providerSubmittedAt : stage === 'transferring' ? metrics.providerCompletedAt : stage === 'postprocessing' ? metrics.postproductionStartedAt : undefined;
-      return { id: latest?.id ?? video.id, videoId: video.id, title: video.title, status, workflow: briefData.multiClipMode === true ? 'multi_clip' : 'single', tier: generationTier, photoFidelity: isPhotoFidelity, format: typeof briefData.format === 'string' ? briefData.format : '16:9', durationSeconds: Number(latest?.generation_seconds ?? generationCost?.seconds ?? 5), version: latest?.number ?? 1, versionStatus: latest?.status ?? null, errorMessage: latest?.error_message ?? null, qualityWarnings: storedQualityWarnings(briefData), pollError, canRetryTracking, reconciliationRequired, checkedQualityShots, totalQualityShots, shotProgress, processingStage: stage, stageElapsedSeconds: elapsedSeconds(stageStartedAt), processingDurations: processingDurations(metrics, latest?.status ?? status), processingMetrics: metrics, priceFcfa: generationCost?.priceFcfa ?? (typeof mockMetadata.priceFcfa === 'number' ? mockMetadata.priceFcfa : null), validationId: validationRows[0]?.id ?? null, validationStatus: validationRows[0]?.status ?? null, ...(includePreviews ? { videoUrl, previewUrl, previewSource } : {}), createdAt: video.created_at, department: video.department, userId: video.user_id };
+      return { id: latest?.id ?? video.id, videoId: video.id, title: video.title, status, workflow: briefData.multiClipMode === true ? 'multi_clip' : 'single', tier: generationTier, photoFidelity: isPhotoFidelity, format: typeof briefData.format === 'string' ? briefData.format : '16:9', durationSeconds: Number(latest?.generation_seconds ?? generationCost?.seconds ?? 5), version: latest?.number ?? 1, versionStatus: latest?.status ?? null, errorMessage: latest?.error_message ?? null, qualityWarnings: storedQualityWarnings(briefData), inputs: extractGenerationInputs(briefData, assetTitles), pollError, canRetryTracking, reconciliationRequired, checkedQualityShots, totalQualityShots, shotProgress, processingStage: stage, stageElapsedSeconds: elapsedSeconds(stageStartedAt), processingDurations: processingDurations(metrics, latest?.status ?? status), processingMetrics: metrics, priceFcfa: generationCost?.priceFcfa ?? (typeof mockMetadata.priceFcfa === 'number' ? mockMetadata.priceFcfa : null), validationId: validationRows[0]?.id ?? null, validationStatus: validationRows[0]?.status ?? null, ...(includePreviews ? { videoUrl, previewUrl, previewSource } : {}), createdAt: video.created_at, department: video.department, userId: video.user_id };
     }));
     return NextResponse.json({ versions: requestedStatus ? versions.filter((version) => version.status === requestedStatus) : versions });
   } catch (error) { return errorResponse(error); }
