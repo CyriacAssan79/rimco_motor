@@ -279,6 +279,8 @@ export function buildKeyframePrompt(input: {
   castDescription?: string | null;
   scene?: DrivingScene;
   place?: string;
+  /** 3b: an accepted keyframe of an earlier shot in the same place is sent just before the location photo. */
+  hasAnchorReference?: boolean;
 }) {
   const views = Math.max(1, input.vehicleReferenceCount ?? 1);
   const castCount = input.castTitles?.length ?? 0;
@@ -286,6 +288,7 @@ export function buildKeyframePrompt(input: {
     `image 1 = the exact vehicle (${input.vehicle})`,
     ...(views > 1 ? [`images 2-${views} = other views of it, for details only`] : []),
     ...(castCount ? [`images ${views + 1}-${views + castCount} = casting photos`] : []),
+    ...(input.hasAnchorReference ? [`${input.hasLocationReference ? 'image before last' : 'last image'} = an earlier frame of this film in this place: keep its road layout, lanes, landmarks and light, not its framing`] : []),
     ...(input.hasLocationReference ? ['last image = the location'] : []),
   ].join('; ');
   return fitPrompt([
