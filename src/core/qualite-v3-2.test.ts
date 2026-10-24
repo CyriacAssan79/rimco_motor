@@ -49,7 +49,7 @@ describe('v3.2 · garde-fou de longueur', () => {
 
   it('prompt usuel nettement plus court qu’avant (environ 1 000 caractères)', () => {
     const shot = shotDraftSchema.parse({ title: 'Suivi', shotType: 'rolling', travelDirection: 'left_to_right', travelSpeed: 'cruise', scene: 'SUV on the lagoon boulevard', framing: 'Medium wide', location: 'Abidjan lagoon boulevard', action: 'The SUV passes lamp posts and lane markings', camera: 'Static camera, slow pan', durationSeconds: 5, vehiclePhotoId: 'front', locationPhotoId: 'place' });
-    expect(buildKeyframeAnimationPrompt({ shot, vehicle: 'Haval H6 Gris', durationS: 5, mood: 'premium', lighting: 'Natural daylight', excludePeople: true }).length).toBeLessThan(1_100);
+    expect(buildKeyframeAnimationPrompt({ shot, vehicle: 'Haval H6 Gris', durationS: 5, mood: 'premium', lighting: 'Natural daylight', excludePeople: true }).length).toBeLessThan(1_350); // 24/10 : +marche avant et défilement (essais A et B)
   });
 });
 

@@ -258,6 +258,37 @@ export function storyboardMotionIssue(shots: MotionShot[], photoAngles: Record<s
   return issues.length ? issues.join(' ') : null;
 }
 
+const NOSE: Record<'left_to_right' | 'right_to_left' | 'towards_camera' | 'away_from_camera', string> = {
+  left_to_right: 'to the right side of the frame',
+  right_to_left: 'to the left side of the frame',
+  towards_camera: 'towards the camera (its front is seen)',
+  away_from_camera: 'away from the camera (its rear is seen)',
+};
+
+/** Screen side a turn leads to: a car facing the camera that turns to its own right goes to the frame's left. */
+export function turnScreenSide(motion: MotionId | undefined, direction: TravelDirection | undefined): 'left' | 'right' | null {
+  if ((motion !== 'turn_left' && motion !== 'turn_right') || (direction !== 'towards_camera' && direction !== 'away_from_camera')) return null;
+  const ownRight = motion === 'turn_right';
+  return direction === 'towards_camera' ? (ownRight ? 'left' : 'right') : (ownRight ? 'right' : 'left');
+}
+
+type HeadingShot = { motion?: MotionId; travelDirection?: TravelDirection };
+
+/** Where the car's nose points at the start of a moving shot, in screen terms (essai B, 24/10). */
+export function headingAtStart(shot: HeadingShot): string | null {
+  const direction = shot.travelDirection;
+  if (!direction || direction === 'static' || getMotion(shot.motion)?.driving === 'none') return null;
+  return `The car’s nose points ${NOSE[direction]}.`;
+}
+
+/** Where the car's nose points on the closing frame: unchanged, or towards the turn's screen side. */
+export function headingAtEnd(shot: HeadingShot): string | null {
+  const side = turnScreenSide(shot.motion, shot.travelDirection);
+  if (side) return `After turning to its own ${shot.motion === 'turn_right' ? 'right' : 'left'}, the car’s nose points towards the ${side} side of the frame.`;
+  const start = headingAtStart(shot);
+  return start ? `${start.slice(0, -1)}, exactly as at the start.` : null;
+}
+
 /** The director's motion menu: one compact entry per motion (directions and speeds are stated once in the MOTION rule). */
 export function directorMotionMenu(): string {
   return motionIds.map((id) => {

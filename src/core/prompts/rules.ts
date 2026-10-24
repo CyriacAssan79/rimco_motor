@@ -32,6 +32,12 @@ export function placeRule(place: string, market?: string): string {
   return `Place: ${place}${market ? ` (${market})` : ''}. Everything the camera reveals belongs to this same place: same road layout, buildings and vegetation; nothing from another city or country.`;
 }
 
+/** 24/10 (essai B): a car moving right ended facing left, so the clip showed a U-turn then reversing. */
+export const FORWARD_ONLY = 'The car only drives forward, nose first; it never reverses, spins round or flips direction.';
+
+/** 24/10 (essai A): the camera followed the car and the bridge cables never went by, so the set looked frozen. */
+export const PARALLAX = 'Fixed posts, cables, pylons and trees stay put and the car passes them one by one; with a moving camera, near objects slide by faster than the distance.';
+
 /** Catalogue motions that change speed or heading replace CALM_DRIVING with their own normal-driving rule. */
 export const TURN_DRIVING = 'Calm, normal turn: the car follows the curve of its lane at a slow speed, front wheels steered into the turn, the body leaning slightly; no drift, skid, spin or sideways slide.';
 export const PULL_AWAY_DRIVING = 'Calm, normal start: the car stays in its lane and accelerates progressively; no wheelspin, jump, drift or skid.';
