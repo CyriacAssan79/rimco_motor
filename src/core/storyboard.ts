@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { peoplePresets, type PeoplePresetId } from '@/core/people-presets';
+import { directorMotionMenu, getMotion, motionIdSchema, normalizeMotion } from '@/core/motions/catalog';
 
 export const storyModeSchema = z.enum(['standard', 'pro', 'premium']);
 export type StoryMode = z.infer<typeof storyModeSchema>;
@@ -91,6 +93,8 @@ export const MAX_CAST_PER_VIDEO = 2;
 
 export const shotDraftSchema = z.object({
   title: storyboardText(80),
+  /** Closed motion id from the catalogue (src/core/motions/catalog.ts); optional for storyboards made before it. */
+  motion: z.preprocess(normalizeMotion, motionIdSchema.optional()),
   shotType: z.preprocess(normalizeShotType, shotTypeSchema.optional()),
   travelDirection: z.preprocess(normalizeTravelDirection, travelDirectionSchema.optional()),
   travelSpeed: z.preprocess(normalizeTravelSpeed, travelSpeedSchema.optional()),
@@ -105,7 +109,11 @@ export const shotDraftSchema = z.object({
   durationSeconds: z.number().int().min(2).max(30),
   vehiclePhotoId: z.string().trim().min(1).max(100),
   locationPhotoId: z.string().trim().min(1).max(100).nullable().optional(),
-}).strict();
+}).strict().transform((shot) => {
+  // The motion sets the shot type: the director no longer writes it, and an older shotType never contradicts it.
+  const motion = getMotion(shot.motion);
+  return motion ? { ...shot, shotType: motion.shotType } : shot;
+});
 
 export const storyboardSchema = z.array(shotDraftSchema).min(2).max(6);
 export const singleShotStoryboardSchema = z.array(shotDraftSchema).length(1);
@@ -246,7 +254,7 @@ type DirectorPhoto = { id: string; role: string; title: string; angle?: string |
 /** Maximum lengths announced to the director (the schema keeps ~25 % headroom before compacting). */
 export const DIRECTOR_FIELD_LIMITS = { title: 60, scene: 120, framing: 80, location: 100, action: 160, camera: 120 } as const;
 
-const DIRECTOR_SCHEMA = '{"castDescription":"","shots":[{"title":"","shotType":"establishing|rolling|detail|hero","travelDirection":"left_to_right|right_to_left|towards_camera|away_from_camera|static","travelSpeed":"slow|cruise|dynamic","castIds":[],"scene":"","framing":"","location":"","action":"","camera":"","durationSeconds":5,"vehiclePhotoId":"","locationPhotoId":null}]}';
+const DIRECTOR_SCHEMA = '{"castDescription":"","shots":[{"title":"","motion":"","travelDirection":"left_to_right|right_to_left|towards_camera|away_from_camera|static","travelSpeed":"slow|cruise|dynamic","castIds":[],"scene":"","framing":"","location":"","action":"","camera":"","durationSeconds":5,"vehiclePhotoId":"","locationPhotoId":null}]}';
 
 /** Shot count and durations, stated once, per tier. */
 export function directorShotPlan(input: { mode: StoryMode; durationSeconds: ClipDurationSeconds; single?: boolean }): string {
@@ -260,9 +268,12 @@ export function directorShotPlan(input: { mode: StoryMode; durationSeconds: Clip
 /** 22/10: a character walked beside the moving car. */
 const PEOPLE_PLACEMENT = 'While the car moves, the people are inside it (driver at the wheel, passengers seated); they stand or walk outside only in a shot where the car is stopped. Say where they are in "action".';
 
-function peopleRule(input: { cast?: CastMember[]; noPeople?: boolean }) {
+function peopleRule(input: { cast?: CastMember[]; noPeople?: boolean; peoplePreset?: PeoplePresetId }) {
   if (input.noPeople) return 'PEOPLE: nobody in any shot, inside or outside the car. castIds is [] and castDescription is empty.';
   if (input.cast?.length) return `PEOPLE: only this approved casting: ${JSON.stringify(input.cast)}. For each shot, castIds lists who is visible ([] = nobody, the car looks empty). The same people in every shot unless the brief asks otherwise; never leaning on the car. ${PEOPLE_PLACEMENT} castDescription stays empty.`;
+  const preset = peoplePresets[input.peoplePreset ?? 'none'].direction;
+  // Studio « Personnage » choice: people are required, and the sheet keeps them identical from shot to shot.
+  if (preset) return `PEOPLE: ${preset}. Describe them once in castDescription (age, skin tone, build, hair, clothes and colours); the same people appear identically in every shot, never leaning on the car. ${PEOPLE_PLACEMENT} Omit castIds.`;
   return `PEOPLE: nobody unless the brief asks. If it does, describe them once in castDescription (age, skin tone, build, hair, clothes and colours); the same people appear identically in every shot, never leaning on the car. ${PEOPLE_PLACEMENT} Omit castIds.`;
 }
 
@@ -281,13 +292,14 @@ export function buildDirectorInstruction(input: {
   lighting?: string;
   mood?: string;
   cast?: CastMember[];
+  peoplePreset?: PeoplePresetId;
 }) {
   const limits = DIRECTOR_FIELD_LIMITS;
   return [
     `You direct a premium live-action car commercial for RIMCO Motors in Côte d'Ivoire, ${input.format ?? '16:9'}. Return only this JSON: ${DIRECTOR_SCHEMA}`,
     `FORMAT: "title" in French (max ${limits.title} characters). scene (${limits.scene}), framing (${limits.framing}), location (${limits.location}), action (${limits.action}) and camera (${limits.camera}) in short English cinematographer language. ${directorShotPlan(input)} A ${STORYBOARD_LOGO_SECONDS} s logo card is added after the edit.`,
     'STORY: one clear idea taken from the user brief. Open on the place with the car already moving, vary shot sizes, end on a calm exterior hero shot (front three-quarter view if available).',
-    'MOTION: at least half the shots are "rolling". Give every shot a travelDirection and a travelSpeed ("static" when stopped). Prefer set-ups where travel reads against the ground: pass-by with a static or panning camera, approach, drive-away, follow from behind. At most one side-tracking shot at the car\'s speed. Keep one lateral direction for the whole film. In "action", name the fixed things the car passes. Normal, legal driving only: the car stays in its lane; no drift, skid, high speed or complex manoeuvre; travelSpeed is slow or cruise in towns, dynamic only on an open road. Match travelDirection to the photo angle: front three-quarter = towards_camera, profile = left_to_right or right_to_left, rear three-quarter = away_from_camera. A car that arrives and stops is not static: give its direction with travelSpeed slow. One simple camera move per shot; dust only on unpaved roads.',
+    `MOTION: give every shot one "motion" from this menu: ${directorMotionMenu()}. One motion per shot ("arrives then stops" = two shots). At least half the shots move. travelDirection fits the motion (approach = towards_camera; drive_away, follow_behind = away_from_camera; turns = towards_camera or away_from_camera; hero_still, detail_glide = static). Match it to the photo angle: front three-quarter = towards_camera, profile = left_to_right or right_to_left, rear three-quarter = away_from_camera. Keep one lateral direction for the whole film. At most one side-tracking shot. In "action", name the fixed things the car passes. Normal, legal driving: the car stays in its lane; no drift, skid or high speed; travelSpeed is slow or cruise in towns, dynamic only on an open road. One simple camera move per shot; dust only on unpaved roads.`,
     `FIDELITY: use only the photo and place ids listed below. Each shot matches the angle of its photo: no interior, rear, profile or close-up without a matching photo. Invent nothing: no feature, colour, landmark, sign or text.${input.places.some((place) => place.timeOfDay) ? " The light of each shot follows its place's timeOfDay; prefer places with the same timeOfDay." : ''}`,
     peopleRule(input),
     'TEXT: no text, title, logo, caption or transition; avoid framing signs or billboards; plates unreadable.',

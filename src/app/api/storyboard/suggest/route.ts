@@ -4,6 +4,8 @@ import { errorResponse, getActor, HttpError } from '@/core/auth/guards';
 import { createSupabaseServerClient } from '@/core/supabase/server';
 import { createStorageAdminClient } from '@/core/storage/supabase';
 import { env } from '@/env';
+import { storyboardMotionIssue } from '@/core/motions/catalog';
+import { peoplePresetIds } from '@/core/people-presets';
 import { buildDirectorUserPrompt, buildSingleShotStoryboardInstruction, castDescriptionSchema, MAX_CAST_PER_VIDEO, validateStoryboardCast, vehicleDescriptionForPrompt, buildStoryboardInstruction, isTierDurationSupported, singleShotStoryboardSchema, storyboardDurationIssue, storyboardSchema, validatePremiumTwentySecondStoryboard, validateSingleShotStoryboard, validateStoryboard, type ClipDurationSeconds, type StoryboardShot } from '@/core/storyboard';
 import { getStoryboardModeRoute } from '@/core/providers/storyboard-routing';
 import { buildFalLlmInput, createFalLlmProvider, FalLlmBriefError, llmReservationUsd } from '@/core/providers/fal-llm';
@@ -26,6 +28,8 @@ const requestSchema = z.object({
   direction: storyboardDirectionSchema.default(''),
   format: z.enum(['16:9', '9:16', '1:1', '4:5']).default('16:9'),
   character: z.string().trim().max(160).default(''),
+  /** Studio « Personnage » choice, ignored when a casting is selected. */
+  peoplePreset: z.enum(peoplePresetIds).default('none'),
   lighting: z.string().trim().max(160).default(''),
   mood: z.string().trim().max(160).default(''),
   castAssetIds: z.array(z.string().uuid()).max(MAX_CAST_PER_VIDEO).default([]),
@@ -103,6 +107,7 @@ export async function POST(request: Request) {
       purpose: input.purpose, direction: input.direction, format: input.format,
       character: input.character, lighting: input.lighting, mood: input.mood,
       cast,
+      peoplePreset: cast.length ? 'none' as const : input.peoplePreset,
     };
     const instruction = input.workflow === 'single'
       ? buildSingleShotStoryboardInstruction({ ...instructionInput, mode: input.mode })
@@ -127,6 +132,7 @@ export async function POST(request: Request) {
       const premiumCreative = premiumTwentySecond;
       const drafts = durations.map((durationSeconds, index) => ({
         title: premiumCreative ? premiumTitles[index] : index === 0 ? 'Révélation du véhicule' : 'Détail et signature',
+        motion: premiumCreative ? (['establishing_drive', 'pass_by', 'detail_glide', 'arrive_and_stop'] as const)[index] : index === 0 ? 'pass_by' as const : 'hero_still' as const,
         shotType: premiumCreative ? (['establishing', 'rolling', 'detail', 'hero'] as const)[index] : index === 0 ? 'rolling' as const : 'hero' as const,
         travelDirection: premiumCreative ? (['left_to_right', 'left_to_right', 'static', 'towards_camera'] as const)[index] : index === 0 ? 'left_to_right' as const : 'static' as const,
         travelSpeed: 'cruise' as const,
@@ -140,6 +146,7 @@ export async function POST(request: Request) {
         locationPhotoId: selectedPlaces[index % Math.max(1, selectedPlaces.length)]?.id ?? null,
       }));
       shots = input.workflow === 'single' ? singleShotStoryboardSchema.parse(drafts) : storyboardSchema.parse(drafts);
+      if (!cast.length && input.peoplePreset !== 'none') castDescription = 'Adult driver in their thirties, warm brown skin, short black hair, white shirt and navy trousers.';
       totalEstimatedPriceFcfa = 0;
     } else {
       const admin = createStorageAdminClient();
@@ -160,13 +167,20 @@ export async function POST(request: Request) {
           const fal = createFalClient({ credentials: falCredential.apiKey });
           return fal.subscribe('openrouter/router', { input: buildFalLlmInput(prompt, system, env.LLM_MODEL!) as never });
         });
+        // Motion catalogue: a missing or incoherent motion (direction, speed, photo angle) also triggers the corrected retry.
+        const photoAngles = Object.fromEntries(selectedVehicle.map((photo) => [photo.id, photo.angle]));
+        // Without a sheet the people would be dropped at generation (patch v3.2, F9): a requested « Personnage » needs one.
+        const peopleSheetIssue = (sheet: string | undefined) => !cast.length && input.peoplePreset !== 'none' && !sheet ? 'castDescription est obligatoire : décris les personnes demandées.' : null;
         const responseSchema = input.workflow === 'single'
-          ? singleShotStoryboardResponseSchema
+          ? singleShotStoryboardResponseSchema.superRefine(({ shots, castDescription: sheet }, context) => {
+              const issue = [storyboardMotionIssue(shots, photoAngles), peopleSheetIssue(sheet)].filter(Boolean).join(' ');
+              if (issue) context.addIssue({ code: 'custom', path: ['shots'], message: issue });
+            })
           // Patch v3.2 (A5): wrong durations make the answer invalid (automatic corrected retry), never silently rewritten.
-          : z.object({ castDescription: castDescriptionSchema.optional(), shots: storyboardSchema }).strict().superRefine(({ shots }, context) => {
-              const issue = premiumTwentySecond
+          : z.object({ castDescription: castDescriptionSchema.optional(), shots: storyboardSchema }).strict().superRefine(({ shots, castDescription: sheet }, context) => {
+              const issue = [premiumTwentySecond
                 ? shots.length === 4 && shots.every((shot) => shot.durationSeconds === 5) ? null : 'Exactement 4 plans de 5 secondes.'
-                : storyboardDurationIssue(shots, input.durationSeconds, route.adapterFamily);
+                : storyboardDurationIssue(shots, input.durationSeconds, route.adapterFamily), storyboardMotionIssue(shots, photoAngles), peopleSheetIssue(sheet)].filter(Boolean).join(' ');
               if (issue) context.addIssue({ code: 'custom', path: ['shots'], message: issue });
             });
         // Layer 1 (locked rules + approved references) goes in the system prompt; layer 2 (user brief) is the only user content.

@@ -10,6 +10,7 @@ import {
   inferVehicleCategory,
 } from "@/core/scenes/catalog";
 import { MAX_STORYBOARD_DIRECTION_LENGTH } from "@/core/storyboard-direction";
+import { peoplePresetIds, peoplePresets, type PeoplePresetId } from "@/core/people-presets";
 
 type Format = "16:9" | "9:16" | "1:1";
 type Job = {
@@ -77,6 +78,7 @@ type CastAsset = { id: string; title?: string; previewUrl?: string | null };
 const MAX_CAST = 2;
 type StoryShot = {
   title: string;
+  motion?: string;
   shotType?: "establishing" | "rolling" | "detail" | "hero";
   travelDirection?: string;
   travelSpeed?: string;
@@ -146,6 +148,7 @@ export function StudioComposer({ mode }: { mode: "mock" | "live" }) {
   const [locationAssetId, setLocationAssetId] = useState("");
   const [castAssets, setCastAssets] = useState<CastAsset[]>([]);
   const [castIds, setCastIds] = useState<string[]>([]);
+  const [peoplePreset, setPeoplePreset] = useState<PeoplePresetId>("none");
 
   const selectedDossier = vehicleDossiers.find(
     (vehicle) => vehicle.key === vehicleDossierId,
@@ -434,6 +437,7 @@ export function StudioComposer({ mode }: { mode: "mock" | "live" }) {
           mood: selectedScene?.mood ?? "",
           format,
           castAssetIds: castIds,
+          peoplePreset: castIds.length ? "none" : peoplePreset,
         }),
       });
       const directorData = await directorResponse.json();
@@ -983,10 +987,35 @@ export function StudioComposer({ mode }: { mode: "mock" | "live" }) {
                 </div>
               )}
             </fieldset>
-            <p className="text-[9px] leading-4 text-[#88847d]">
-              Sans casting, le véhicule reste vide, sauf si la description
-              demande des personnes.
-            </p>
+            {castIds.length === 0 && (
+              <fieldset>
+                <legend className="mb-2 text-[11px] font-semibold">
+                  Personnage
+                </legend>
+                <div className="flex flex-wrap gap-1.5">
+                  {peoplePresetIds.map((id) => (
+                    <button
+                      type="button"
+                      key={id}
+                      onClick={() => {
+                        setPeoplePreset(id);
+                        clearFormError();
+                      }}
+                      aria-pressed={peoplePreset === id}
+                      className={`rounded-full border px-2.5 py-1.5 text-[10px] transition ${peoplePreset === id ? "border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]" : "border-[#e5e2dd] text-[#77736d] hover:border-[#c51e1c]"}`}
+                    >
+                      {peoplePresets[id].label}
+                    </button>
+                  ))}
+                </div>
+                <p className="mt-2 text-[9px] leading-4 text-[#88847d]">
+                  Sans photo de casting, l’IA décrit la personne une fois et
+                  la reprend dans chaque plan ; la ressemblance d’un plan à
+                  l’autre reste approximative. Sans personnage, le véhicule
+                  reste vide, sauf si la description demande des personnes.
+                </p>
+              </fieldset>
+            )}
             {audioAssets.length > 0 && (
               <label className="grid gap-1.5 text-[11px] font-semibold">
                 Musique

@@ -27,6 +27,11 @@ export const NO_TEXT_VIDEO = 'One continuous full-frame shot, no cuts, never a s
 /** Normal road driving (22/10: a car drifted on a city street at the start of a clip). */
 export const CALM_DRIVING = 'Calm, normal driving: the car stays in its lane and follows the road at a constant speed; no drift, skid, spin, sharp turn or sudden acceleration.';
 
+/** Catalogue motions that change speed or heading replace CALM_DRIVING with their own normal-driving rule. */
+export const TURN_DRIVING = 'Calm, normal turn: the car follows the curve of its lane at a slow speed, front wheels steered into the turn, the body leaning slightly; no drift, skid, spin or sideways slide.';
+export const PULL_AWAY_DRIVING = 'Calm, normal start: the car stays in its lane and accelerates progressively; no wheelspin, jump, drift or skid.';
+export const STOP_DRIVING = 'Calm, normal stop: the car stays in its lane and slows down progressively; no skid, slide or nose dive.';
+
 /** A car shown at an angle to its lane forces the video model to rotate it, which reads as a drift. */
 export const HEADING_ALIGNED = 'The car points along its lane, in its direction of travel.';
 
