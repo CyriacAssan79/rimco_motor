@@ -4,7 +4,7 @@ import { env } from '@/env';
 import { type StoryboardShot, type StoryMode, type TravelDirection, type TravelSpeed } from '@/core/storyboard';
 import type { ReferenceVideoProvider } from './fal-reference-video';
 import { MODEL_ENDPOINTS } from './model-routing';
-import { CALM_DRIVING, fitPrompt, GROUND_CONTACT, HEADING_ALIGNED, PEOPLE_IN_MOVING_CAR, IMAGE_PROMPT_MAX_CHARS, KEEP_IDENTITY, NO_BODYWORK_CONTACT, NO_TEXT_IMAGE, NO_TEXT_VIDEO, placeRule, FORWARD_ONLY, PARALLAX, PULL_AWAY_DRIVING, steeringRule, STOP_DRIVING, trafficRule, TURN_DRIVING, VIDEO_PROMPT_MAX_CHARS, WHEEL_PHYSICS, type PromptBlock } from '@/core/prompts/rules';
+import { CALM_DRIVING, fitPrompt, GROUND_CONTACT, HEADING_ALIGNED, PEOPLE_IN_MOVING_CAR, IMAGE_PROMPT_MAX_CHARS, KEEP_IDENTITY, NO_BODYWORK_CONTACT, NO_TEXT_IMAGE, NO_TEXT_VIDEO, placeRule, FORWARD_ONLY, PARALLAX, PULL_AWAY_DRIVING, shortenText, steeringRule, STOP_DRIVING, trafficRule, TURN_DRIVING, VIDEO_PROMPT_MAX_CHARS, WHEEL_PHYSICS, type PromptBlock } from '@/core/prompts/rules';
 import type { BrandScene } from '@/core/brand-scene';
 import type { KeyframeResolution } from '@/core/versions/render-settings';
 import { getMotion, headingAtEnd, headingAtStart, type DrivingRule, type MotionId } from '@/core/motions/catalog';
@@ -237,6 +237,11 @@ export function travelSentence(shot: Pick<StoryboardShot, 'travelDirection' | 't
 /** Driving scene of a video: the brand's traffic and steering sides (stored in brief_json.brandScene). */
 export type DrivingScene = Pick<BrandScene, 'trafficSide' | 'steeringSide'> & Partial<Pick<BrandScene, 'marketLocation'>>;
 
+/** Casting sheet length in the image prompts (keyframe, end frame). */
+export const IMAGE_CAST_DESCRIPTION_MAX_CHARS = 220;
+/** Casting sheet length in the animation prompt, which also sees the people on its first frame. */
+export const ANIMATION_CAST_DESCRIPTION_MAX_CHARS = 250;
+
 /** Place block shared by the keyframe, animation and end-frame prompts (shortened before anything locked). */
 const placeBlock = (place: string | undefined, scene: DrivingScene | undefined): PromptBlock => ({ text: place ? placeRule(place, scene?.marketLocation || undefined) : '', shrinkTo: 120 });
 
@@ -248,12 +253,12 @@ export function isMoving(shot: StoryboardShot) {
 }
 
 /** People policy shared by the image and video prompts. */
-export function peopleDirection(input: { excludePeople?: boolean; castTitles?: string[]; castDescription?: string | null; stage: 'keyframe' | 'animation'; moving?: boolean; scene?: DrivingScene }): string {
+export function peopleDirection(input: { excludePeople?: boolean; castTitles?: string[]; castDescription?: string | null; stage: 'keyframe' | 'animation'; moving?: boolean; scene?: DrivingScene; maxDescription?: number }): string {
   const text = peopleText(input);
   return text && input.scene && !input.excludePeople ? `${text} ${steeringRule(input.scene.steeringSide)}` : text;
 }
 
-function peopleText(input: { excludePeople?: boolean; castTitles?: string[]; castDescription?: string | null; stage: 'keyframe' | 'animation'; moving?: boolean }): string {
+function peopleText(input: { excludePeople?: boolean; castTitles?: string[]; castDescription?: string | null; stage: 'keyframe' | 'animation'; moving?: boolean; maxDescription?: number }): string {
   // In a moving shot people are in the car; outside the car only when it is stopped (22/10: a character walked beside the moving car).
   const place = input.moving ? PEOPLE_IN_MOVING_CAR : NO_BODYWORK_CONTACT;
   if (input.castTitles?.length) {
@@ -264,7 +269,7 @@ function peopleText(input: { excludePeople?: boolean; castTitles?: string[]; cas
   if (input.excludePeople) {
     return input.stage === 'keyframe' ? 'Nobody in or around the car; windows dark or reflective.' : 'Nobody appears; windows stay dark or reflective.';
   }
-  const description = (input.castDescription ?? '').replace(/[<>{}]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 400);
+  const description = shortenText((input.castDescription ?? '').replace(/[<>{}]/g, ' ').replace(/\s+/g, ' '), input.maxDescription ?? 400);
   if (!description) return '';
   return input.stage === 'keyframe'
     ? `People, identical in every shot: ${description}; ${place}.`
@@ -309,19 +314,22 @@ export function buildKeyframePrompt(input: {
     `image 1 = the exact vehicle (${input.vehicle})`,
     ...(views > 1 ? [`images 2-${views} = other views of it, for details only`] : []),
     ...(castCount ? [`images ${views + 1}-${views + castCount} = casting photos`] : []),
-    ...(input.hasAnchorReference ? [`${input.hasLocationReference ? 'image before last' : 'last image'} = an earlier frame of this film in this place: keep its road layout, lanes, landmarks and light, not its framing`] : []),
+    ...(input.hasAnchorReference ? [`${input.hasLocationReference ? 'image before last' : 'last image'} = an earlier frame in this place: keep its road, lanes, landmarks and light, not its framing`] : []),
     ...(input.hasLocationReference ? ['last image = the location'] : []),
   ].join('; ');
   return fitPrompt([
     { text: `Photorealistic still frame from a live-action car commercial shot on a cinema camera, ${input.format}.` },
     { text: `References: ${roles}. Re-stage the car in the location from the shot's viewpoint; ignore the photos' backgrounds and studio light. Keep its exact shape, paint, wheels, lights and badges.` },
-    { text: `Shot: ${input.shot.scene}.`, shrinkTo: 60 },
+    // Dropped last, when a very long shot would exceed the image limit: action and framing already describe it.
+    { text: `Shot: ${input.shot.scene}.`, shrinkTo: 60, drop: 3 },
     placeBlock(input.place, input.scene),
     { text: `Action: ${input.shot.action}.`, shrinkTo: 80 },
-    { text: `${getMotion(input.shot.motion)?.keyframe ?? KEYFRAME_MOTION_CUES[resolveShotType(input.shot)]} ${travelSentence(input.shot)}${isMoving(input.shot) ? ` ${HEADING_ALIGNED}${headingAtStart(input.shot) ? ` ${headingAtStart(input.shot)} Mirror the car of the reference photos if needed; it is never driving backwards.` : ''}${input.scene ? ` ${trafficRule(input.scene.trafficSide)}` : ''}` : ''}` },
+    { text: `${getMotion(input.shot.motion)?.keyframe ?? KEYFRAME_MOTION_CUES[resolveShotType(input.shot)]} ${travelSentence(input.shot)}${isMoving(input.shot) ? ` ${HEADING_ALIGNED}${headingAtStart(input.shot) ? ` ${headingAtStart(input.shot)} Mirror the photographed car if needed; it never drives backwards.` : ''}${input.scene ? ` ${trafficRule(input.scene.trafficSide)}` : ''}` : ''}` },
     { text: `Framing: ${input.shot.framing}. Camera: ${input.shot.camera}.`, shrinkTo: 80 },
-    { text: `Light: ${input.lighting}; the car is lit like the place (sun direction, reflections). ${GROUND_CONTACT}` },
-    { text: peopleDirection({ ...input, stage: 'keyframe', moving: isMoving(input.shot) }) },
+    { text: `Light: ${input.lighting}; the car is lit like the place (sun direction, reflections).`, shrinkTo: 70 },
+    { text: GROUND_CONTACT },
+    // The casting sheet is capped in image prompts (24/10: 2 226 characters for 2 200); the animation keeps it whole.
+    { text: peopleDirection({ ...input, stage: 'keyframe', moving: isMoving(input.shot), maxDescription: IMAGE_CAST_DESCRIPTION_MAX_CHARS }) },
     { text: NO_TEXT_IMAGE },
     fix(input.retryReason),
   ], IMAGE_PROMPT_MAX_CHARS);
@@ -361,7 +369,8 @@ export function buildKeyframeAnimationPrompt(input: { shot: StoryboardShot; vehi
     // Dropped only after the mood and the judge feedback, when a very long shot would exceed the engine limit.
     { text: isMoving(input.shot) ? PARALLAX : '', drop: 3 },
     { text: input.hasEndFrame ? 'The supplied end frame is the exact last frame: the car drives smoothly from its start to its end position.' : '' },
-    { text: peopleDirection({ ...input, stage: 'animation', moving: isMoving(input.shot) }) },
+    // The first frame already carries the people's look; the sheet only reminds it (24/10: worst case over 2 000).
+    { text: peopleDirection({ ...input, stage: 'animation', moving: isMoving(input.shot), maxDescription: ANIMATION_CAST_DESCRIPTION_MAX_CHARS }) },
     { text: NO_TEXT_VIDEO },
     { text: input.mood.trim() ? `Mood: ${input.mood.trim()}.` : '', drop: 1 },
     fix(input.retryReason),
@@ -394,7 +403,7 @@ export function buildEndKeyframePrompt(input: { shot: StoryboardShot; durationS:
     { text: `${headingAtEnd(input.shot) ?? ''} Use image 2 for the car’s identity only, not its orientation; the car has only driven forward.` },
     { text: input.scene ? trafficRule(input.scene.trafficSide) : '' },
     placeBlock(input.place, input.scene),
-    { text: peopleDirection({ ...input, stage: 'animation', moving: true }) },
+    { text: peopleDirection({ ...input, stage: 'animation', moving: true, maxDescription: IMAGE_CAST_DESCRIPTION_MAX_CHARS }) },
     { text: `${NO_TEXT_IMAGE} Compose for ${input.format}.` },
   ], IMAGE_PROMPT_MAX_CHARS);
 }

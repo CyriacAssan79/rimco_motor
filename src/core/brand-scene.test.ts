@@ -28,7 +28,7 @@ describe('réglages de route de la marque', () => {
   });
 
   it('écrit les règles de circulation et de volant', () => {
-    expect(trafficRule('right')).toBe('Right-hand traffic: the car drives in the right-hand lane of its direction of travel, never in the oncoming lane.');
+    expect(trafficRule('right')).toBe('Right-hand traffic: the car keeps to the right-hand lane of its direction, never the oncoming lane.');
     expect(steeringRule('left')).toBe('Left-hand drive: the steering wheel and the driver are on the car’s left side.');
     expect(PEOPLE_IN_MOVING_CAR).toContain('eyes on the road ahead');
   });

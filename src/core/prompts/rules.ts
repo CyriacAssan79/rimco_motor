@@ -51,7 +51,7 @@ export const PEOPLE_IN_MOVING_CAR = 'seated inside the car (the driver at the wh
 
 /** 24/10: cars drove on the wrong side of the road. Side read from the brand settings (`brands.traffic_side`). */
 export function trafficRule(side: 'right' | 'left'): string {
-  return `${side === 'right' ? 'Right' : 'Left'}-hand traffic: the car drives in the ${side}-hand lane of its direction of travel, never in the oncoming lane.`;
+  return `${side === 'right' ? 'Right' : 'Left'}-hand traffic: the car keeps to the ${side}-hand lane of its direction, never the oncoming lane.`;
 }
 
 /** 24/10: the steering wheel switched sides between shots. Side read from `brands.steering_side`. */
