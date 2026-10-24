@@ -40,6 +40,13 @@ export function calculateClientPriceFcfa(costUsd:number,usdToEur:number,eurToFcf
   return Math.ceil(costUsd*usdToEur*eurToFcfa*(1+CLIENT_MARKUP_RATE));
 }
 
+/** A margin can be negative (an operation not billed to the client but paid to fal, e.g. a failed attempt's storyboard). */
+export function formatSignedFcfa(amount:number):string {
+  if(!Number.isFinite(amount)) throw new Error('Le montant doit être un nombre');
+  const rounded=Math.round(amount);
+  return rounded<0 ? `−${formatFcfa(-rounded)}` : formatFcfa(rounded);
+}
+
 export function formatFcfa(amount:number):string {
   assertNonNegative(amount,'Le montant');
   const formatted=new Intl.NumberFormat('fr-FR',{maximumFractionDigits:0}).format(Math.round(amount));
