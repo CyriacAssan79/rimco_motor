@@ -361,9 +361,10 @@ export function buildKeyframeAnimationPrompt(input: { shot: StoryboardShot; vehi
 
 /** P5 · rolling shots only: the last frame shows the same shot after the car has covered ground. */
 export function needsEndKeyframe(shot: StoryboardShot, enabled: boolean): boolean {
-  if (!enabled) return false;
   const motion = getMotion(shot.motion);
-  if (motion) return motion.endFrame !== null;
+  if (motion) return motion.endFrame !== null && (enabled || motion.endFrameByDefault);
+  // Shots from before the motion catalogue: end frame only with KEYFRAME_END_FRAME_ROLLING, as before.
+  if (!enabled) return false;
   const type = resolveShotType(shot);
   return (type === 'rolling' || type === 'establishing') && shot.travelDirection !== 'static';
 }

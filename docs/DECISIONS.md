@@ -1,5 +1,15 @@
 # Décisions
 
+## Image de fin par mouvement, étape 2 (2026-10-24)
+
+- **Principe** : le moteur vidéo reçoit l’image de départ **et** l’image de fin du plan (voiture sortie du virage, arrivée, arrêtée…) et n’anime que le trajet entre les deux. C’est le levier le plus fiable contre les dérapages, les virages ratés et les arrêts qui glissent. Le mécanisme existait (test A/B, désactivé) ; chaque mouvement du catalogue décrit maintenant sa propre dernière image.
+- **Activée d’office** pour les mouvements où le point d’arrivée fait le plan : virage à gauche, virage à droite, approche, départ, démarrage et accélération, arrivée et arrêt (`endFrameByDefault`).
+- **Derrière `KEYFRAME_END_FRAME_ROLLING=true` seulement** : passage devant la caméra, travelling latéral, suivi par l’arrière, plan d’ensemble. Dans ces plans, la voiture garde souvent sa place dans le cadre ; il faut d’abord vérifier qu’une image de fin n’y provoque pas d’effet tapis roulant.
+- **Coût** : environ 0,13 USD par plan concerné (image + contrôle ; 0,17 USD en Premium avec l’image 2K), réservé avant l’appel. Une image de fin refusée ou en échec ne bloque jamais la vidéo : le plan est animé sans elle.
+- **Délai** : environ une minute de plus pour les plans concernés (l’image de fin attend l’image-clé de départ acceptée).
+- **Vidéos et storyboards d’avant le catalogue** : inchangés, image de fin seulement avec le réglage.
+- **À surveiller à l’essai** : fidélité du véhicule sur l’image de fin d’un virage, où la voiture est vue sous un angle qu’aucune photo ne montre.
+
 ## Qualité Premium et juges plus exigeants, étape 4 (2026-10-24)
 
 - **Constat** (demande du responsable : le Premium doit être « premium ») : Seedance 2.5 était appelé en 720p et toutes les images-clés en 1K, quel que soit le niveau ; le montage agrandissait ensuite en 1080p. Le Premium coûtait environ 4 fois plus cher pour la même définition.

@@ -47,6 +47,12 @@ export type MotionPreset = {
   animation: string;
   /** Where the car is on the closing frame; null = no end frame for this motion. */
   endFrame: string | null;
+  /**
+   * Étape 2: the end frame is sent by default when the arrival point is the point of the shot (turns, approach,
+   * departure, start, stop). The others (pass-by, tracking, follow, establishing) use it only with
+   * KEYFRAME_END_FRAME_ROLLING, until a test shows it does not cause a treadmill effect.
+   */
+  endFrameByDefault: boolean;
   /** Motion check given to the vision judge. */
   judge: string;
   driving: DrivingRule;
@@ -64,6 +70,7 @@ export const motionCatalog: Record<MotionId, MotionPreset> = {
     animation: 'The car drives through the wide scene while the camera makes one slow, steady move.',
     endFrame: 'further along the road through the place, still small in frame',
     judge: 'The vehicle must visibly travel through the scene across the frames.',
+    endFrameByDefault: false,
     driving: 'calm',
   },
   pass_by: {
@@ -74,6 +81,7 @@ export const motionCatalog: Record<MotionId, MotionPreset> = {
     animation: 'The camera stays in place or pans to follow; the car crosses the frame and passes the fixed posts, markings and trees, which stay in place.',
     endFrame: 'across the frame, further along the road in its direction of travel',
     judge: `${TREADMILL_CHECK} The car must cross the frame in its direction of travel.`,
+    endFrameByDefault: false,
     driving: 'calm',
   },
   approach: {
@@ -84,6 +92,7 @@ export const motionCatalog: Record<MotionId, MotionPreset> = {
     animation: 'The car drives towards the camera along its lane and grows steadily in the frame; the roadside stays in place.',
     endFrame: 'much closer to the camera along its lane, clearly larger in the frame',
     judge: `${TREADMILL_CHECK} The car must grow in the frame as it approaches.`,
+    endFrameByDefault: true,
     driving: 'calm',
   },
   drive_away: {
@@ -94,6 +103,7 @@ export const motionCatalog: Record<MotionId, MotionPreset> = {
     animation: 'The car drives away from the static camera along its lane and gets steadily smaller; the roadside stays in place.',
     endFrame: 'much further down the road, clearly smaller in the frame',
     judge: `${TREADMILL_CHECK} The car must get smaller in the frame as it drives away.`,
+    endFrameByDefault: true,
     driving: 'calm',
   },
   follow_behind: {
@@ -104,6 +114,7 @@ export const motionCatalog: Record<MotionId, MotionPreset> = {
     animation: 'The camera follows behind the car at its speed; the lane markings and roadside objects pass under and beside the car.',
     endFrame: 'at the same size in the frame, the road markings and roadside objects having moved past it',
     judge: 'Lane markings and roadside objects must pass under and beside the vehicle across the frames; a road that does not move is blocking.',
+    endFrameByDefault: false,
     driving: 'calm',
   },
   side_tracking: {
@@ -114,6 +125,7 @@ export const motionCatalog: Record<MotionId, MotionPreset> = {
     animation: 'The camera tracks alongside the car at its speed: the car stays in frame while the roadside posts and trees pass behind it and the wheels turn.',
     endFrame: 'at the same place in the frame, the roadside posts and trees behind it having moved past',
     judge: 'Roadside objects must pass behind the vehicle and its wheels must turn; still wheels on a sliding background (treadmill effect) are blocking.',
+    endFrameByDefault: false,
     driving: 'calm',
   },
   turn_left: {
@@ -124,6 +136,7 @@ export const motionCatalog: Record<MotionId, MotionPreset> = {
     animation: 'The car follows the road as it bends to the car’s own left: the front wheels steer into the turn and the car gradually changes heading along the curve.',
     endFrame: 'through the bend, now heading along the road after turning to its own left',
     judge: 'The vehicle must follow the curve of the road and change heading to its own left; turning the other way, sliding sideways or pivoting on the spot is blocking.',
+    endFrameByDefault: true,
     driving: 'turn',
   },
   turn_right: {
@@ -134,6 +147,7 @@ export const motionCatalog: Record<MotionId, MotionPreset> = {
     animation: 'The car follows the road as it bends to the car’s own right: the front wheels steer into the turn and the car gradually changes heading along the curve.',
     endFrame: 'through the bend, now heading along the road after turning to its own right',
     judge: 'The vehicle must follow the curve of the road and change heading to its own right; turning the other way, sliding sideways or pivoting on the spot is blocking.',
+    endFrameByDefault: true,
     driving: 'turn',
   },
   pull_away: {
@@ -144,6 +158,7 @@ export const motionCatalog: Record<MotionId, MotionPreset> = {
     animation: 'The car starts from a standstill, then accelerates smoothly and progressively along its lane; the wheels start turning as it moves off.',
     endFrame: 'further along its lane after a smooth start, now driving',
     judge: 'The vehicle must start still and then move along its lane with wheels starting to turn; a jump, slide or wheels turning before it moves are blocking.',
+    endFrameByDefault: true,
     driving: 'pull_away',
   },
   arrive_and_stop: {
@@ -154,6 +169,7 @@ export const motionCatalog: Record<MotionId, MotionPreset> = {
     animation: 'The car rolls in slowly and comes to a smooth, gentle stop; the wheels stop turning when it stops.',
     endFrame: 'stopped at its final spot in a clean composition, wheels straight',
     judge: 'The vehicle must slow down and stop smoothly; wheels must stop turning once it is still, and it must not slide after stopping.',
+    endFrameByDefault: true,
     driving: 'stop',
   },
   hero_still: {
@@ -164,6 +180,7 @@ export const motionCatalog: Record<MotionId, MotionPreset> = {
     animation: 'The car holds still, wheels not turning, while the camera makes a slow arc or push-in.',
     endFrame: null,
     judge: 'Wheels must stay round and still, and the vehicle must not slide.',
+    endFrameByDefault: false,
     driving: 'none',
   },
   detail_glide: {
@@ -174,6 +191,7 @@ export const motionCatalog: Record<MotionId, MotionPreset> = {
     animation: 'One slow camera glide over the detail; light moves across the surface.',
     endFrame: null,
     judge: '',
+    endFrameByDefault: false,
     driving: 'none',
   },
 };

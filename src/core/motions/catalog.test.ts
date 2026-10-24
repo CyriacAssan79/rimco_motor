@@ -18,6 +18,7 @@ describe('catalogue de mouvements · données', () => {
       // A motion with no driving rule is a stopped car, and only stopped cars have no end frame.
       expect(motion.driving === 'none').toBe(motion.directions.every((direction) => direction === 'static'));
       expect(motion.endFrame === null).toBe(motion.driving === 'none');
+      if (motion.endFrameByDefault) expect(motion.endFrame).not.toBeNull();
     }
   });
 
@@ -107,7 +108,12 @@ describe('catalogue de mouvements · prompts', () => {
     expect(needsEndKeyframe(shot({ motion: 'arrive_and_stop', travelDirection: 'towards_camera' }), true)).toBe(true);
     expect(needsEndKeyframe(shot({ motion: 'turn_left', travelDirection: 'towards_camera' }), true)).toBe(true);
     expect(needsEndKeyframe(shot({ motion: 'hero_still', travelDirection: 'static' }), true)).toBe(false);
-    expect(needsEndKeyframe(shot({ motion: 'turn_left', travelDirection: 'towards_camera' }), false)).toBe(false);
+    // Étape 2: on by default where the arrival point matters, behind KEYFRAME_END_FRAME_ROLLING for the others.
+    expect(needsEndKeyframe(shot({ motion: 'turn_left', travelDirection: 'towards_camera' }), false)).toBe(true);
+    expect(needsEndKeyframe(shot({ motion: 'arrive_and_stop', travelDirection: 'towards_camera' }), false)).toBe(true);
+    expect(needsEndKeyframe(shot({ motion: 'pass_by', travelDirection: 'left_to_right' }), false)).toBe(false);
+    expect(needsEndKeyframe(shot({ motion: 'side_tracking', travelDirection: 'left_to_right' }), false)).toBe(false);
+    expect(needsEndKeyframe(shot({ motion: 'side_tracking', travelDirection: 'left_to_right' }), true)).toBe(true);
     const end = buildEndKeyframePrompt({ shot: shot({ motion: 'turn_left', travelDirection: 'towards_camera' }), durationS: 5, format: '16:9', excludePeople: true });
     expect(end).toContain('the car now through the bend');
   });
