@@ -13,7 +13,7 @@ import { buildFalLlmInput, createFalLlmProvider, FalLlmBriefError, llmReservatio
 import { createFalClient } from '@fal-ai/client';
 import { getActiveFalCredential } from '@/core/providers/fal-credential-vault';
 import { reserveLlmCost, settleUsageCost } from '@/core/billing/ledger';
-import { findCuratedLocation, placeTimeOfDay } from '@/core/assets/location-catalog';
+import { findCuratedLocation, placeDescription, placeTimeOfDay } from '@/core/assets/location-catalog';
 import { estimateGridPriceFcfa } from '@/core/pricing';
 import { storyboardDirectionSchema } from '@/core/storyboard-direction';
 
@@ -100,17 +100,20 @@ export async function POST(request: Request) {
       throw new HttpError(422, 'Une ou plusieurs photos véhicule sélectionnées ne sont plus disponibles.');
     }
     const selectedPlaces = places;
+    // 24/10 (responsable) : aucun plan 100 % IA ; chaque plan est tourné dans un lieu choisi par l’utilisateur.
+    if (!selectedPlaces.length) throw new HttpError(422, 'Choisissez au moins un lieu dans la médiathèque : chaque plan est tourné dans un lieu sélectionné.');
     const brandScene = await loadBrandScene(supabase.from('brands').select(BRAND_SCENE_COLUMNS).eq('id', actor.brandId).maybeSingle());
     const instructionInput = {
       durationSeconds: input.durationSeconds,
       vehicle: vehicleDescriptionForPrompt(dossier),
       vehiclePhotos: selectedVehicle.map((photo) => ({ id: photo.id, role: photo.photo_role ?? 'exterior', title: photo.title ?? 'Photo véhicule', angle: photo.angle })),
-      places: selectedPlaces.map((place) => ({ id: place.id, title: place.title ?? 'Lieu', category: place.category, timeOfDay: placeTimeOfDay(place) })),
+      places: selectedPlaces.map((place) => ({ id: place.id, title: place.title ?? 'Lieu', category: place.category, timeOfDay: placeTimeOfDay(place), description: placeDescription(place) })),
       purpose: input.purpose, direction: input.direction, format: input.format,
       character: input.character, lighting: input.lighting, mood: input.mood,
       cast,
       peoplePreset: cast.length ? 'none' as const : input.peoplePreset,
       trafficSide: brandScene?.trafficSide,
+      marketLocation: brandScene?.marketLocation || undefined,
     };
     const instruction = input.workflow === 'single'
       ? buildSingleShotStoryboardInstruction({ ...instructionInput, mode: input.mode })
@@ -174,17 +177,18 @@ export async function POST(request: Request) {
         const photoAngles = Object.fromEntries(selectedVehicle.map((photo) => [photo.id, photo.angle]));
         const interiorPlaceIds = selectedPlaces.filter((place) => placeTimeOfDay(place) === 'interior').map((place) => place.id);
         // Without a sheet the people would be dropped at generation (patch v3.2, F9): a requested « Personnage » needs one.
+        const placeIssue = (shots: StoryboardShot[]) => shots.some((shot) => !shot.locationPhotoId) ? 'Chaque plan doit avoir un locationPhotoId choisi parmi les lieux listés.' : null;
         const peopleSheetIssue = (sheet: string | undefined) => !cast.length && input.peoplePreset !== 'none' && !sheet ? 'castDescription est obligatoire : décris les personnes demandées.' : null;
         const responseSchema = input.workflow === 'single'
           ? singleShotStoryboardResponseSchema.superRefine(({ shots, castDescription: sheet }, context) => {
-              const issue = [storyboardMotionIssue(shots, photoAngles, interiorPlaceIds), peopleSheetIssue(sheet)].filter(Boolean).join(' ');
+              const issue = [storyboardMotionIssue(shots, photoAngles, interiorPlaceIds), placeIssue(shots), peopleSheetIssue(sheet)].filter(Boolean).join(' ');
               if (issue) context.addIssue({ code: 'custom', path: ['shots'], message: issue });
             })
           // Patch v3.2 (A5): wrong durations make the answer invalid (automatic corrected retry), never silently rewritten.
           : z.object({ castDescription: castDescriptionSchema.optional(), shots: storyboardSchema }).strict().superRefine(({ shots, castDescription: sheet }, context) => {
               const issue = [premiumTwentySecond
                 ? shots.length === 4 && shots.every((shot) => shot.durationSeconds === 5) ? null : 'Exactement 4 plans de 5 secondes.'
-                : storyboardDurationIssue(shots, input.durationSeconds, route.adapterFamily), storyboardMotionIssue(shots, photoAngles, interiorPlaceIds), peopleSheetIssue(sheet)].filter(Boolean).join(' ');
+                : storyboardDurationIssue(shots, input.durationSeconds, route.adapterFamily), storyboardMotionIssue(shots, photoAngles, interiorPlaceIds), placeIssue(shots), peopleSheetIssue(sheet)].filter(Boolean).join(' ');
               if (issue) context.addIssue({ code: 'custom', path: ['shots'], message: issue });
             });
         // Layer 1 (locked rules + approved references) goes in the system prompt; layer 2 (user brief) is the only user content.

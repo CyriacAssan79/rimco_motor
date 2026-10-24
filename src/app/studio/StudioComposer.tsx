@@ -435,6 +435,10 @@ export function StudioComposer({ mode }: { mode: "mock" | "live" }) {
         throw new Error(
           "Choisissez un véhicule avec au moins une photo validée.",
         );
+      if (!effectivePlaceIds.length)
+        throw new Error(
+          "Choisissez au moins un lieu : chaque plan est tourné dans un lieu de la médiathèque.",
+        );
       const selectedVehiclePhotoIds = [
         assetId,
         ...selectedDossier.photos

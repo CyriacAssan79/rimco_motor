@@ -70,12 +70,12 @@ describe('catalogue de mouvements · contrôle du réalisateur', () => {
     expect(storyboardMotionIssue([tracking, tracking])).toContain('Un seul travelling latéral');
   });
 
-  it('présente tout le menu au réalisateur sans dépasser 3 500 caractères', () => {
+  it('présente tout le menu au réalisateur sans dépasser 4 000 caractères', () => {
     const instruction = buildStoryboardInstruction({ durationSeconds: 20, mode: 'premium', vehicle: 'Haval H6', vehiclePhotos: [{ id: 'front', role: 'exterior', title: 'Avant', angle: 'Avant trois-quarts' }], places: [], format: '16:9' });
     for (const id of motionIds) expect(instruction).toContain(id);
     expect(instruction).toContain('"motion":""');
     expect(instruction).toContain('"arrives then stops" = two shots');
-    expect(instruction.length).toBeLessThan(3_500);
+    expect(instruction.length).toBeLessThan(4_000);
   });
 });
 

@@ -55,9 +55,9 @@ describe('v3.2 · garde-fou de longueur', () => {
 
 describe('v3.2 · réalisateur', () => {
   const base = { vehicle: 'GWM Tank 300', vehiclePhotos: [{ id: 'front', role: 'exterior', title: 'Avant', angle: '3/4 avant' }], places: [{ id: 'p', title: 'Boulevard', timeOfDay: 'day' as const }] };
-  it('écrit chaque règle une seule fois et reste sous 3 500 caractères', () => {
+  it('écrit chaque règle une seule fois et reste sous 4 000 caractères (budget relevé le 24/10 : lieux décrits, circulation, showroom ; ce n’est pas une limite du modèle de langage)', () => {
     const instruction = buildStoryboardInstruction({ ...base, durationSeconds: 20, mode: 'premium', format: '16:9' });
-    expect(instruction.length).toBeLessThan(3_500);
+    expect(instruction.length).toBeLessThan(4_000);
     for (const once of ['Return only this JSON', 'FIDELITY:', 'TEXT:', 'MOTION:', 'Exactly 4 shots of 5 seconds']) {
       expect(instruction.split(once).length - 1).toBe(1);
     }
@@ -127,6 +127,6 @@ describe('v3.2 · conduite normale et personnes dans la voiture (essais du 22/10
     expect(instruction).toContain('slow or cruise in towns');
     expect(instruction).toContain('front three-quarter = towards_camera');
     expect(instruction).toContain('While the car moves, the people are inside it');
-    expect(instruction.length).toBeLessThan(3_500);
+    expect(instruction.length).toBeLessThan(4_000);
   });
 });

@@ -1,5 +1,16 @@
 # Décisions
 
+## Lieu et décor, étape 3a (2026-10-24)
+
+- **Demandes du responsable et constats des essais** : « Côte d’Ivoire » était écrit en dur dans la consigne du réalisateur ; un plan pouvait partir sans lieu (décor 100 % IA) ; le moteur vidéo inventait des rues « européennes » dès que la caméra bougeait ; panneaux et bannières apparaissaient hors du lieu.
+- **Ville de la marque** : la consigne du réalisateur lit `brands.market_location` (migration 0031), plus jamais une valeur en dur.
+- **Lieu obligatoire** : le Studio exige au moins un lieu ; l’API du réalisateur refuse une demande sans lieu ; chaque plan doit porter un `locationPhotoId` choisi parmi les lieux sélectionnés (sinon nouvelle tentative corrigée) ; la création de la version refuse un plan sans lieu.
+- **Description du lieu** (`placeDescription`, 160 caractères au plus) : ville et décor pour les lieux intégrés, titre et catégorie pour les lieux importés. Elle est donnée au réalisateur, puis figée par plan dans `brief_json.placeDescriptions`.
+- **Conformité au lieu** : l’image-clé, l’animation et l’image de fin reçoivent « tout ce que la caméra révèle appartient à ce même lieu : même tracé de route, mêmes bâtiments et végétation ; rien d’une autre ville ou d’un autre pays ». Le juge vidéo classe bloquant un décor d’une autre ville révélé par la caméra.
+- **Longueur des prompts** (point d’attention du responsable) : pas de fiche décor libre par plan. La description du lieu est un bloc raccourcissable (jusqu’à 120 caractères) passé avant les règles verrouillées ; les plafonds restent garantis (2 000 caractères pour la vidéo, 2 500 pour Kling, 2 200 pour l’image), vérifiés par un test au pire cas. La consigne du réalisateur passe d’environ 3 400 à 3 550 caractères ; son budget de test est relevé à 4 000 (ce n’est pas une limite du modèle de langage).
+- **Vidéos créées avant** : sans `placeDescriptions` ni `brandScene`, les prompts restent ceux d’avant.
+- **Étape 3b à suivre** : l’image-clé du premier plan d’un lieu servira de référence aux plans suivants dans ce lieu (le pont à double sens « fermé » au plan suivant).
+
 ## Règles de route, conducteur et showroom, étape 1 bis (2026-10-24)
 
 - **Constats des essais du 24/10** : voiture à contresens, volant tantôt à gauche tantôt à droite, conducteur qui regarde en arrière en roulant, voiture posée de biais sur les voies (« SUV broadside across the lanes ») qui dérape avant de rouler, voiture qui « entre » dans un showroom et flotte au-dessus d’un podium.

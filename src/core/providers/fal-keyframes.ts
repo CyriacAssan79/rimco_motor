@@ -4,7 +4,7 @@ import { env } from '@/env';
 import { type StoryboardShot, type StoryMode, type TravelDirection, type TravelSpeed } from '@/core/storyboard';
 import type { ReferenceVideoProvider } from './fal-reference-video';
 import { MODEL_ENDPOINTS } from './model-routing';
-import { CALM_DRIVING, fitPrompt, GROUND_CONTACT, HEADING_ALIGNED, PEOPLE_IN_MOVING_CAR, IMAGE_PROMPT_MAX_CHARS, KEEP_IDENTITY, NO_BODYWORK_CONTACT, NO_TEXT_IMAGE, NO_TEXT_VIDEO, PULL_AWAY_DRIVING, steeringRule, STOP_DRIVING, trafficRule, TURN_DRIVING, VIDEO_PROMPT_MAX_CHARS, WHEEL_PHYSICS, type PromptBlock } from '@/core/prompts/rules';
+import { CALM_DRIVING, fitPrompt, GROUND_CONTACT, HEADING_ALIGNED, PEOPLE_IN_MOVING_CAR, IMAGE_PROMPT_MAX_CHARS, KEEP_IDENTITY, NO_BODYWORK_CONTACT, NO_TEXT_IMAGE, NO_TEXT_VIDEO, placeRule, PULL_AWAY_DRIVING, steeringRule, STOP_DRIVING, trafficRule, TURN_DRIVING, VIDEO_PROMPT_MAX_CHARS, WHEEL_PHYSICS, type PromptBlock } from '@/core/prompts/rules';
 import type { BrandScene } from '@/core/brand-scene';
 import { getMotion, type DrivingRule, type MotionId } from '@/core/motions/catalog';
 export { GROUND_CONTACT, NO_BODYWORK_CONTACT, WHEEL_PHYSICS } from '@/core/prompts/rules';
@@ -135,7 +135,7 @@ export function buildVideoQualityPrompt(input: { vehicleReferenceCount: number; 
   const { frames, crops } = videoQualityTimestamps(input.durationS ?? 5);
   const frameCount = frames.length;
   const cropStart = frameCount + 1;
-  return `Images 1 to ${frameCount} are frames sampled in order from one generated video clip, at t=${frames.join('s, ')}s. Images ${cropStart} and ${cropStart + 1} are enlarged crops of the lower part of the frame (wheel and road zone) at t=${crops.join('s and ')}s. Reference images: ${referenceRoles(cropStart + 2, input)}. Check every frame for the same vehicle identity, paint color, visible details and location. ${input.hasLocationReference ? `${SAME_PLACE_CHECK} ` : ''}Tyre-road contact: tyres must stay in contact with the road with a contact shadow, never floating or sinking, and must keep turning consistently with the travel; inspect the crops closely.${motion}${roadCheck(input, 'every frame')}${peopleCheck(input, 'any frame')} ${NO_READABLE_TEXT_CHECK} Grade each defect: start each issue with its time and severity, for example "t=2.5s blocking: tyre floats above the road" or "t=4.5s minor: slight reflection flicker". Set "approved" to false only for blocking defects (identity change, including a badge, grille, light or wheel whose design or colour differs from the references; collage or split-screen frame; treadmill effect; floating, sliding, drifting or skidding vehicle;${preset?.judge ? ' a vehicle that does not perform the asked motion;' : ''} deformed wheels; broken road geometry; a person outside a moving car; a person who does not match the casting${input.scene ? '; a car in the oncoming lane; a steering wheel or driver on the wrong side; a driver turned away from the road while driving' : ''}); minor defects stay listed with "approved": true. Do not invent defects that are not visible. Return compact JSON only.`;
+  return `Images 1 to ${frameCount} are frames sampled in order from one generated video clip, at t=${frames.join('s, ')}s. Images ${cropStart} and ${cropStart + 1} are enlarged crops of the lower part of the frame (wheel and road zone) at t=${crops.join('s and ')}s. Reference images: ${referenceRoles(cropStart + 2, input)}. Check every frame for the same vehicle identity, paint color, visible details and location. ${input.hasLocationReference ? `${SAME_PLACE_CHECK} Whatever the camera reveals must belong to that same place: streets, buildings or road layout from another city or country are blocking. ` : ''}Tyre-road contact: tyres must stay in contact with the road with a contact shadow, never floating or sinking, and must keep turning consistently with the travel; inspect the crops closely.${motion}${roadCheck(input, 'every frame')}${peopleCheck(input, 'any frame')} ${NO_READABLE_TEXT_CHECK} Grade each defect: start each issue with its time and severity, for example "t=2.5s blocking: tyre floats above the road" or "t=4.5s minor: slight reflection flicker". Set "approved" to false only for blocking defects (identity change, including a badge, grille, light or wheel whose design or colour differs from the references; collage or split-screen frame; treadmill effect; floating, sliding, drifting or skidding vehicle;${preset?.judge ? ' a vehicle that does not perform the asked motion;' : ''} deformed wheels; broken road geometry; a person outside a moving car; a person who does not match the casting${input.scene ? '; a car in the oncoming lane; a steering wheel or driver on the wrong side; a driver turned away from the road while driving' : ''}); minor defects stay listed with "approved": true. Do not invent defects that are not visible. Return compact JSON only.`;
 }
 
 const qualitySchema = z.object({
@@ -214,7 +214,10 @@ export function travelSentence(shot: Pick<StoryboardShot, 'travelDirection' | 't
 }
 
 /** Driving scene of a video: the brand's traffic and steering sides (stored in brief_json.brandScene). */
-export type DrivingScene = Pick<BrandScene, 'trafficSide' | 'steeringSide'>;
+export type DrivingScene = Pick<BrandScene, 'trafficSide' | 'steeringSide'> & Partial<Pick<BrandScene, 'marketLocation'>>;
+
+/** Place block shared by the keyframe, animation and end-frame prompts (shortened before anything locked). */
+const placeBlock = (place: string | undefined, scene: DrivingScene | undefined): PromptBlock => ({ text: place ? placeRule(place, scene?.marketLocation || undefined) : '', shrinkTo: 120 });
 
 export function isMoving(shot: StoryboardShot) {
   const motion = getMotion(shot.motion);
@@ -275,6 +278,7 @@ export function buildKeyframePrompt(input: {
   castTitles?: string[];
   castDescription?: string | null;
   scene?: DrivingScene;
+  place?: string;
 }) {
   const views = Math.max(1, input.vehicleReferenceCount ?? 1);
   const castCount = input.castTitles?.length ?? 0;
@@ -288,6 +292,7 @@ export function buildKeyframePrompt(input: {
     { text: `Photorealistic still frame from a live-action car commercial shot on a cinema camera, ${input.format}.` },
     { text: `References: ${roles}. Re-stage the car in the location from the shot's viewpoint; ignore the photos' backgrounds and studio light. Keep its exact shape, paint, wheels, lights and badges.` },
     { text: `Shot: ${input.shot.scene}.`, shrinkTo: 60 },
+    placeBlock(input.place, input.scene),
     { text: `Action: ${input.shot.action}.`, shrinkTo: 80 },
     { text: `${getMotion(input.shot.motion)?.keyframe ?? KEYFRAME_MOTION_CUES[resolveShotType(input.shot)]} ${travelSentence(input.shot)}${isMoving(input.shot) ? ` ${HEADING_ALIGNED}${input.scene ? ` ${trafficRule(input.scene.trafficSide)}` : ''}` : ''}` },
     { text: `Framing: ${input.shot.framing}. Camera: ${input.shot.camera}.`, shrinkTo: 80 },
@@ -321,11 +326,12 @@ function drivingRules(shot: StoryboardShot): string {
 }
 
 /** Patch v3.2 · animation prompt, capped at 2 000 characters (or the engine limit when lower). */
-export function buildKeyframeAnimationPrompt(input: { shot: StoryboardShot; vehicle: string; durationS: number; mood: string; lighting: string; excludePeople?: boolean; retryReason?: string | null; castTitles?: string[]; castDescription?: string | null; hasEndFrame?: boolean; maxLength?: number; scene?: DrivingScene }) {
+export function buildKeyframeAnimationPrompt(input: { shot: StoryboardShot; vehicle: string; durationS: number; mood: string; lighting: string; excludePeople?: boolean; retryReason?: string | null; castTitles?: string[]; castDescription?: string | null; hasEndFrame?: boolean; maxLength?: number; scene?: DrivingScene; place?: string }) {
   return fitPrompt([
     { text: `Animate this image as the first frame of a ${input.durationS}-second live-action car commercial shot. ${KEEP_IDENTITY}` },
     { text: `Action: ${input.shot.action}.`, shrinkTo: 80 },
     { text: `Camera: ${input.shot.camera}.`, shrinkTo: 60 },
+    placeBlock(input.place, input.scene),
     { text: `${animationMotion(input.shot)} ${travelSentence(input.shot)}` },
     { text: `${drivingRules(input.shot)}${input.scene && isMoving(input.shot) ? ` ${trafficRule(input.scene.trafficSide)}` : ''}` },
     { text: input.hasEndFrame ? 'The supplied end frame is the exact last frame: the car drives smoothly from its start to its end position.' : '' },
@@ -353,12 +359,13 @@ const END_FRAME_TRAVEL: Record<TravelDirection, string> = {
   static: 'at the same place',
 };
 
-export function buildEndKeyframePrompt(input: { shot: StoryboardShot; durationS: number; format: string; excludePeople?: boolean; castTitles?: string[]; castDescription?: string | null; scene?: DrivingScene }) {
+export function buildEndKeyframePrompt(input: { shot: StoryboardShot; durationS: number; format: string; excludePeople?: boolean; castTitles?: string[]; castDescription?: string | null; scene?: DrivingScene; place?: string }) {
   const motionEnd = getMotion(input.shot.motion)?.endFrame;
   const where = motionEnd ? `now ${motionEnd}` : `having driven ${END_FRAME_TRAVEL[input.shot.travelDirection ?? 'left_to_right']}`;
   return fitPrompt([
     { text: `Image 1 is the opening frame of a ${input.durationS}-second live-action car commercial shot; image 2 shows the exact vehicle. Create the closing frame of the same continuous shot: same car, place, light and camera (${input.shot.camera}), with the car ${where}, realistically for its speed. Fixed objects stay where they are in the world. ${GROUND_CONTACT}`, shrinkTo: 300 },
     { text: input.scene ? trafficRule(input.scene.trafficSide) : '' },
+    placeBlock(input.place, input.scene),
     { text: peopleDirection({ ...input, stage: 'animation', moving: true }) },
     { text: `${NO_TEXT_IMAGE} Compose for ${input.format}.` },
   ], IMAGE_PROMPT_MAX_CHARS);
