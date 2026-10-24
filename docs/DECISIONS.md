@@ -1,5 +1,12 @@
 # Décisions
 
+## Suivi de génération réactif (2026-10-24)
+
+- **Constat** (demande du responsable : le fil de génération ne s’affiche pas de manière réactive) : (1) le serveur calculait le prochain suivi en ne regardant que les plans en reprise après une erreur fal ; un seul plan en attente de 180 s figeait l’affichage de tous les autres pendant 3 minutes ; (2) le Studio interrogeait toutes les 15 s, au lieu des 10 s d’AGENTS.md, et attendait 15 s avant le premier contrôle ; (3) le chronomètre de l’étape ne bougeait qu’à chaque réponse du serveur ; (4) l’avancement par plan renvoyé au lancement était ignoré jusqu’au premier suivi.
+- **Correction** : suivi toutes les 10 s (`STUDIO_POLL_INTERVAL_SECONDS`), premier contrôle 3 s après le lancement, un plan en reprise ne retient plus les autres (`nextPollDelaySeconds`), chronomètre qui avance chaque seconde entre deux réponses, avancement par plan affiché dès le lancement. Les reprises fal (15, 60, 180 s) sont inchangées : le plan concerné n’est pas réinterrogé avant son échéance.
+- **Effet à surveiller** : un peu plus de lectures Supabase pendant une génération (10 s au lieu de 15 s). Les réponses de suivi sont petites ; aucune URL signée n’est créée avant la fin.
+- **Reste à mesurer sur un essai réel** : la durée des appels de suivi qui font avancer la génération (téléchargement, contrôle, montage), qui peut encore retarder une actualisation jusqu’à 25 s.
+
 ## Catalogue de mouvements, étape 1 (2026-10-23)
 
 - **Pourquoi** : aux essais du 22/10, les défauts de mouvement venaient surtout de consignes floues ou contradictoires, pas du moteur seul : plan « héros à l’arrêt » dont l’action fait arriver la voiture, conduite « à vitesse constante, sans virage » imposée à tous les plans roulants (un virage demandé devenait impossible), mouvement décrit en texte libre et réinterprété par chaque moteur.

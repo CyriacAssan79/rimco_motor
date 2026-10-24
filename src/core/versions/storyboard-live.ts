@@ -27,7 +27,7 @@ import { createFalClient } from '@fal-ai/client';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { getActiveFalCredential, getFalCredentialById, pruneRetiredFalCredentials } from '@/core/providers/fal-credential-vault';
-import { falErrorStatusCode, isFalInputRejection, isFalPollDue, planFalPollFailure } from '@/core/providers/fal-polling';
+import { falErrorStatusCode, isFalInputRejection, isFalPollDue, nextPollDelaySeconds, planFalPollFailure } from '@/core/providers/fal-polling';
 
 const MAX_VIDEO_BYTES = 100 * 1024 * 1024;
 const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
@@ -1118,10 +1118,10 @@ export async function refreshLiveStoryboard(versionId: string, actor: Actor) {
   const reconciliationRequired = latestShots.some((shot) => shot.provider_reconciliation_required);
   if (reconciliationRequired) return { id: versionId, status: 'generating' as const, reconciliationRequired: true, error: 'Une tâche fal doit être réconciliée avec son identifiant fournisseur avant la clôture des coûts.', completedShots, totalShots: latestShots.length };
   // A failed shot never waits for its clip check: its 'queued' quality status would keep the version generating forever.
-  const pendingShots = latestShots.some((shot) => ['queued','generating','postprocessing'].includes(shot.status) || premiumQualityMode && shot.status !== 'failed' && ['queued','checking','retrying'].includes(shot.video_quality_status));
+  const isPending = (shot: (typeof latestShots)[number]) => ['queued','generating','postprocessing'].includes(shot.status) || premiumQualityMode && shot.status !== 'failed' && ['queued','checking','retrying'].includes(shot.video_quality_status);
+  const pendingShots = latestShots.some(isPending);
   const shotProgress = latestShots.map((shot) => ({ number: shot.shot_number, title: shot.title, status: shot.status, qualityStatus: shot.video_quality_status }));
-  const scheduledPolls = latestShots.map((shot) => shot.provider_next_poll_at ? Math.max(1, Math.ceil((new Date(shot.provider_next_poll_at).getTime() - Date.now()) / 1000)) : null).filter((seconds): seconds is number => seconds !== null);
-  const nextPollInSeconds = scheduledPolls.length ? Math.min(...scheduledPolls) : 15;
+  const nextPollInSeconds = nextPollDelaySeconds(latestShots.filter(isPending));
   if (pendingShots) return { id: versionId, status: 'generating' as const, qualityWarnings: collectQualityWarnings(latestShots), completedShots, totalShots: latestShots.length, checkedQualityShots: latestShots.filter((shot) => shot.video_quality_status === 'passed').length, totalQualityShots: premiumQualityMode ? latestShots.length : 0, shotProgress: premiumQualityMode ? shotProgress : undefined, processingStage: latestShots.some((shot) => shot.video_quality_status === 'checking') ? 'quality_checking' as const : 'generating' as const, nextPollInSeconds };
 
   if (premiumQualityMode) {

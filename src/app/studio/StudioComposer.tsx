@@ -11,6 +11,11 @@ import {
 } from "@/core/scenes/catalog";
 import { MAX_STORYBOARD_DIRECTION_LENGTH } from "@/core/storyboard-direction";
 import { peoplePresetIds, peoplePresets, type PeoplePresetId } from "@/core/people-presets";
+import { STUDIO_POLL_INTERVAL_SECONDS } from "@/core/providers/fal-polling";
+
+const FIRST_POLL_SECONDS = 3;
+/** Called from event handlers and timers only (never during render). */
+const currentTime = () => Date.now();
 
 type Format = "16:9" | "9:16" | "1:1";
 type Job = {
@@ -34,6 +39,8 @@ type Job = {
   estimatedPriceFcfa?: number;
   processingStage?: string;
   stageElapsedSeconds?: number | null;
+  /** Browser time of the last server answer: the stage timer keeps counting between two refreshes. */
+  receivedAt?: number;
   nextPollInSeconds?: number;
   reconciliationRequired?: boolean;
   qualityWarnings?: Array<{
@@ -365,6 +372,7 @@ export function StudioComposer({ mode }: { mode: "mock" | "live" }) {
                 ? {
                     ...previous,
                     ...data,
+                    receivedAt: currentTime(),
                     error: response.ok
                       ? data.error
                       : (data.error ??
@@ -377,8 +385,8 @@ export function StudioComposer({ mode }: { mode: "mock" | "live" }) {
               !data.reconciliationRequired &&
               !["ready", "failed", "cancelled"].includes(data.status)
             )
-              schedule(data.nextPollInSeconds ?? 15);
-            else if (!response.ok) schedule(15);
+              schedule(data.nextPollInSeconds ?? STUDIO_POLL_INTERVAL_SECONDS);
+            else if (!response.ok) schedule(STUDIO_POLL_INTERVAL_SECONDS);
           } catch {
             setJob((previous) =>
               previous
@@ -389,20 +397,34 @@ export function StudioComposer({ mode }: { mode: "mock" | "live" }) {
                   }
                 : previous,
             );
-            schedule(15);
+            schedule(STUDIO_POLL_INTERVAL_SECONDS);
           } finally {
             refreshingJob.current = false;
           }
         },
-        Math.max(5, Math.min(180, delaySeconds)) * 1000,
+        Math.max(FIRST_POLL_SECONDS, Math.min(180, delaySeconds)) * 1000,
       );
     };
-    schedule(nextPollInSeconds ?? 15);
+    // First check soon after launch, then the server's rhythm (10 s, longer only for a shot in fal back-off).
+    schedule(nextPollInSeconds ?? FIRST_POLL_SECONDS);
     return () => {
       active = false;
       window.clearTimeout(timer);
     };
   }, [jobStatus, jobId, nextPollInSeconds, reconciliationRequired]);
+
+  // Ticks every second while a job runs, so the stage timer moves between two server answers.
+  const [clock, setClock] = useState(currentTime);
+  const jobRunning = Boolean(jobId && jobStatus && !["ready", "failed", "cancelled"].includes(jobStatus));
+  useEffect(() => {
+    if (!jobRunning) return;
+    const interval = window.setInterval(() => setClock(currentTime()), 1000);
+    return () => window.clearInterval(interval);
+  }, [jobRunning]);
+  const liveStageSeconds =
+    job?.stageElapsedSeconds != null
+      ? job.stageElapsedSeconds + (job.receivedAt ? Math.max(0, Math.floor((clock - job.receivedAt) / 1000)) : 0)
+      : null;
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -513,6 +535,10 @@ export function StudioComposer({ mode }: { mode: "mock" | "live" }) {
         totalKeyframes: data.totalKeyframes,
         keyframes: data.keyframes,
         estimatedPriceFcfa: data.estimatedPriceFcfa,
+        shotProgress: data.shotProgress,
+        processingStage: data.processingStage,
+        stageElapsedSeconds: 0,
+        receivedAt: currentTime(),
       });
     } catch (submitError) {
       setError(
@@ -594,7 +620,7 @@ export function StudioComposer({ mode }: { mode: "mock" | "live" }) {
                     : job.status === "cancelled"
                       ? "La génération a été annulée."
                       : (job.error ??
-                        `${job.processingStage ? `${({ queued: "En file d’attente", keyframing: `Création des images-clés${job.completedKeyframes != null && job.totalKeyframes != null ? ` · ${job.completedKeyframes}/${job.totalKeyframes}` : ""}`, generating: "Génération vidéo", quality_checking: "Contrôle qualité", transferring: "Transfert du fichier", postprocessing: "Logo et finalisation" } as Record<string, string>)[job.processingStage] ?? "Génération en cours"}${job.stageElapsedSeconds != null ? ` · ${job.stageElapsedSeconds} s` : ""}` : "Génération en cours"}${job.totalQualityShots ? ` · ${job.checkedQualityShots ?? 0}/${job.totalQualityShots} plans contrôlés` : ""}. Actualisation automatique selon le délai de suivi du fournisseur.`)}
+                        `${job.processingStage ? `${({ queued: "En file d’attente", keyframing: `Création des images-clés${job.completedKeyframes != null && job.totalKeyframes != null ? ` · ${job.completedKeyframes}/${job.totalKeyframes}` : ""}`, generating: "Génération vidéo", quality_checking: "Contrôle qualité", transferring: "Transfert du fichier", postprocessing: "Logo et finalisation" } as Record<string, string>)[job.processingStage] ?? "Génération en cours"}${liveStageSeconds != null ? ` · ${liveStageSeconds} s` : ""}` : "Génération en cours"}${job.totalQualityShots ? ` · ${job.checkedQualityShots ?? 0}/${job.totalQualityShots} plans contrôlés` : ""}. Actualisation automatique toutes les ${job.nextPollInSeconds ?? STUDIO_POLL_INTERVAL_SECONDS} s.`)}
             </p>
             {job.shotProgress && (
               <div className="mt-3 grid gap-1.5 sm:grid-cols-2">
