@@ -12,6 +12,8 @@ describe('sens de la voiture à l’écran (essai B du 24/10 : demi-tour puis ma
     expect(headingAtStart({ motion: 'arrive_and_stop', travelDirection: 'left_to_right' })).toBe('The car’s nose points to the right side of the frame.');
     expect(headingAtStart({ motion: 'approach', travelDirection: 'towards_camera' })).toContain('its front is seen');
     expect(headingAtStart({ motion: 'hero_still', travelDirection: 'static' })).toBeNull();
+    // 25/10: a three-quarter photo keeps its own nose side; the car is never mirrored.
+    expect(headingAtStart({ motion: 'approach', travelDirection: 'towards_camera', vehicleNose: 'left' })).toBe('Its nose points towards the camera, angled to the frame\'s left, as in its photo.');
   });
 
   it('calcule le côté de sortie d’un virage selon le point de vue', () => {
@@ -26,7 +28,9 @@ describe('sens de la voiture à l’écran (essai B du 24/10 : demi-tour puis ma
   it('impose le sens à l’image-clé, à l’image de fin et aux juges', () => {
     const stop = shot({ motion: 'arrive_and_stop', travelDirection: 'left_to_right', travelSpeed: 'slow' });
     const keyframe = buildKeyframePrompt({ shot: stop, vehicle: 'GWM Tank 300 gris', lighting: 'day', format: '16:9', retryReason: null, hasLocationReference: true, excludePeople: true });
-    expect(keyframe).toContain('The car’s nose points to the right side of the frame. Mirror the photographed car if needed; it never drives backwards.');
+    expect(keyframe).toContain('The car’s nose points to the right side of the frame. It never drives backwards.');
+    expect(keyframe).toContain('from the same side as image 1, never mirrored');
+    expect(keyframe).not.toContain('Mirror');
     expect(keyframe.length).toBeLessThanOrEqual(IMAGE_PROMPT_MAX_CHARS);
     const end = buildEndKeyframePrompt({ shot: stop, durationS: 5, format: '16:9', excludePeople: true });
     expect(end).toContain('exactly as at the start. Use image 2 for the car’s identity only, not its orientation');

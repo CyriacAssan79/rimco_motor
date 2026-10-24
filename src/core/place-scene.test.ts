@@ -9,9 +9,11 @@ const scene = { trafficSide: 'right' as const, steeringSide: 'left' as const, ma
 const shot = shotDraftSchema.parse({ title: 'Pont', motion: 'approach', travelDirection: 'towards_camera', travelSpeed: 'cruise', scene: 'SUV on the HKB bridge', framing: 'Wide', location: 'HKB bridge', action: 'The SUV passes the white pylons', camera: 'Static camera', durationSeconds: 5, vehiclePhotoId: 'front', locationPhotoId: bridge.id });
 
 describe('lieu · description envoyée aux modèles', () => {
-  it('décrit un lieu intégré par sa ville et son décor, un lieu importé par son titre', () => {
-    expect(placeDescription(bridge)).toBe('Abidjan, pont Henri-Konan-Bédié. Pont à haubans blanc, lagune Ébrié et skyline d’Abidjan en plein jour');
+  it('décrit un lieu par son nom et ce que sa photo montre vraiment', () => {
+    expect(placeDescription(bridge)).toBe('Abidjan, pont Henri-Konan-Bédié. Visible: aerial view of the white single-pylon cable-stayed bridge over the Ebrie lagoon, Plateau towers behind');
     expect(placeDescription({ id: 'x', title: 'Marché de Treichville', category: 'Abidjan · marché' })).toBe('Marché de Treichville · Abidjan · marché');
+    const geometry = { viewpoint: 'ground' as const, roadAxis: 'depth' as const, roadType: 'urban' as const, timeOfDay: 'day' as const, landmarks: 'market stalls, busy pavement' };
+    expect(placeDescription({ id: 'x', title: 'Marché de Treichville', geometry })).toBe('Marché de Treichville. Visible: market stalls, busy pavement');
   });
 
   it('reste courte et sans balises', () => {
@@ -23,7 +25,7 @@ describe('lieu · description envoyée aux modèles', () => {
 
 describe('lieu · réalisateur', () => {
   const vehiclePhotos = [{ id: 'front', role: 'exterior', title: 'Avant', angle: 'Avant trois-quarts' }];
-  const places = [{ id: bridge.id, title: bridge.title, timeOfDay: 'day' as const, description: placeDescription(bridge) }];
+  const places = [{ id: bridge.id, title: bridge.title, description: placeDescription(bridge), geometry: bridge.geometry }];
 
   it('prend la ville dans les réglages de la marque, plus jamais en dur', () => {
     const withMarket = buildStoryboardInstruction({ durationSeconds: 10, mode: 'pro', vehicle: 'GWM Tank 300', vehiclePhotos, places, format: '16:9', marketLocation: 'Abidjan, Côte d’Ivoire' });
@@ -33,8 +35,9 @@ describe('lieu · réalisateur', () => {
 
   it('impose un lieu listé à chaque plan et décrit chaque lieu', () => {
     const instruction = buildStoryboardInstruction({ durationSeconds: 10, mode: 'pro', vehicle: 'GWM Tank 300', vehiclePhotos, places, format: '16:9' });
-    expect(instruction).toContain('locationPhotoId from the listed places (never null)');
-    expect(instruction).toContain('"description":"Abidjan, pont Henri-Konan-Bédié.');
+    expect(instruction).toContain('Every shot takes its locationPhotoId from the listed places and shows only that place, from the viewpoint of its photo.');
+    expect(instruction).toContain('"visible":"Abidjan, pont Henri-Konan-Bédié. Visible: aerial view');
+    expect(instruction).toContain('"viewpoint":"distant","road":"diagonal"');
   });
 });
 

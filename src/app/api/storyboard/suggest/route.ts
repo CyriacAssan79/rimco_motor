@@ -4,16 +4,17 @@ import { errorResponse, getActor, HttpError } from '@/core/auth/guards';
 import { createSupabaseServerClient } from '@/core/supabase/server';
 import { createStorageAdminClient } from '@/core/storage/supabase';
 import { env } from '@/env';
-import { storyboardMotionIssue } from '@/core/motions/catalog';
+import { storyboardCoherenceIssue } from '@/core/motions/catalog';
 import { BRAND_SCENE_COLUMNS, loadBrandScene } from '@/core/brand-scene';
 import { peoplePresetIds } from '@/core/people-presets';
-import { buildDirectorUserPrompt, buildSingleShotStoryboardInstruction, castDescriptionSchema, MAX_CAST_PER_VIDEO, validateStoryboardCast, vehicleDescriptionForPrompt, buildStoryboardInstruction, isTierDurationSupported, singleShotStoryboardSchema, storyboardDurationIssue, storyboardSchema, validatePremiumTwentySecondStoryboard, validateSingleShotStoryboard, validateStoryboard, type ClipDurationSeconds, type StoryboardShot } from '@/core/storyboard';
+import { buildDirectorUserPrompt, buildSingleShotStoryboardInstruction, castDescriptionSchema, directorPhotoViews, MAX_CAST_PER_VIDEO, validateStoryboardCast, vehicleDescriptionForPrompt, buildStoryboardInstruction, isTierDurationSupported, singleShotStoryboardSchema, storyboardDurationIssue, storyboardSchema, validatePremiumTwentySecondStoryboard, validateSingleShotStoryboard, validateStoryboard, withVehicleNose, type ClipDurationSeconds, type StoryboardShot } from '@/core/storyboard';
 import { getStoryboardModeRoute } from '@/core/providers/storyboard-routing';
 import { buildFalLlmInput, createFalLlmProvider, FalLlmBriefError, llmReservationUsd } from '@/core/providers/fal-llm';
 import { createFalClient } from '@fal-ai/client';
 import { getActiveFalCredential } from '@/core/providers/fal-credential-vault';
 import { reserveLlmCost, settleUsageCost } from '@/core/billing/ledger';
-import { findCuratedLocation, placeDescription, placeTimeOfDay } from '@/core/assets/location-catalog';
+import { placeDescription } from '@/core/assets/location-catalog';
+import { loadSelectedPlaces, PlaceSelectionError, undescribedPlacesIssue, type SelectedPlace } from '@/core/assets/places';
 import { estimateGridPriceFcfa } from '@/core/pricing';
 import { storyboardDirectionSchema } from '@/core/storyboard-direction';
 
@@ -74,16 +75,10 @@ export async function POST(request: Request) {
     const vehiclePhotos = dossiers.flatMap((entry) => entry.assets ?? []).filter((asset) => asset.kind === 'vehicle' && asset.status === 'validée');
     if (!vehiclePhotos.length) throw new HttpError(422, 'Ce dossier ne contient pas encore de photo validée.');
 
-    let places: Array<{ id: string; title: string | null; category: string | null; path: string }> = [];
-    if (input.placeIds.length) {
-      const curated = input.placeIds.map(findCuratedLocation).filter((place) => place !== undefined);
-      const curatedIds = new Set<string>(curated.map((place) => place.id));
-      const uploadedIds = input.placeIds.filter((id) => !curatedIds.has(id));
-      const { data, error } = uploadedIds.length ? await supabase.from('assets').select('id,title,category,path,kind,status,brand_id')
-        .in('id', uploadedIds).eq('kind', 'place').eq('status', 'validée').eq('brand_id', actor.brandId) : { data: [], error: null };
-      if (error || !data || data.length !== uploadedIds.length) throw new HttpError(422, 'Un ou plusieurs lieux ne sont pas disponibles pour votre marque.');
-      places = [...curated.map((place) => ({ id: place.id, title: place.title, category: place.category, path: place.path })), ...data];
-      places = input.placeIds.map((id) => places.find((place) => place.id === id)).filter((place): place is typeof places[number] => Boolean(place));
+    let places: SelectedPlace[];
+    try { places = await loadSelectedPlaces(supabase, actor.brandId, input.placeIds); } catch (cause) {
+      if (cause instanceof PlaceSelectionError) throw new HttpError(422, cause.message);
+      throw cause;
     }
     const castAssetIds = [...new Set(input.castAssetIds)];
     const { data: castAssets, error: castError } = castAssetIds.length
@@ -102,12 +97,15 @@ export async function POST(request: Request) {
     const selectedPlaces = places;
     // 24/10 (responsable) : aucun plan 100 % IA ; chaque plan est tourné dans un lieu choisi par l’utilisateur.
     if (!selectedPlaces.length) throw new HttpError(422, 'Choisissez au moins un lieu dans la médiathèque : chaque plan est tourné dans un lieu sélectionné.');
+    // 25/10: the director plans the car's path from what each place photo shows; an undescribed place cannot be used.
+    const undescribed = undescribedPlacesIssue(selectedPlaces);
+    if (undescribed) throw new HttpError(422, undescribed);
     const brandScene = await loadBrandScene(supabase.from('brands').select(BRAND_SCENE_COLUMNS).eq('id', actor.brandId).maybeSingle());
     const instructionInput = {
       durationSeconds: input.durationSeconds,
       vehicle: vehicleDescriptionForPrompt(dossier),
       vehiclePhotos: selectedVehicle.map((photo) => ({ id: photo.id, role: photo.photo_role ?? 'exterior', title: photo.title ?? 'Photo véhicule', angle: photo.angle })),
-      places: selectedPlaces.map((place) => ({ id: place.id, title: place.title ?? 'Lieu', category: place.category, timeOfDay: placeTimeOfDay(place), description: placeDescription(place) })),
+      places: selectedPlaces.map((place) => ({ id: place.id, title: place.title, description: placeDescription(place), geometry: place.geometry })),
       purpose: input.purpose, direction: input.direction, format: input.format,
       character: input.character, lighting: input.lighting, mood: input.mood,
       cast,
@@ -146,7 +144,6 @@ export async function POST(request: Request) {
         framing: premiumCreative ? ['Plan large', 'Plan moyen trois-quarts', 'Gros plan autorisé par la photo', 'Plan héros trois-quarts avant'][index] : 'Plan moyen',
         location: selectedPlaces[index % Math.max(1, selectedPlaces.length)]?.title ?? 'Abidjan, Côte d’Ivoire',
         action: premiumCreative ? premiumActions[index] : index === 0 ? 'Le véhicule avance doucement dans son environnement réel.' : 'La caméra révèle les lignes et finitions présentes sur les photos.',
-        camera: premiumCreative ? ['Travelling d’établissement lent', 'Suivi latéral stabilisé', 'Mouvement macro doux, sans changement d’angle inventé', 'Travelling avant fluide puis arrêt'][index] : index === 0 ? 'Travelling latéral lent et stable' : 'Mouvement rapproché fluide',
         durationSeconds,
         vehiclePhotoId: selectedVehicle[index % selectedVehicle.length].id,
         locationPhotoId: selectedPlaces[index % Math.max(1, selectedPlaces.length)]?.id ?? null,
@@ -173,22 +170,21 @@ export async function POST(request: Request) {
           const fal = createFalClient({ credentials: falCredential.apiKey });
           return fal.subscribe('openrouter/router', { input: buildFalLlmInput(prompt, system, env.LLM_MODEL!) as never });
         });
-        // Motion catalogue: a missing or incoherent motion (direction, speed, photo angle) also triggers the corrected retry.
-        const photoAngles = Object.fromEntries(selectedVehicle.map((photo) => [photo.id, photo.angle]));
-        const interiorPlaceIds = selectedPlaces.filter((place) => placeTimeOfDay(place) === 'interior').map((place) => place.id);
+        // Motion catalogue: an incoherent motion, photo, place or screen direction also triggers the corrected retry.
+        const coherence = { photos: directorPhotoViews(selectedVehicle), places: Object.fromEntries(selectedPlaces.map((place) => [place.id, place.geometry])) };
         // Without a sheet the people would be dropped at generation (patch v3.2, F9): a requested « Personnage » needs one.
         const placeIssue = (shots: StoryboardShot[]) => shots.some((shot) => !shot.locationPhotoId) ? 'Chaque plan doit avoir un locationPhotoId choisi parmi les lieux listés.' : null;
         const peopleSheetIssue = (sheet: string | undefined) => !cast.length && input.peoplePreset !== 'none' && !sheet ? 'castDescription est obligatoire : décris les personnes demandées.' : null;
         const responseSchema = input.workflow === 'single'
           ? singleShotStoryboardResponseSchema.superRefine(({ shots, castDescription: sheet }, context) => {
-              const issue = [storyboardMotionIssue(shots, photoAngles, interiorPlaceIds), placeIssue(shots), peopleSheetIssue(sheet)].filter(Boolean).join(' ');
+              const issue = [storyboardCoherenceIssue(shots, coherence), placeIssue(shots), peopleSheetIssue(sheet)].filter(Boolean).join(' ');
               if (issue) context.addIssue({ code: 'custom', path: ['shots'], message: issue });
             })
           // Patch v3.2 (A5): wrong durations make the answer invalid (automatic corrected retry), never silently rewritten.
           : z.object({ castDescription: castDescriptionSchema.optional(), shots: storyboardSchema }).strict().superRefine(({ shots, castDescription: sheet }, context) => {
               const issue = [premiumTwentySecond
                 ? shots.length === 4 && shots.every((shot) => shot.durationSeconds === 5) ? null : 'Exactement 4 plans de 5 secondes.'
-                : storyboardDurationIssue(shots, input.durationSeconds, route.adapterFamily), storyboardMotionIssue(shots, photoAngles, interiorPlaceIds), placeIssue(shots), peopleSheetIssue(sheet)].filter(Boolean).join(' ');
+                : storyboardDurationIssue(shots, input.durationSeconds, route.adapterFamily), storyboardCoherenceIssue(shots, coherence), placeIssue(shots), peopleSheetIssue(sheet)].filter(Boolean).join(' ');
               if (issue) context.addIssue({ code: 'custom', path: ['shots'], message: issue });
             });
         // Layer 1 (locked rules + approved references) goes in the system prompt; layer 2 (user brief) is the only user content.
@@ -230,6 +226,7 @@ export async function POST(request: Request) {
     if (shots.some((shot) => !vehicleIds.has(shot.vehiclePhotoId) || (shot.locationPhotoId && !placeIds.has(shot.locationPhotoId)))) {
       throw new HttpError(422, 'Le storyboard référence une image non autorisée. Régénérez la proposition.');
     }
+    shots = withVehicleNose(shots, directorPhotoViews(selectedVehicle));
     return NextResponse.json({ storyboard: shots, castDescription, prompt: `${directorSystemPrompt}\n\n${directorUserPrompt}`, mode: input.mode, durationSeconds: input.durationSeconds, finalVideoSeconds: input.durationSeconds + 2, storyboardLedgerId, storyboardCostUsd, storyboardCostFcfa: Math.round(storyboardCostUsd * env.USD_TO_EUR_RATE * env.EUR_TO_FCFA * 1.3), totalEstimatedPriceFcfa });
   } catch (error) {
     if (error instanceof HttpError) return errorResponse(error);

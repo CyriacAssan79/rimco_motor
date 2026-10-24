@@ -71,8 +71,8 @@ describe('P3 · mouvement naturel', () => {
     const base = { durationSeconds: 20 as const, mode: 'premium' as const, vehicle: 'Haval H6', vehiclePhotos: [{ id: 'front', role: 'exterior', title: 'Avant' }], places: [], purpose: 'advertising' as const, format: '16:9' as const };
     const instruction = buildStoryboardInstruction(base);
     expect(instruction).toContain('travelDirection');
-    expect(instruction).toContain('Keep one lateral direction for the whole film');
-    expect(instruction).toContain('At most one side-tracking shot');
+    expect(instruction).toContain('One screen direction for the whole film');
+    expect(instruction).toContain('At most one side_tracking');
   });
 
   it('contrôle que la voiture avance dans les plans roulants', () => {

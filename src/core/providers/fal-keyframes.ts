@@ -8,6 +8,7 @@ import { CALM_DRIVING, fitPrompt, GROUND_CONTACT, HEADING_ALIGNED, PEOPLE_IN_MOV
 import type { BrandScene } from '@/core/brand-scene';
 import type { KeyframeResolution } from '@/core/versions/render-settings';
 import { getMotion, headingAtEnd, headingAtStart, type DrivingRule, type MotionId } from '@/core/motions/catalog';
+import type { PlaceViewpoint } from '@/core/assets/place-geometry';
 export { GROUND_CONTACT, NO_BODYWORK_CONTACT, WHEEL_PHYSICS } from '@/core/prompts/rules';
 
 export const KEYFRAME_IMAGE_ENDPOINT = 'fal-ai/nano-banana-2/edit';
@@ -81,8 +82,16 @@ export function selectKeyframeReferenceIds(input: {
 /** Zero text in the set: signage copied from a location photo is still model-generated text. */
 export const NO_READABLE_TEXT_CHECK = 'Readable text is reported, not rejected: set "readableText": true when any readable text, letters, numbers or logo is visible anywhere in the frame (shop signs, billboards, posters, storefronts, road-sign panels, license plates, watermarks), including text copied from the location reference; the vehicle\u2019s own badges, exactly as visible in its reference photos, do not count. Never set "approved" to false because of text alone.';
 
-/** F · the keyframe re-stages the car from the shot's viewpoint: a different angle of the same place is expected. */
-export const SAME_PLACE_CHECK = 'The location must be the same recognizable place as the location reference (architecture, road, landmarks); a different camera viewpoint, framing, crop or time of the shot within that place is expected and must not be rejected. Reject only a manifestly different place.';
+/** 25/10: the keyframe keeps the place photo's viewpoint and road; a closer framing along it is expected, an invented road is not. */
+export const SAME_PLACE_CHECK = 'The location must be the same recognizable place as the location reference, with the same road layout and landmarks; a closer framing or a slightly different camera position along that road is expected and must not be rejected. Reject a manifestly different place, or a road, street or buildings that do not exist in the location reference.';
+
+/** How the keyframe uses the place photo, by viewpoint: the car is put into the real road instead of an invented one. */
+const PLACE_VIEWPOINT_STAGING: Record<PlaceViewpoint, string> = {
+  ground: 'Put the car on the road of the location photo, keeping its camera height, road layout and landmarks; the camera may move closer along that road.',
+  elevated: 'Keep the high viewpoint, road layout and landmarks of the location photo; put the car on its road, small to medium in the frame.',
+  distant: 'Keep the viewpoint and framing of the location photo exactly; put the car, small, on its visible road.',
+  interior: 'Keep the room and viewpoint of the location photo; the car stands on its floor.',
+};
 
 
 /** Rank of each reference image sent with a candidate: vehicle views, then casting photos, then the place last. */
@@ -305,6 +314,8 @@ export function buildKeyframePrompt(input: {
   castDescription?: string | null;
   scene?: DrivingScene;
   place?: string;
+  /** Viewpoint of the place photo (25/10); undefined for versions made before. */
+  placeViewpoint?: PlaceViewpoint;
   /** 3b: an accepted keyframe of an earlier shot in the same place is sent just before the location photo. */
   hasAnchorReference?: boolean;
 }) {
@@ -318,13 +329,14 @@ export function buildKeyframePrompt(input: {
     ...(input.hasLocationReference ? ['last image = the location'] : []),
   ].join('; ');
   return fitPrompt([
-    { text: `Photorealistic still frame from a live-action car commercial shot on a cinema camera, ${input.format}.` },
-    { text: `References: ${roles}. Re-stage the car in the location from the shot's viewpoint; ignore the photos' backgrounds and studio light. Keep its exact shape, paint, wheels, lights and badges.` },
+    { text: `Photorealistic still from a live-action car commercial, cinema camera, ${input.format}.` },
+    { text: `References: ${roles}. ${input.hasLocationReference && input.placeViewpoint ? PLACE_VIEWPOINT_STAGING[input.placeViewpoint] : 'Stage the car in the location from the shot\'s viewpoint.'} Ignore the vehicle photos' backgrounds and light. Keep the car's exact shape, paint, wheels, lights and badges, from the same side as image 1, never mirrored.` },
     // Dropped last, when a very long shot would exceed the image limit: action and framing already describe it.
     { text: `Shot: ${input.shot.scene}.`, shrinkTo: 60, drop: 3 },
     placeBlock(input.place, input.scene),
-    { text: `Action: ${input.shot.action}.`, shrinkTo: 80 },
-    { text: `${getMotion(input.shot.motion)?.keyframe ?? KEYFRAME_MOTION_CUES[resolveShotType(input.shot)]} ${travelSentence(input.shot)}${isMoving(input.shot) ? ` ${HEADING_ALIGNED}${headingAtStart(input.shot) ? ` ${headingAtStart(input.shot)} Mirror the photographed car if needed; it never drives backwards.` : ''}${input.scene ? ` ${trafficRule(input.scene.trafficSide)}` : ''}` : ''}` },
+    { text: `${getMotion(input.shot.motion)?.keyframe ?? KEYFRAME_MOTION_CUES[resolveShotType(input.shot)]} ${travelSentence(input.shot)}${isMoving(input.shot) ? ` ${HEADING_ALIGNED}${headingAtStart(input.shot) ? ` ${headingAtStart(input.shot)} It never drives backwards.` : ''}${input.scene ? ` ${trafficRule(input.scene.trafficSide)}` : ''}` : ''}` },
+    // The free details never move the car: shortened, then dropped first when the prompt is too long.
+    { text: `Details: ${input.shot.action}.`, shrinkTo: 80, drop: 1 },
     { text: `Framing: ${input.shot.framing}. Camera: ${input.shot.camera}.`, shrinkTo: 80 },
     { text: `Light: ${input.lighting}; the car is lit like the place (sun direction, reflections).`, shrinkTo: 70 },
     { text: GROUND_CONTACT },
@@ -361,10 +373,11 @@ function drivingRules(shot: StoryboardShot): string {
 export function buildKeyframeAnimationPrompt(input: { shot: StoryboardShot; vehicle: string; durationS: number; mood: string; lighting: string; excludePeople?: boolean; retryReason?: string | null; castTitles?: string[]; castDescription?: string | null; hasEndFrame?: boolean; maxLength?: number; scene?: DrivingScene; place?: string }) {
   return fitPrompt([
     { text: `Animate this image as the first frame of a ${input.durationS}-second live-action car commercial shot. ${KEEP_IDENTITY}` },
-    { text: `Action: ${input.shot.action}.`, shrinkTo: 80 },
+    // 25/10: the catalogue motion and its camera come first; the free text only adds details and never moves the car.
+    { text: `${animationMotion(input.shot)} ${travelSentence(input.shot)}` },
     { text: `Camera: ${input.shot.camera}.`, shrinkTo: 60 },
     placeBlock(input.place, input.scene),
-    { text: `${animationMotion(input.shot)} ${travelSentence(input.shot)}` },
+    { text: `Details: ${input.shot.action}.`, shrinkTo: 80, drop: 1 },
     { text: `${drivingRules(input.shot)}${input.scene && isMoving(input.shot) ? ` ${trafficRule(input.scene.trafficSide)}` : ''}` },
     // Dropped only after the mood and the judge feedback, when a very long shot would exceed the engine limit.
     { text: isMoving(input.shot) ? PARALLAX : '', drop: 3 },

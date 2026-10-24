@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { brandSceneFromRow, loadBrandScene, storedBrandScene } from '@/core/brand-scene';
-import { storyboardMotionIssue } from '@/core/motions/catalog';
+import { storyboardCoherenceIssue } from '@/core/motions/catalog';
+import { findCuratedLocation } from '@/core/assets/location-catalog';
+import { parseVehicleView } from '@/core/assets/vehicle-views';
 import { buildEndKeyframePrompt, buildKeyframeAnimationPrompt, buildKeyframePrompt, buildKeyframeQualityPrompt, buildVideoQualityPrompt } from '@/core/providers/fal-keyframes';
 import { PEOPLE_IN_MOVING_CAR, steeringRule, trafficRule } from '@/core/prompts/rules';
 import { buildStoryboardInstruction, shotDraftSchema } from '@/core/storyboard';
@@ -71,21 +73,24 @@ describe('règles de route dans les prompts', () => {
 });
 
 describe('réalisateur · circulation et showroom', () => {
-  const vehiclePhotos = [{ id: 'front', role: 'exterior', title: 'Avant', angle: 'Avant trois-quarts' }];
+  const vehiclePhotos = [{ id: 'front', role: 'exterior', title: 'Avant', angle: '3/4 avant · nez à gauche' }];
+  const bridge = findCuratedLocation('d55c82b1-95d3-4d2e-a2d2-25068739d212')!;
+  const showroom = findCuratedLocation('d55c82b1-95d3-4d2e-a2d2-25068739d211')!;
+  const places = [{ id: 'bridge', title: 'Pont HKB', geometry: bridge.geometry }, { id: 'showroom', title: 'Showroom', geometry: showroom.geometry }];
 
-  it('annonce la circulation à droite et l’immobilité en intérieur', () => {
-    const instruction = buildStoryboardInstruction({ durationSeconds: 20, mode: 'pro', vehicle: 'GWM Tank 300', vehiclePhotos, places: [{ id: 'bridge', title: 'Pont HKB', timeOfDay: 'day' }, { id: 'showroom', title: 'Showroom', timeOfDay: 'interior' }], format: '16:9', trafficSide: 'right' });
+  it('annonce la circulation à droite et ne propose que des plans fixes en intérieur', () => {
+    const instruction = buildStoryboardInstruction({ durationSeconds: 20, mode: 'pro', vehicle: 'GWM Tank 300', vehiclePhotos, places, format: '16:9', trafficSide: 'right' });
     expect(instruction).toContain(trafficRule('right'));
-    expect(instruction).toContain('In an interior place the car never moves');
-    expect(buildStoryboardInstruction({ durationSeconds: 20, mode: 'pro', vehicle: 'GWM Tank 300', vehiclePhotos, places: [], format: '16:9' })).not.toContain('interior place');
+    expect(instruction).toContain('{"place":"showroom","photos":[{"photo":"front","moves":"hero_still:static detail_glide:static"}]}');
   });
 
   it('refuse un plan roulant dans le showroom', () => {
+    const context = { photos: { front: parseVehicleView(vehiclePhotos[0].angle) }, places: { bridge: bridge.geometry, showroom: showroom.geometry } };
     const shots = [
-      { title: 'Entrée dans le showroom', motion: 'approach' as const, travelDirection: 'towards_camera' as const, locationPhotoId: 'showroom' },
-      { title: 'Pont', motion: 'pass_by' as const, travelDirection: 'left_to_right' as const, locationPhotoId: 'bridge' },
+      { title: 'Entrée dans le showroom', motion: 'approach' as const, travelDirection: 'towards_camera' as const, travelSpeed: 'slow' as const, vehiclePhotoId: 'front', locationPhotoId: 'showroom' },
+      { title: 'Pont', motion: 'approach' as const, travelDirection: 'towards_camera' as const, travelSpeed: 'slow' as const, vehiclePhotoId: 'front', locationPhotoId: 'bridge' },
     ];
-    expect(storyboardMotionIssue(shots, {}, ['showroom'])).toContain('reste immobile');
-    expect(storyboardMotionIssue([{ ...shots[0], motion: 'hero_still', travelDirection: 'static' }, shots[1]], {}, ['showroom'])).toBeNull();
+    expect(storyboardCoherenceIssue(shots, context)).toContain('approach est impossible avec cette photo dans ce lieu');
+    expect(storyboardCoherenceIssue([{ ...shots[0], motion: 'hero_still', travelDirection: 'static' }, shots[1]], context)).toBeNull();
   });
 });

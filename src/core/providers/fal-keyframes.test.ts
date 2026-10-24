@@ -21,7 +21,7 @@ describe('fal keyframe helpers', () => {
     expect(prompt).toContain('Haval H9 noir');
     expect(prompt).toContain('Boulevard lagunaire');
     expect(prompt).toContain('Plan large');
-    expect(prompt).toContain('still frame');
+    expect(prompt).toContain('Photorealistic still');
     expect(prompt).toContain('No text');
   });
 

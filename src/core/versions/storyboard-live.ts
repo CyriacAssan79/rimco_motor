@@ -13,7 +13,7 @@ import { createSupabaseServerClient } from '@/core/supabase/server';
 import { env } from '@/env';
 import { estimateGridPriceFcfa } from '@/core/pricing';
 import { firstObservedAt, type ProcessingMetrics } from './processing-metrics';
-import { expandSingleShotStoryboard, validateStoryboardCast, vehicleDescriptionForPrompt, finalVideoSeconds,  type ClipDurationSeconds, type StoryboardShot, validatePremiumTwentySecondStoryboard, validateSingleShotStoryboard, validateStoryboard, validateTierDuration } from '@/core/storyboard';
+import { directorPhotoViews, expandSingleShotStoryboard, validateStoryboardCast, vehicleDescriptionForPrompt, finalVideoSeconds, withVehicleNose, type ClipDurationSeconds, type StoryboardShot, validatePremiumTwentySecondStoryboard, validateSingleShotStoryboard, validateStoryboard, validateTierDuration } from '@/core/storyboard';
 import { assembleShotMontage, extractRepresentativeVideoFrames } from '@/core/postproduction/pipeline';
 import { MAX_MONTAGE_ATTEMPTS, montageFailureDecision } from '@/core/postproduction/montage-failure';
 import { peopleForShot, storedCast, withCastReferences, type StoredCastMember } from './casting';
@@ -22,12 +22,14 @@ import type { CreateVersionInput } from './live';
 import { animationSubmitStateAfterFailure, canSubmitAnimation } from './animation-submit-state';
 import { reserveGenerationCost, reserveKeyframeCost, settleUsageCost } from '@/core/billing/ledger';
 import { checkVideoCostCap, nominalVideoCostUsd } from '@/core/billing/video-cap';
-import { findCuratedLocation, locationCatalog, placeDescription, placeTimeOfDay, resolveShotLighting } from '@/core/assets/location-catalog';
+import { findCuratedLocation, locationCatalog, placeDescription, resolveShotLighting } from '@/core/assets/location-catalog';
+import { loadSelectedPlaces, PlaceSelectionError, undescribedPlacesIssue, type SelectedPlace } from '@/core/assets/places';
+import type { PlaceViewpoint } from '@/core/assets/place-geometry';
 import { createFalClient } from '@fal-ai/client';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { getActiveFalCredential, getFalCredentialById, pruneRetiredFalCredentials } from '@/core/providers/fal-credential-vault';
-import { headingAtStart } from '@/core/motions/catalog';
+import { headingAtStart, storyboardCoherenceIssue } from '@/core/motions/catalog';
 import { BRAND_SCENE_COLUMNS, loadBrandScene, storedBrandScene } from '@/core/brand-scene';
 import { renderSettingsFor, storedRenderSettings } from '@/core/versions/render-settings';
 import { anchoredKeyframeAction, keyframeAnchors, storedKeyframeAnchor, withAnchorReference } from '@/core/versions/keyframe-anchors';
@@ -115,7 +117,7 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
   else {
     validateStoryboard(input.storyboard, input.clipDurationSeconds, route.adapterFamily);
   }
-  const generationShots = isSingleShot
+  let generationShots = isSingleShot
     ? expandSingleShotStoryboard(input.storyboard[0], input.clipDurationSeconds, route.adapterFamily)
     : input.storyboard;
   const dossierIds = [...new Set([input.vehicleDossierId, ...input.vehicleDossierIds])];
@@ -156,12 +158,13 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
   try { validateStoryboardCast(input.storyboard, castAssetIds); } catch (cause) { throw new HttpError(422, cause instanceof Error ? cause.message : 'Casting invalide.'); }
   const castMode = castAssets.length > 0;
 
-  const curatedPlaces = input.placeIds.map(findCuratedLocation).filter((place) => place !== undefined);
-  const curatedIds = new Set<string>(curatedPlaces.map((place) => place.id));
-  const uploadedPlaceIds = input.placeIds.filter((id) => !curatedIds.has(id));
-  const locationsQuery = uploadedPlaceIds.length ? await authenticated.from('assets').select('id,path,title,kind,status,brand_id').in('id', uploadedPlaceIds).eq('kind', 'place').eq('status', 'validée').eq('brand_id', actor.brandId) : { data: [], error: null };
-  if (locationsQuery.error || (locationsQuery.data ?? []).length !== uploadedPlaceIds.length) throw new HttpError(422, 'Un lieu sélectionné n’est plus disponible.');
-  const placeAssets = [...curatedPlaces.map((place) => ({ id: place.id, path: place.path, title: place.title, kind: 'place' as const, status: 'validée' as const, brand_id: actor.brandId })), ...(locationsQuery.data ?? [])];
+  let placeAssets: SelectedPlace[];
+  try { placeAssets = await loadSelectedPlaces(authenticated, actor.brandId, input.placeIds); } catch (cause) {
+    throw cause instanceof PlaceSelectionError ? new HttpError(422, cause.message) : cause;
+  }
+  if (placeAssets.length !== new Set(input.placeIds).size) throw new HttpError(422, 'Un lieu sélectionné n’est plus disponible.');
+  const undescribed = undescribedPlacesIssue(placeAssets);
+  if (undescribed) throw new HttpError(422, undescribed);
   const requestedVehicleIds = new Set(input.vehiclePhotoIds);
   const selectedVehiclePhotos = input.vehiclePhotoIds.length
     ? vehiclePhotos.filter((photo) => requestedVehicleIds.has(photo.id))
@@ -174,7 +177,16 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
   }
   // 24/10 (responsable) : aucun plan 100 % IA ; chaque plan est rattaché à un lieu sélectionné.
   if (generationShots.some((shot) => !shot.locationPhotoId)) throw new HttpError(422, 'Chaque plan doit être rattaché à un lieu sélectionné. Relancez la préparation du storyboard.');
+  // 25/10: same coherence rules as the director (a photo view or a place may have been changed since the storyboard).
+  const photoViews = directorPhotoViews(vehiclePhotos);
+  const coherenceIssue = storyboardCoherenceIssue(generationShots, { photos: photoViews, places: Object.fromEntries(placeAssets.map((place) => [place.id, place.geometry])) });
+  if (coherenceIssue) {
+    console.warn('[storyboard-live] Storyboard incohérent refusé.', { issue: coherenceIssue.slice(0, 500) });
+    throw new HttpError(422, 'Ce storyboard ne correspond plus aux photos ou aux lieux choisis (une vue ou un lieu a peut-être été modifié). Relancez la préparation du storyboard.');
+  }
+  generationShots = withVehicleNose(generationShots, photoViews);
   const placeDescriptions: Record<string, string> = Object.fromEntries(placeAssets.map((place) => [place.id, placeDescription(place)]));
+  const placeViewpoints: Record<string, PlaceViewpoint> = Object.fromEntries(placeAssets.flatMap((place) => place.geometry ? [[place.id, place.geometry.viewpoint]] : []));
 
   const vehicleDescription = vehicleDescriptionForPrompt(dossier);
   // 3b: a shot in a place already filmed by an earlier shot waits for that shot's accepted keyframe (one reference slot kept for it).
@@ -218,7 +230,7 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
   const endFrameCount = endFrameShots.filter(Boolean).length;
   const shotLighting = generationShots.map((shot) => {
     const place = placeAssets.find((photo) => photo.id === shot.locationPhotoId);
-    return resolveShotLighting(String(brief.lighting ?? ''), place ? placeTimeOfDay({ title: place.title, path: place.path, category: findCuratedLocation(place.id)?.category }) : null);
+    return resolveShotLighting(String(brief.lighting ?? ''), place?.geometry?.timeOfDay ?? null);
   });
   // The keyframe prompt is the one actually sent first in keyframe mode: build it once, store it, display it and submit it.
   const keyframePrompts = keyframeMode ? generationShots.map((shot, index) => {
@@ -226,7 +238,7 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
     const hasLocationReference = Boolean(shot.locationPhotoId && placeAssets.some((photo) => photo.id === shot.locationPhotoId));
     const people = peopleForShot(peopleBrief, shot);
     const vehicleReferenceCount = Math.max(1, referenceIds.filter((id) => id !== shot.locationPhotoId && !people.castMembers.some((member) => member.id === id)).length);
-    return buildKeyframePrompt({ shot, vehicle: vehicleDescription, lighting: shotLighting[index], format: input.format, retryReason: null, vehicleReferenceCount, hasLocationReference, excludePeople: people.excludePeople, castTitles: people.castTitles, castDescription: people.castDescription, scene: brandScene, place: shot.locationPhotoId ? placeDescriptions[shot.locationPhotoId] : undefined, hasAnchorReference: Boolean(anchorsByShot[index + 1]) });
+    return buildKeyframePrompt({ shot, vehicle: vehicleDescription, lighting: shotLighting[index], format: input.format, retryReason: null, vehicleReferenceCount, hasLocationReference, excludePeople: people.excludePeople, castTitles: people.castTitles, castDescription: people.castDescription, scene: brandScene, place: shot.locationPhotoId ? placeDescriptions[shot.locationPhotoId] : undefined, placeViewpoint: shot.locationPhotoId ? placeViewpoints[shot.locationPhotoId] : undefined, hasAnchorReference: Boolean(anchorsByShot[index + 1]) });
   }) : [];
   const displayPrompts = keyframeMode ? keyframePrompts : prompts;
   const generatedSeconds = generationShots.reduce((sum, shot) => sum + shot.durationSeconds, 0);
@@ -264,7 +276,7 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
     department: actor.department, status: 'generating',
   }).select('id').single();
   if (videoError || !video) throw new HttpError(500, 'Impossible de créer la vidéo. Réessayez.');
-  const storedBrief = { ...brief, storyboard: generationShots, approvedStoryboard: input.storyboard, generationTier: input.storyMode, overlayLogo: input.overlayLogo, audioAssetId: input.audioAssetId ?? null, multiClipMode: !isSingleShot, singleStoryboardMode: isSingleShot, storyMode: input.storyMode, clipDurationSeconds: input.clipDurationSeconds, finalDurationSeconds: finalVideoSeconds(input.clipDurationSeconds), purpose: input.purpose, vehicleDossierId: input.vehicleDossierId, vehiclePhotoIds: selectedVehiclePhotos.map((photo) => photo.id), keyframeReferencesByShot, placeIds: input.placeIds,  castAssets, castDescription, ...(brandScene ? { brandScene } : {}), placeDescriptions, keyframeAnchors: anchorsByShot, renderSettings: render, endFrameMode: endFrameCount > 0, promptRules: 'v3.2', ...(pricingWarning ? { pricingWarning } : {}), ...(premiumQualityMode ? { videoQualityMode: true } : {}), costPlanUsd: { ...nominalCost, capUsd: env.VIDEO_COST_CAP_USD ?? null }, shotLighting, processingMetrics: { requestedAt: new Date().toISOString() }, shotProcessingMetrics: {}, ...(input.comparisonCampaignId ? { comparisonCampaignId: input.comparisonCampaignId } : {}) };
+  const storedBrief = { ...brief, storyboard: generationShots, approvedStoryboard: input.storyboard, generationTier: input.storyMode, overlayLogo: input.overlayLogo, audioAssetId: input.audioAssetId ?? null, multiClipMode: !isSingleShot, singleStoryboardMode: isSingleShot, storyMode: input.storyMode, clipDurationSeconds: input.clipDurationSeconds, finalDurationSeconds: finalVideoSeconds(input.clipDurationSeconds), purpose: input.purpose, vehicleDossierId: input.vehicleDossierId, vehiclePhotoIds: selectedVehiclePhotos.map((photo) => photo.id), keyframeReferencesByShot, placeIds: input.placeIds,  castAssets, castDescription, ...(brandScene ? { brandScene } : {}), placeDescriptions, placeViewpoints, keyframeAnchors: anchorsByShot, renderSettings: render, endFrameMode: endFrameCount > 0, promptRules: 'v3.2', ...(pricingWarning ? { pricingWarning } : {}), ...(premiumQualityMode ? { videoQualityMode: true } : {}), costPlanUsd: { ...nominalCost, capUsd: env.VIDEO_COST_CAP_USD ?? null }, shotLighting, processingMetrics: { requestedAt: new Date().toISOString() }, shotProcessingMetrics: {}, ...(input.comparisonCampaignId ? { comparisonCampaignId: input.comparisonCampaignId } : {}) };
   const { data: version, error: versionError } = await admin.from('video_versions').insert({
     video_id: video.id, number: 1, brief_json: storedBrief, generated_prompt: displayPrompts.join('\n\n--- Plan suivant ---\n\n'),
     ai_model_id: videoModel.id, fal_credential_id: falCredential.id, status: 'queued', generation_seconds: finalVideoSeconds(input.clipDurationSeconds),
@@ -694,7 +706,7 @@ async function refreshKeyframes(input: {
         ? { urls: withAnchorReference(referenceUrls, anchorUrl, Boolean(draft.locationPhotoId)), hasAnchor: true }
         : { urls: referenceUrls, hasAnchor: false };
     };
-    const keyframePromptInput = { shot: draft, vehicle: String(brief.vehicle_description ?? 'Véhicule fidèle à la photo validée'), lighting: lightingForShot(brief, shotNumber), format: String(brief.format ?? '16:9'), vehicleReferenceCount, hasLocationReference: Boolean(draft.locationPhotoId), excludePeople: people.excludePeople, castTitles: people.castTitles, castDescription: people.castDescription, scene: storedBrandScene(brief), place: shotPlace(brief, draft) };
+    const keyframePromptInput = { shot: draft, vehicle: String(brief.vehicle_description ?? 'Véhicule fidèle à la photo validée'), lighting: lightingForShot(brief, shotNumber), format: String(brief.format ?? '16:9'), vehicleReferenceCount, hasLocationReference: Boolean(draft.locationPhotoId), excludePeople: people.excludePeople, castTitles: people.castTitles, castDescription: people.castDescription, scene: storedBrandScene(brief), place: shotPlace(brief, draft), placeViewpoint: shotPlaceViewpoint(brief, draft) };
     if (shot.keyframe_status === 'queued' && !shot.keyframe_request_id) {
       if (!anchorNumber) return;
       const action = anchoredKeyframeAction(anchorShot ? String(anchorShot.keyframe_status) : null, shots.some((entry) => entry.keyframe_status === 'failed'));
@@ -1355,7 +1367,6 @@ async function readBoundedVideo(response: Response, maxBytes: number): Promise<B
   return Buffer.concat(chunks, total);
 }
 
-/** Per-shot lighting stored at creation; versions created before this field fall back to the brief lighting. */
 /** Description of the shot's place, frozen in brief_json at creation (undefined for versions made before). */
 function shotPlace(brief: Record<string, unknown>, shot: StoryboardShot): string | undefined {
   const descriptions = brief.placeDescriptions && typeof brief.placeDescriptions === 'object' ? brief.placeDescriptions as Record<string, unknown> : {};
@@ -1363,6 +1374,14 @@ function shotPlace(brief: Record<string, unknown>, shot: StoryboardShot): string
   return typeof description === 'string' && description ? description : undefined;
 }
 
+/** Viewpoint of the shot's place photo, frozen in brief_json at creation (undefined for versions made before 25/10). */
+function shotPlaceViewpoint(brief: Record<string, unknown>, shot: StoryboardShot): PlaceViewpoint | undefined {
+  const viewpoints = brief.placeViewpoints && typeof brief.placeViewpoints === 'object' ? brief.placeViewpoints as Record<string, unknown> : {};
+  const viewpoint = shot.locationPhotoId ? viewpoints[shot.locationPhotoId] : undefined;
+  return viewpoint === 'ground' || viewpoint === 'elevated' || viewpoint === 'distant' || viewpoint === 'interior' ? viewpoint : undefined;
+}
+
+/** Per-shot lighting stored at creation; versions created before this field fall back to the brief lighting. */
 function lightingForShot(brief: Record<string, unknown>, shotNumber: number): string {
   const list = Array.isArray(brief.shotLighting) ? brief.shotLighting as unknown[] : null;
   const value = list?.[shotNumber - 1];
