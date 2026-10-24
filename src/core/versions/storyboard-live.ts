@@ -309,10 +309,13 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
     provider_endpoint: keyframeMode ? animationEndpoint : route.endpoint,
     price_usd_per_second: render.videoPriceUsdPerSecond, estimated_cost_usd: shot.durationSeconds * render.videoPriceUsdPerSecond * (premiumQualityMode ? 2 : 1),
     video_quality_status: premiumQualityMode ? 'queued' : 'skipped', animation_submit_state: 'queued',
-    ...(endFrameShots[index] ? { end_keyframe_status: 'queued' } : {}),
+    // Always written: in a multi-row insert, a key missing from one row is sent as NULL (not the column default),
+    // which broke NOT NULL end_keyframe_status as soon as only some shots had an end frame (24/10).
+    end_keyframe_status: endFrameShots[index] ? 'queued' : 'skipped',
   }));
   const { error: shotsInsertError } = await admin.from('video_shots').insert(shotRows);
   if (shotsInsertError) {
+    console.error('video_shots_insert_failed', JSON.stringify({ versionId: version.id, code: shotsInsertError.code, message: shotsInsertError.message }));
     await Promise.all([
       settleUsageCost(admin, { entryId: ledgerId, outcome: 'released', actualCostUsd: 0, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA }),
       admin.from('video_versions').update({ status: 'failed', error_message: 'Impossible d’enregistrer les plans.' }).eq('id', version.id),
