@@ -6,6 +6,7 @@ import type { ReferenceVideoProvider } from './fal-reference-video';
 import { MODEL_ENDPOINTS } from './model-routing';
 import { CALM_DRIVING, fitPrompt, GROUND_CONTACT, HEADING_ALIGNED, PEOPLE_IN_MOVING_CAR, IMAGE_PROMPT_MAX_CHARS, KEEP_IDENTITY, NO_BODYWORK_CONTACT, NO_TEXT_IMAGE, NO_TEXT_VIDEO, placeRule, PULL_AWAY_DRIVING, steeringRule, STOP_DRIVING, trafficRule, TURN_DRIVING, VIDEO_PROMPT_MAX_CHARS, WHEEL_PHYSICS, type PromptBlock } from '@/core/prompts/rules';
 import type { BrandScene } from '@/core/brand-scene';
+import type { KeyframeResolution } from '@/core/versions/render-settings';
 import { getMotion, type DrivingRule, type MotionId } from '@/core/motions/catalog';
 export { GROUND_CONTACT, NO_BODYWORK_CONTACT, WHEEL_PHYSICS } from '@/core/prompts/rules';
 
@@ -97,6 +98,19 @@ function peopleCheck(input: { excludePeople?: boolean; castTitles?: string[] }, 
   return inside;
 }
 
+/** Premium (étape 4): defects that are minor elsewhere block a Premium shot and trigger its automatic retry. */
+const PREMIUM_STRICT_DEFECTS = 'a vehicle cut by the frame edge; a badge or emblem with garbled letters; a framing that contradicts the shot';
+
+/** 24/10: « wide shot, car small in frame » came back with the car filling the frame. Checked on the keyframe, where a retry is cheap. */
+function framingCheck(input: { framing?: string; strict?: boolean }): string {
+  const framing = (input.framing ?? '').replace(/[<>{}`]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 100);
+  const checks = [
+    ...(framing ? [`The framing must match the shot (${framing}); a car clearly larger or smaller in frame than asked is a defect.`] : []),
+    ...(input.strict ? [`Premium: ${PREMIUM_STRICT_DEFECTS} are defects.`] : []),
+  ];
+  return checks.length ? ` ${checks.join(' ')}` : '';
+}
+
 /** Road rules checked by the judges (24/10: car broadside across the lanes, wrong side of the road, wheel switching sides). */
 function roadCheck(input: { moving?: boolean; scene?: DrivingScene; excludePeople?: boolean }, subject: string): string {
   const checks = [
@@ -107,8 +121,8 @@ function roadCheck(input: { moving?: boolean; scene?: DrivingScene; excludePeopl
   return checks.length ? ` ${checks.join(' ')}` : '';
 }
 
-export function buildKeyframeQualityPrompt(input: { vehicleReferenceCount: number; hasLocationReference: boolean; excludePeople?: boolean; castTitles?: string[]; moving?: boolean; scene?: DrivingScene }) {
-  return `Compare references in this order: image 1 = candidate keyframe; ${referenceRoles(2, input)}. Verify that the candidate preserves the same exact vehicle identity, color and visible details, that tyres touch the ground (no floating vehicle), and that it is one single full-frame image rather than a collage, diptych, split-screen, or multi-panel composition.${roadCheck(input, 'the candidate')} ${input.hasLocationReference ? `${SAME_PLACE_CHECK} ` : ''}${NO_READABLE_TEXT_CHECK}${peopleCheck(input, 'the candidate')} Check only visible details; do not infer defects that cannot be seen. Approve only when no manifest mismatch is visible. Return compact JSON only.`;
+export function buildKeyframeQualityPrompt(input: { vehicleReferenceCount: number; hasLocationReference: boolean; excludePeople?: boolean; castTitles?: string[]; moving?: boolean; scene?: DrivingScene; framing?: string; strict?: boolean }) {
+  return `Compare references in this order: image 1 = candidate keyframe; ${referenceRoles(2, input)}. Verify that the candidate preserves the same exact vehicle identity, color and visible details, that tyres touch the ground (no floating vehicle), and that it is one single full-frame image rather than a collage, diptych, split-screen, or multi-panel composition.${roadCheck(input, 'the candidate')}${framingCheck(input)} ${input.hasLocationReference ? `${SAME_PLACE_CHECK} ` : ''}${NO_READABLE_TEXT_CHECK}${peopleCheck(input, 'the candidate')} Check only visible details; do not infer defects that cannot be seen. Approve only when no manifest mismatch is visible. Return compact JSON only.`;
 }
 
 const VIDEO_MOTION_CHECK: Record<KeyframeShotType, string> = {
@@ -128,14 +142,14 @@ export function videoQualityTimestamps(durationS: number) {
   return { frames: VIDEO_QUALITY_FRAME_RATIOS.map(at), crops: VIDEO_QUALITY_CROP_RATIOS.map(at) };
 }
 
-export function buildVideoQualityPrompt(input: { vehicleReferenceCount: number; hasLocationReference: boolean; excludePeople: boolean; castTitles?: string[]; shotType?: KeyframeShotType; motion?: MotionId; durationS?: number; moving?: boolean; scene?: DrivingScene }) {
+export function buildVideoQualityPrompt(input: { vehicleReferenceCount: number; hasLocationReference: boolean; excludePeople: boolean; castTitles?: string[]; shotType?: KeyframeShotType; motion?: MotionId; durationS?: number; moving?: boolean; scene?: DrivingScene; strict?: boolean }) {
   const preset = getMotion(input.motion);
   // A catalogue motion brings its own check; the asked motion is then part of the blocking list.
   const motion = preset ? (preset.judge ? ` Asked motion: ${preset.judge}` : '') : VIDEO_MOTION_CHECK[input.shotType ?? 'rolling'];
   const { frames, crops } = videoQualityTimestamps(input.durationS ?? 5);
   const frameCount = frames.length;
   const cropStart = frameCount + 1;
-  return `Images 1 to ${frameCount} are frames sampled in order from one generated video clip, at t=${frames.join('s, ')}s. Images ${cropStart} and ${cropStart + 1} are enlarged crops of the lower part of the frame (wheel and road zone) at t=${crops.join('s and ')}s. Reference images: ${referenceRoles(cropStart + 2, input)}. Check every frame for the same vehicle identity, paint color, visible details and location. ${input.hasLocationReference ? `${SAME_PLACE_CHECK} Whatever the camera reveals must belong to that same place: streets, buildings or road layout from another city or country are blocking. ` : ''}Tyre-road contact: tyres must stay in contact with the road with a contact shadow, never floating or sinking, and must keep turning consistently with the travel; inspect the crops closely.${motion}${roadCheck(input, 'every frame')}${peopleCheck(input, 'any frame')} ${NO_READABLE_TEXT_CHECK} Grade each defect: start each issue with its time and severity, for example "t=2.5s blocking: tyre floats above the road" or "t=4.5s minor: slight reflection flicker". Set "approved" to false only for blocking defects (identity change, including a badge, grille, light or wheel whose design or colour differs from the references; collage or split-screen frame; treadmill effect; floating, sliding, drifting or skidding vehicle;${preset?.judge ? ' a vehicle that does not perform the asked motion;' : ''} deformed wheels; broken road geometry; a person outside a moving car; a person who does not match the casting${input.scene ? '; a car in the oncoming lane; a steering wheel or driver on the wrong side; a driver turned away from the road while driving' : ''}); minor defects stay listed with "approved": true. Do not invent defects that are not visible. Return compact JSON only.`;
+  return `Images 1 to ${frameCount} are frames sampled in order from one generated video clip, at t=${frames.join('s, ')}s. Images ${cropStart} and ${cropStart + 1} are enlarged crops of the lower part of the frame (wheel and road zone) at t=${crops.join('s and ')}s. Reference images: ${referenceRoles(cropStart + 2, input)}. Check every frame for the same vehicle identity, paint color, visible details and location. ${input.hasLocationReference ? `${SAME_PLACE_CHECK} Whatever the camera reveals must belong to that same place: streets, buildings or road layout from another city or country are blocking. ` : ''}Tyre-road contact: tyres must stay in contact with the road with a contact shadow, never floating or sinking, and must keep turning consistently with the travel; inspect the crops closely.${motion}${roadCheck(input, 'every frame')}${peopleCheck(input, 'any frame')} ${NO_READABLE_TEXT_CHECK} Grade each defect: start each issue with its time and severity, for example "t=2.5s blocking: tyre floats above the road" or "t=4.5s minor: slight reflection flicker". Set "approved" to false only for blocking defects (identity change, including a badge, grille, light or wheel whose design or colour differs from the references, or a paint colour that drifts from the references, such as silver-grey turning beige under warm light;${input.strict ? ` ${PREMIUM_STRICT_DEFECTS};` : ''} collage or split-screen frame; treadmill effect; floating, sliding, drifting or skidding vehicle;${preset?.judge ? ' a vehicle that does not perform the asked motion;' : ''} deformed wheels; broken road geometry; a person outside a moving car; a person who does not match the casting${input.scene ? '; a car in the oncoming lane; a steering wheel or driver on the wrong side; a driver turned away from the road while driving' : ''}); minor defects stay listed with "approved": true. Do not invent defects that are not visible. Return compact JSON only.`;
 }
 
 const qualitySchema = z.object({
@@ -494,11 +508,11 @@ function fal(apiKey: string) {
   return createFalClient({ credentials: apiKey });
 }
 
-export async function submitKeyframe(input: { prompt: string; imageUrls: string[]; aspectRatio: string }, apiKey: string) {
+export async function submitKeyframe(input: { prompt: string; imageUrls: string[]; aspectRatio: string; resolution?: KeyframeResolution }, apiKey: string) {
   if (!input.imageUrls.length || input.imageUrls.length > 14) throw new Error('La création d’une image-clé exige entre 1 et 14 références.');
   const result = await fal(apiKey).queue.submit(KEYFRAME_IMAGE_ENDPOINT, { input: {
     prompt: input.prompt, image_urls: input.imageUrls, aspect_ratio: input.aspectRatio as '16:9' | '9:16' | '1:1' | '4:5',
-    output_format: 'png', resolution: '1K', num_images: 1, limit_generations: true,
+    output_format: 'png', resolution: input.resolution ?? '1K', num_images: 1, limit_generations: true,
   } });
   return { requestId: result.request_id };
 }
@@ -567,7 +581,7 @@ function createKeyframeVideoProvider(family: 'wan' | 'kling' | 'seedance'): Refe
         : family === 'kling'
           // Kling O3 Pro image-to-video documents `image_url` (not `start_image_url`), as in fal-kling.ts.
           ? { prompt: input.prompt, image_url: imageUrl, ...endFrame, duration: String(input.durationS), generate_audio: false, enable_safety_checker: true }
-          : { prompt: input.prompt, image_url: imageUrl, ...endFrame, duration: String(input.durationS), resolution: '720p', aspect_ratio: 'auto', generate_audio: false };
+          : { prompt: input.prompt, image_url: imageUrl, ...endFrame, duration: String(input.durationS), resolution: input.resolution ?? '720p', aspect_ratio: 'auto', generate_audio: false };
       const result = await fal(apiKey ?? '').queue.submit(endpoint, { input: modelInput });
       return { requestId: result.request_id };
     },

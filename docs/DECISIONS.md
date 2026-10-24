@@ -1,5 +1,15 @@
 # Décisions
 
+## Qualité Premium et juges plus exigeants, étape 4 (2026-10-24)
+
+- **Constat** (demande du responsable : le Premium doit être « premium ») : Seedance 2.5 était appelé en 720p et toutes les images-clés en 1K, quel que soit le niveau ; le montage agrandissait ensuite en 1080p. Le Premium coûtait environ 4 fois plus cher pour la même définition.
+- **Images-clés Premium en 2K** : 0,12 USD au lieu de 0,08 (fal : « 2K … 1.5 times the standard rate », 24/10). C’est la base de chaque plan, donc le gain le plus net pour le coût le plus faible (+0,16 USD par vidéo Premium de 4 plans, +0,32 USD avec les reprises).
+- **Clips Premium en 1080p, prêts mais désactivés** : `PREMIUM_VIDEO_RESOLUTION=1080p` dans Vercel. Prix fal lu le 24/10 : 1,164 USD/s au lieu de 0,473, soit environ +13,80 USD par vidéo Premium de 20 s (environ 23,30 USD au lieu de 9,50 de génération). La page fal se contredit sur la disponibilité du 1080p (`TODO(verify-fal)`) : à confirmer par un essai payant avant activation, après accord du responsable sur le surcoût.
+- **Coûts justes dans le journal** : résolution et coût unitaire sont figés dans `brief_json.renderSettings` au lancement (`src/core/versions/render-settings.ts`) et relus pour chaque réservation et chaque facturation (images-clés, reprises, images de fin, clips, clôture). Les versions créées avant gardent 1K, 720p et le prix du modèle.
+- **Teinte de carrosserie** (essais : gris argent devenu beige sous la lumière dorée) : consigne « la lumière chaude ne change jamais la couleur de la peinture » dans chaque prompt d’animation, et dérive de teinte bloquante pour le juge vidéo, à tous les niveaux. Elle déclenche la reprise automatique existante.
+- **Cadrage** (essais : « plan large, voiture petite » rendu avec la voiture plein cadre) : le juge des images-clés vérifie le cadrage demandé. Une reprise d’image coûte 0,08 USD, contre un clip entier si le défaut passe à l’animation.
+- **Premium plus strict** (décision du responsable : relancer plutôt que livrer avec un avertissement) : en Premium, un véhicule coupé par le bord du cadre, un badge aux lettres déformées et un cadrage contredit deviennent bloquants, et déclenchent donc la reprise automatique. Le code relançait déjà une fois tout plan bloquant à tous les niveaux. Une **seconde** reprise demanderait de revoir les réservations, construites pour deux tentatives : ce n’est pas fait, à décider (environ +2,40 USD par plan Premium relancé en 720p).
+
 ## Lieu et décor, étape 3a (2026-10-24)
 
 - **Demandes du responsable et constats des essais** : « Côte d’Ivoire » était écrit en dur dans la consigne du réalisateur ; un plan pouvait partir sans lieu (décor 100 % IA) ; le moteur vidéo inventait des rues « européennes » dès que la caméra bougeait ; panneaux et bannières apparaissaient hors du lieu.

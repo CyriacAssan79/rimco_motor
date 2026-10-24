@@ -8,6 +8,8 @@ const schema = z.object({
   // Optional end frame for rolling shots (A/B test). Only "true"/"1"/"on"/"oui" enable it; anything else = off.
   KEYFRAME_END_FRAME_ROLLING: z.preprocess((value) => typeof value === 'string' && ['true', '1', 'on', 'oui', 'yes'].includes(value.trim().toLowerCase()), z.boolean()).default(false),
   // Quality gate (patch v3.1): "warn" (default, temporary) keeps a shot still rejected after its retry, with warnings; "block" fails it.
+  // Premium clip resolution (étape 4): "1080p" costs ~1,164 USD/s instead of 0,473 (fal, 24/10). Anything else = 720p.
+  PREMIUM_VIDEO_RESOLUTION: z.preprocess((value) => typeof value === 'string' && value.trim().toLowerCase() === '1080p' ? '1080p' : '720p', z.enum(['720p', '1080p'])),
   QUALITY_GATE_MODE: z.preprocess((value) => typeof value === 'string' && value.trim().toLowerCase() === 'block' ? 'block' : 'warn', z.enum(['warn', 'block'])),
   NEXT_PUBLIC_SUPABASE_URL: z.string().url().optional(),
   NEXT_PUBLIC_SUPABASE_ANON_KEY: z.string().optional(), NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: z.string().optional(),

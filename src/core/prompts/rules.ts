@@ -12,7 +12,7 @@ export const IMAGE_PROMPT_MAX_CHARS = 2_200;
 // ——— Shared rules (English: the image and video models follow English best) ———
 
 /** Vehicle identity kept by the animation (layer 1, locked). */
-export const KEEP_IDENTITY = 'Keep the exact car (shape, paint, wheels, badges), place and light.';
+export const KEEP_IDENTITY = 'Keep the exact car (shape, paint, wheels, badges), place and light; warm light never changes the paint colour.';
 
 /** Tyre-road contact: the defect the client sees first. */
 export const GROUND_CONTACT = 'Every visible tyre touches the road with a contact shadow; the car never floats.';

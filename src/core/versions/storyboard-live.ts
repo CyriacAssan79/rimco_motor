@@ -3,7 +3,7 @@ import { HttpError } from '@/core/auth/guards';
 import { buildBrief } from '@/core/brief';
 import { getStoryboardModeRoute } from '@/core/providers/storyboard-routing';
 import { wanReferenceVideoProvider, klingReferenceVideoProvider, seedanceReferenceVideoProvider, safeProviderError, type ReferenceVideoProvider } from '@/core/providers/fal-reference-video';
-import { ANIMATION_PROMPT_MAX_LENGTH, buildEndKeyframePrompt, buildEndKeyframeQualityPrompt, buildKeyframeAnimationPrompt, buildKeyframePrompt, buildKeyframeQualityPrompt, buildVideoQualityPrompt, canAnimateKeyframes, isMoving, needsEndKeyframe, resolveShotType, KEYFRAME_IMAGE_COST_USD, KEYFRAME_MAX_REFERENCES, KEYFRAME_QUALITY_RESERVE_USD, KEYFRAME_VIDEO_ENDPOINTS, KEYFRAME_IMAGE_ENDPOINT, KEYFRAME_VISION_ENDPOINT, keyframeVideoProviders, readKeyframe, readKeyframeQuality, selectKeyframeReferenceIds, shouldGenerateKeyframes, submitKeyframe, submitKeyframeQuality } from '@/core/providers/fal-keyframes';
+import { ANIMATION_PROMPT_MAX_LENGTH, buildEndKeyframePrompt, buildEndKeyframeQualityPrompt, buildKeyframeAnimationPrompt, buildKeyframePrompt, buildKeyframeQualityPrompt, buildVideoQualityPrompt, canAnimateKeyframes, isMoving, needsEndKeyframe, resolveShotType, KEYFRAME_MAX_REFERENCES, KEYFRAME_QUALITY_RESERVE_USD, KEYFRAME_VIDEO_ENDPOINTS, KEYFRAME_IMAGE_ENDPOINT, KEYFRAME_VISION_ENDPOINT, keyframeVideoProviders, readKeyframe, readKeyframeQuality, selectKeyframeReferenceIds, shouldGenerateKeyframes, submitKeyframe, submitKeyframeQuality } from '@/core/providers/fal-keyframes';
 import { logFalStatusFailure } from '@/core/providers/fal-observability';
 import { klingVideoProvider, KLING_ENDPOINT } from '@/core/providers/fal-kling';
 import { createStorageAdminClient } from '@/core/storage/supabase';
@@ -28,6 +28,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { getActiveFalCredential, getFalCredentialById, pruneRetiredFalCredentials } from '@/core/providers/fal-credential-vault';
 import { BRAND_SCENE_COLUMNS, loadBrandScene, storedBrandScene } from '@/core/brand-scene';
+import { renderSettingsFor, storedRenderSettings } from '@/core/versions/render-settings';
 import { anchoredKeyframeAction, keyframeAnchors, storedKeyframeAnchor, withAnchorReference } from '@/core/versions/keyframe-anchors';
 import { falErrorStatusCode, isFalInputRejection, isFalPollDue, nextPollDelaySeconds, planFalPollFailure } from '@/core/providers/fal-polling';
 
@@ -136,6 +137,8 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
   if (keyframeMode && (animationModelError || !animationModel || animationModel.adapter_family !== route.adapterFamily || animationModel.tier !== input.storyMode)) throw new HttpError(503, `Le modèle image-clé ${route.label} n’est pas activé dans la configuration fal.`);
   const videoModel = keyframeMode ? animationModel : model;
   if (!videoModel) throw new HttpError(503, `Le modèle vidéo ${route.label} n’est pas configuré.`);
+  // Étape 4: Premium keyframes in 2K and, when enabled, 1080p clips; frozen in brief_json for every later cost entry.
+  const render = renderSettingsFor({ tier: input.storyMode, adapterFamily: route.adapterFamily, modelPriceUsdPerSecond: Number(videoModel.price_usd_per_second), premiumVideoResolution: env.PREMIUM_VIDEO_RESOLUTION });
   if (!videoModel.allowed_formats?.includes(input.format)) throw new HttpError(422, `${route.label} ne prend pas en charge le format ${input.format}.`);
   if (generationShots.some((shot) => !videoModel.allowed_durations?.includes(shot.durationSeconds))) throw new HttpError(422, `La durée d’un clip n’est pas prise en charge par ${route.label}. Réduisez le nombre de plans ou choisissez une autre durée totale.`);
   if (input.audioAssetId) {
@@ -241,14 +244,14 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
     : { data: [] as Array<{ cost_usd: number }> };
   const nominalCost = nominalVideoCostUsd({
     generatedSeconds,
-    videoPriceUsdPerSecond: Number(videoModel.price_usd_per_second),
+    videoPriceUsdPerSecond: render.videoPriceUsdPerSecond,
     shotCount: generationShots.length,
-    keyframeImageCostUsd: keyframeMode ? KEYFRAME_IMAGE_COST_USD : 0,
+    keyframeImageCostUsd: keyframeMode ? render.keyframeImageCostUsd : 0,
     keyframeQualityCostUsd: keyframeMode ? KEYFRAME_QUALITY_RESERVE_USD : 0,
     videoQualityCostUsd: premiumQualityMode ? KEYFRAME_QUALITY_RESERVE_USD : 0,
     storyboardCostUsd: (plannedStoryboardCosts ?? []).reduce((sum, row) => sum + Number(row.cost_usd ?? 0), 0),
     endFrameCount,
-    endFrameCostUsd: KEYFRAME_IMAGE_COST_USD + KEYFRAME_QUALITY_RESERVE_USD,
+    endFrameCostUsd: render.keyframeImageCostUsd + KEYFRAME_QUALITY_RESERVE_USD,
   });
   const capCheck = env.VIDEO_COST_CAP_USD === undefined ? { ok: true as const } : checkVideoCostCap(nominalCost, env.VIDEO_COST_CAP_USD);
   if (!capCheck.ok) throw new HttpError(422, capCheck.message);
@@ -260,7 +263,7 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
     department: actor.department, status: 'generating',
   }).select('id').single();
   if (videoError || !video) throw new HttpError(500, 'Impossible de créer la vidéo. Réessayez.');
-  const storedBrief = { ...brief, storyboard: generationShots, approvedStoryboard: input.storyboard, generationTier: input.storyMode, overlayLogo: input.overlayLogo, audioAssetId: input.audioAssetId ?? null, multiClipMode: !isSingleShot, singleStoryboardMode: isSingleShot, storyMode: input.storyMode, clipDurationSeconds: input.clipDurationSeconds, finalDurationSeconds: finalVideoSeconds(input.clipDurationSeconds), purpose: input.purpose, vehicleDossierId: input.vehicleDossierId, vehiclePhotoIds: selectedVehiclePhotos.map((photo) => photo.id), keyframeReferencesByShot, placeIds: input.placeIds,  castAssets, castDescription, ...(brandScene ? { brandScene } : {}), placeDescriptions, keyframeAnchors: anchorsByShot, endFrameMode: endFrameCount > 0, promptRules: 'v3.2', ...(pricingWarning ? { pricingWarning } : {}), ...(premiumQualityMode ? { videoQualityMode: true } : {}), costPlanUsd: { ...nominalCost, capUsd: env.VIDEO_COST_CAP_USD ?? null }, shotLighting, processingMetrics: { requestedAt: new Date().toISOString() }, shotProcessingMetrics: {}, ...(input.comparisonCampaignId ? { comparisonCampaignId: input.comparisonCampaignId } : {}) };
+  const storedBrief = { ...brief, storyboard: generationShots, approvedStoryboard: input.storyboard, generationTier: input.storyMode, overlayLogo: input.overlayLogo, audioAssetId: input.audioAssetId ?? null, multiClipMode: !isSingleShot, singleStoryboardMode: isSingleShot, storyMode: input.storyMode, clipDurationSeconds: input.clipDurationSeconds, finalDurationSeconds: finalVideoSeconds(input.clipDurationSeconds), purpose: input.purpose, vehicleDossierId: input.vehicleDossierId, vehiclePhotoIds: selectedVehiclePhotos.map((photo) => photo.id), keyframeReferencesByShot, placeIds: input.placeIds,  castAssets, castDescription, ...(brandScene ? { brandScene } : {}), placeDescriptions, keyframeAnchors: anchorsByShot, renderSettings: render, endFrameMode: endFrameCount > 0, promptRules: 'v3.2', ...(pricingWarning ? { pricingWarning } : {}), ...(premiumQualityMode ? { videoQualityMode: true } : {}), costPlanUsd: { ...nominalCost, capUsd: env.VIDEO_COST_CAP_USD ?? null }, shotLighting, processingMetrics: { requestedAt: new Date().toISOString() }, shotProcessingMetrics: {}, ...(input.comparisonCampaignId ? { comparisonCampaignId: input.comparisonCampaignId } : {}) };
   const { data: version, error: versionError } = await admin.from('video_versions').insert({
     video_id: video.id, number: 1, brief_json: storedBrief, generated_prompt: displayPrompts.join('\n\n--- Plan suivant ---\n\n'),
     ai_model_id: videoModel.id, fal_credential_id: falCredential.id, status: 'queued', generation_seconds: finalVideoSeconds(input.clipDurationSeconds),
@@ -292,7 +295,7 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
 
   const { data: ledgerId, error: reserveError } = await reserveGenerationCost(admin, {
     userId: actor.id, versionId: version.id, modelId: videoModel.id, seconds: maximumGeneratedSeconds, billableSeconds: input.clipDurationSeconds,
-    priceUsdPerSecond: Number(videoModel.price_usd_per_second), usdToEur: env.USD_TO_EUR_RATE,
+    priceUsdPerSecond: render.videoPriceUsdPerSecond, usdToEur: env.USD_TO_EUR_RATE,
     eurToFcfa: env.EUR_TO_FCFA, priceFcfa, department: actor.department,
   });
   if (reserveError || !ledgerId) {
@@ -304,7 +307,7 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
     version_id: version.id, shot_number: index + 1, duration_seconds: shot.durationSeconds,
     title: shot.title, generated_prompt: displayPrompts[index], usage_ledger_id: ledgerId, status: 'queued', keyframe_status: keyframeMode ? 'queued' : 'skipped',
     provider_endpoint: keyframeMode ? animationEndpoint : route.endpoint,
-    price_usd_per_second: Number(videoModel.price_usd_per_second), estimated_cost_usd: shot.durationSeconds * Number(videoModel.price_usd_per_second) * (premiumQualityMode ? 2 : 1),
+    price_usd_per_second: render.videoPriceUsdPerSecond, estimated_cost_usd: shot.durationSeconds * render.videoPriceUsdPerSecond * (premiumQualityMode ? 2 : 1),
     video_quality_status: premiumQualityMode ? 'queued' : 'skipped', animation_submit_state: 'queued',
     ...(endFrameShots[index] ? { end_keyframe_status: 'queued' } : {}),
   }));
@@ -329,7 +332,7 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
         for (let attempt = 0; attempt < 2; attempt += 1) {
           const imageReservation = await reserveKeyframeCost(admin, {
             userId: actor.id, versionId: version.id, department: actor.department,
-            estimatedCostUsd: KEYFRAME_IMAGE_COST_USD, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA,
+            estimatedCostUsd: render.keyframeImageCostUsd, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA,
           });
           if (imageReservation.error || !imageReservation.data) throw new HttpError(503, 'Impossible de réserver le coût de création des images-clés.');
           reservations.push(imageReservation.data); imageIds.push(imageReservation.data);
@@ -352,7 +355,7 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
         }
         const endFrameIds: string[] = [];
         if (endFrameShots[index]) {
-          for (const estimatedCostUsd of [KEYFRAME_IMAGE_COST_USD, KEYFRAME_QUALITY_RESERVE_USD]) {
+          for (const estimatedCostUsd of [render.keyframeImageCostUsd, KEYFRAME_QUALITY_RESERVE_USD]) {
             const endReservation = await reserveKeyframeCost(admin, {
               userId: actor.id, versionId: version.id, department: actor.department,
               estimatedCostUsd, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA,
@@ -400,7 +403,7 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
       const imageUrls = await Promise.all(references.map((reference) => resolveFalAssetUrl(reference.path, admin, falStorage, uploads)));
       const vehicleReferenceCount = references.filter((reference) => reference.id !== place?.id && !shotCast.includes(reference.id)).length;
       if (vehicleReferenceCount !== Math.max(1, referenceIds.filter((id) => id !== shot.locationPhotoId && !shotCast.includes(id)).length)) throw new HttpError(422, 'Les références image-clé ne correspondent pas au prompt préparé.');
-      return submitKeyframe({ prompt: keyframePrompts[index], imageUrls, aspectRatio: input.format }, falCredential.apiKey);
+      return submitKeyframe({ prompt: keyframePrompts[index], imageUrls, aspectRatio: input.format, resolution: render.keyframeResolution }, falCredential.apiKey);
     }));
     let submittedKeyframes = 0;
     for (let index = 0; index < keyframeSubmissions.length; index += 1) {
@@ -543,7 +546,7 @@ async function refreshEndKeyframe(input: {
   const startedAt = typeof shot.updated_at === 'string' ? new Date(shot.updated_at).getTime() : Date.now();
   if (status !== 'queued' && Date.now() - startedAt > END_KEYFRAME_TIMEOUT_MS) {
     // Conservative settlement: an image job that never answered is assumed billed.
-    await giveUp('Délai dépassé pour l’image de fin.', status === 'generating' ? [charge(imageLedgerId, KEYFRAME_IMAGE_COST_USD), release(qualityLedgerId)] : [charge(qualityLedgerId, KEYFRAME_QUALITY_RESERVE_USD)]);
+    await giveUp('Délai dépassé pour l’image de fin.', status === 'generating' ? [charge(imageLedgerId, storedRenderSettings(brief, 0).keyframeImageCostUsd), release(qualityLedgerId)] : [charge(qualityLedgerId, KEYFRAME_QUALITY_RESERVE_USD)]);
     return;
   }
   const startUrl = typeof shot.keyframe_path === 'string'
@@ -557,13 +560,13 @@ async function refreshEndKeyframe(input: {
   if (status === 'queued') {
     const prompt = buildEndKeyframePrompt({ shot: draft, durationS: Number(shot.duration_seconds), format: String(brief.format ?? '16:9'), excludePeople: people.excludePeople, castTitles: people.castTitles, castDescription: people.castDescription, scene: storedBrandScene(brief), place: shotPlace(brief, draft) });
     try {
-      const job = await submitKeyframe({ prompt, imageUrls: [startUrl, input.vehicleUrl], aspectRatio: String(brief.format ?? '16:9') }, apiKey);
+      const job = await submitKeyframe({ prompt, imageUrls: [startUrl, input.vehicleUrl], aspectRatio: String(brief.format ?? '16:9'), resolution: storedRenderSettings(brief, 0).keyframeResolution }, apiKey);
       const { error } = await update({ end_keyframe_status: 'generating', end_keyframe_request_id: job.requestId });
-      if (error) await giveUp(`Identifiant de l’image de fin non enregistré (request_id=${job.requestId}).`, [charge(imageLedgerId, KEYFRAME_IMAGE_COST_USD), release(qualityLedgerId)]);
+      if (error) await giveUp(`Identifiant de l’image de fin non enregistré (request_id=${job.requestId}).`, [charge(imageLedgerId, storedRenderSettings(brief, 0).keyframeImageCostUsd), release(qualityLedgerId)]);
     } catch (cause) {
       const statusCode = falErrorStatusCode(cause);
       const uncertain = statusCode === null || statusCode >= 500;
-      await giveUp(`fal n’a pas accepté l’image de fin : ${safeProviderError(cause, apiKey)}`, [uncertain ? charge(imageLedgerId, KEYFRAME_IMAGE_COST_USD) : release(imageLedgerId), release(qualityLedgerId)]);
+      await giveUp(`fal n’a pas accepté l’image de fin : ${safeProviderError(cause, apiKey)}`, [uncertain ? charge(imageLedgerId, storedRenderSettings(brief, 0).keyframeImageCostUsd) : release(imageLedgerId), release(qualityLedgerId)]);
     }
     return;
   }
@@ -573,7 +576,7 @@ async function refreshEndKeyframe(input: {
     try { state = await readKeyframe(shot.end_keyframe_request_id, apiKey); } catch { return; /* network blip: next poll, bounded by the timeout */ }
     if (state.status === 'generating') return;
     if (state.status === 'failed') { await giveUp('fal a déclaré l’image de fin en échec.', [release(imageLedgerId), release(qualityLedgerId)]); return; }
-    await charge(imageLedgerId, KEYFRAME_IMAGE_COST_USD);
+    await charge(imageLedgerId, storedRenderSettings(brief, 0).keyframeImageCostUsd);
     const parsed = acceptedFalUrl(state.imageUrl);
     if (!parsed) { await giveUp('URL de l’image de fin non autorisée.', [release(qualityLedgerId)]); return; }
     try {
@@ -709,7 +712,7 @@ async function refreshKeyframes(input: {
       const prompt = buildKeyframePrompt({ ...keyframePromptInput, retryReason: null, hasAnchorReference: submission.hasAnchor });
       let requestId: string;
       try {
-        requestId = (await submitKeyframe({ prompt, imageUrls: submission.urls, aspectRatio: String(brief.format ?? '16:9') }, apiKey)).requestId;
+        requestId = (await submitKeyframe({ prompt, imageUrls: submission.urls, aspectRatio: String(brief.format ?? '16:9'), resolution: storedRenderSettings(brief, 0).keyframeResolution }, apiKey)).requestId;
       } catch (cause) {
         const statusCode = falErrorStatusCode(cause);
         const uncertain = statusCode === null || statusCode >= 500;
@@ -747,7 +750,7 @@ async function refreshKeyframes(input: {
       if (state.status === 'generating') return;
       const parsed = acceptedFalUrl(state.imageUrl);
       if (!parsed) throw new HttpError(502, `L’URL de l’image-clé ${shotNumber} n’est pas autorisée.`);
-      await settleUsageCost(admin, { entryId: imageLedgerId, outcome: 'charged', actualCostUsd: KEYFRAME_IMAGE_COST_USD, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA, billable: false });
+      await settleUsageCost(admin, { entryId: imageLedgerId, outcome: 'charged', actualCostUsd: storedRenderSettings(brief, 0).keyframeImageCostUsd, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA, billable: false });
       const response = await fetch(parsed, { signal: AbortSignal.timeout(30000), redirect: 'error' });
       if (!response.ok) throw new HttpError(502, `Impossible de récupérer l’image-clé ${shotNumber}.`);
       const bytes = await readBoundedImage(response, MAX_IMAGE_BYTES);
@@ -769,7 +772,7 @@ async function refreshKeyframes(input: {
       }
       const signedUrl = await createSignedStorageObjectUrl((storagePath, expiresIn) => admin.storage.from(target.bucket).createSignedUrl(storagePath, expiresIn), target.bucket, target.path);
       if (!signedUrl) throw new HttpError(503, 'Impossible de créer le lien de contrôle temporaire.');
-      const visionPrompt = `${buildKeyframeQualityPrompt({ vehicleReferenceCount, hasLocationReference: Boolean(draft.locationPhotoId), excludePeople: people.excludePeople, castTitles: people.castTitles, moving: isMoving(draft), scene: storedBrandScene(brief) })} Plan: ${draft.title}; scène: ${draft.scene}; cadrage: ${draft.framing}; lieu: ${draft.location}.`;
+      const visionPrompt = `${buildKeyframeQualityPrompt({ vehicleReferenceCount, hasLocationReference: Boolean(draft.locationPhotoId), excludePeople: people.excludePeople, castTitles: people.castTitles, moving: isMoving(draft), scene: storedBrandScene(brief), framing: draft.framing, strict: brief.storyMode === 'premium' })} Plan: ${draft.title}; scène: ${draft.scene}; cadrage: ${draft.framing}; lieu: ${draft.location}.`;
       let qualityJob: { requestId: string };
       try {
         qualityJob = await submitKeyframeQuality({ prompt: visionPrompt, imageUrls: [signedUrl, ...referenceUrls] }, apiKey);
@@ -842,7 +845,7 @@ async function refreshKeyframes(input: {
       const prompt = buildKeyframePrompt({ ...keyframePromptInput, retryReason: [...quality.issues, ...(quality.readableText ? ['make every sign, billboard, poster and storefront blank, without readable letters'] : [])].join('; ') || quality.reason, hasAnchorReference: submission.hasAnchor });
       let retryRequestId: string | null = null;
       try {
-        const retryJob = await submitKeyframe({ prompt, imageUrls: submission.urls, aspectRatio: String(brief.format ?? '16:9') }, apiKey);
+        const retryJob = await submitKeyframe({ prompt, imageUrls: submission.urls, aspectRatio: String(brief.format ?? '16:9'), resolution: storedRenderSettings(brief, 0).keyframeResolution }, apiKey);
         retryRequestId = retryJob.requestId;
         const { error: updateError } = await admin.from('video_shots').update({ keyframe_status: 'generating', keyframe_request_id: retryJob.requestId, keyframe_endpoint: KEYFRAME_IMAGE_ENDPOINT, keyframe_quality_request_id: null, keyframe_quality_endpoint: null, keyframe_path: null, keyframe_quality: quality, keyframe_retry_count: 1, provider_poll_failure_count: 0, provider_next_poll_at: null, provider_last_poll_error: null, updated_at: now }).eq('version_id', version.id).eq('shot_number', shotNumber);
         if (updateError) throw new HttpError(503, 'Impossible d’enregistrer la reprise de l’image-clé.');
@@ -922,7 +925,7 @@ async function refreshKeyframes(input: {
       durationS: Number(shot.duration_seconds), mood: String(brief.mood ?? ''), lighting: lightingForShot(brief, Number(shot.shot_number)),
       excludePeople: people.excludePeople, castTitles: people.castTitles, castDescription: people.castDescription, hasEndFrame: Boolean(endImageUrl), maxLength: ANIMATION_PROMPT_MAX_LENGTH[adapterFamily], scene: storedBrandScene(brief), place: shotPlace(brief, draft),
     });
-    const job = await provider.submit({ prompt, referenceImageUrls: [signedUrl], ...(endImageUrl ? { endImageUrl } : {}), durationS: Number(shot.duration_seconds), aspectRatio: String(brief.format ?? '16:9'), endUserId: String(video.user_id) }, apiKey);
+    const job = await provider.submit({ prompt, referenceImageUrls: [signedUrl], ...(endImageUrl ? { endImageUrl } : {}), resolution: storedRenderSettings(brief, 0).videoResolution, durationS: Number(shot.duration_seconds), aspectRatio: String(brief.format ?? '16:9'), endUserId: String(video.user_id) }, apiKey);
     const animationPatch = { provider_request_id: job.requestId, provider_endpoint: provider.endpoint, animation_submit_state: 'submitted', status: 'generating', generated_prompt: prompt, provider_poll_failure_count: 0, provider_next_poll_at: null, provider_last_poll_error: null, provider_reconciliation_required: false, updated_at: now };
     const firstWrite = await admin.from('video_shots').update(animationPatch).eq('version_id', version.id).eq('shot_number', shot.shot_number);
     if (firstWrite.error) {
@@ -1061,7 +1064,7 @@ export async function refreshLiveStoryboard(versionId: string, actor: Actor) {
       });
       let retryJob: { requestId: string };
       try {
-        retryJob = await (statusProvider as ReferenceVideoProvider).submit({ prompt: retryPrompt, referenceImageUrls: [keyframeUrl], ...(retryEndImageUrl ? { endImageUrl: retryEndImageUrl } : {}), durationS: Number(shot.duration_seconds), aspectRatio: String(briefData.format ?? '16:9'), endUserId: String(video.user_id) }, falCredential.apiKey);
+        retryJob = await (statusProvider as ReferenceVideoProvider).submit({ prompt: retryPrompt, referenceImageUrls: [keyframeUrl], resolution: storedRenderSettings(briefData, 0).videoResolution, ...(retryEndImageUrl ? { endImageUrl: retryEndImageUrl } : {}), durationS: Number(shot.duration_seconds), aspectRatio: String(briefData.format ?? '16:9'), endUserId: String(video.user_id) }, falCredential.apiKey);
       } catch (cause) {
         const statusCode = falErrorStatusCode(cause);
         const uncertain = statusCode === null || statusCode >= 500;
@@ -1133,7 +1136,7 @@ export async function refreshLiveStoryboard(versionId: string, actor: Actor) {
       const assets = new Map((refAssets ?? []).map((asset) => [asset.id, asset]));
       const referencePaths = [...vehicleIds.map((id) => assets.get(id)?.path), ...clipPeople.castMembers.map((member) => member.path), ...(placeId ? [curatedPlace?.path ?? placeAsset?.path] : [])];
       const referenceUrls = await Promise.all(referencePaths.map((path) => path ? resolveFalAssetUrl(path, admin, falStorage, new Map()) : Promise.reject(new HttpError(422, 'Une référence qualité est introuvable.'))));
-      const visionPrompt = `${buildVideoQualityPrompt({ vehicleReferenceCount: vehicleIds.length, hasLocationReference: Boolean(placeId), excludePeople: clipPeople.excludePeople, castTitles: clipPeople.castTitles, shotType: resolveShotType(draft), motion: draft.motion, durationS: Number(shot.duration_seconds), moving: isMoving(draft), scene: storedBrandScene(briefData) })} Shot: ${draft.title}; scene: ${draft.scene}; framing: ${draft.framing}; location: ${draft.location}.`;
+      const visionPrompt = `${buildVideoQualityPrompt({ vehicleReferenceCount: vehicleIds.length, hasLocationReference: Boolean(placeId), excludePeople: clipPeople.excludePeople, castTitles: clipPeople.castTitles, shotType: resolveShotType(draft), motion: draft.motion, durationS: Number(shot.duration_seconds), moving: isMoving(draft), scene: storedBrandScene(briefData), strict: briefData.storyMode === 'premium' })} Shot: ${draft.title}; scene: ${draft.scene}; framing: ${draft.framing}; location: ${draft.location}.`;
       let qualityJob: { requestId: string };
       try {
         qualityJob = await submitKeyframeQuality({ prompt: visionPrompt, imageUrls: [...frameUrls, ...referenceUrls] }, falCredential.apiKey);
@@ -1143,17 +1146,17 @@ export async function refreshLiveStoryboard(versionId: string, actor: Actor) {
         const qualityLedgerIds = Array.isArray(shot.video_quality_ledger_ids) ? shot.video_quality_ledger_ids as string[] : [];
         if (!uncertain && qualityLedgerIds[0]) await settleUsageCost(admin, { entryId: qualityLedgerIds[0], outcome: 'released', actualCostUsd: 0, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA, billable: false });
         if (qualityLedgerIds[1]) await settleUsageCost(admin, { entryId: qualityLedgerIds[1], outcome: 'released', actualCostUsd: 0, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA, billable: false });
-        await admin.from('video_shots').update({ status: 'failed', raw_path: rawPath, video_quality_status: 'failed', provider_reconciliation_required: uncertain, provider_last_poll_error: safeProviderError(cause, falCredential.apiKey), actual_cost_usd: Number(shot.duration_seconds) * Number(model?.price_usd_per_second ?? 0) * (Number(shot.video_quality_retry_count ?? 0) + 1), error_message: uncertain ? 'fal n’a pas confirmé si le contrôle du clip a été accepté; le montage reste bloqué pour réconciliation.' : `fal a refusé le contrôle du clip (${statusCode}); le plan ne sera pas monté.`, updated_at: new Date().toISOString() }).eq('version_id', versionId).eq('shot_number', shotNumber).eq('status', 'generating');
+        await admin.from('video_shots').update({ status: 'failed', raw_path: rawPath, video_quality_status: 'failed', provider_reconciliation_required: uncertain, provider_last_poll_error: safeProviderError(cause, falCredential.apiKey), actual_cost_usd: Number(shot.duration_seconds) * storedRenderSettings(briefData, Number(model?.price_usd_per_second ?? 0)).videoPriceUsdPerSecond * (Number(shot.video_quality_retry_count ?? 0) + 1), error_message: uncertain ? 'fal n’a pas confirmé si le contrôle du clip a été accepté; le montage reste bloqué pour réconciliation.' : `fal a refusé le contrôle du clip (${statusCode}); le plan ne sera pas monté.`, updated_at: new Date().toISOString() }).eq('version_id', versionId).eq('shot_number', shotNumber).eq('status', 'generating');
         return;
       }
-      const updateQuality = await admin.from('video_shots').update({ status: 'postprocessing', raw_path: rawPath, video_quality_status: 'checking', video_quality_request_id: qualityJob.requestId, video_quality_endpoint: KEYFRAME_VISION_ENDPOINT, actual_cost_usd: Number(shot.duration_seconds) * Number(model?.price_usd_per_second ?? 0) * (Number(shot.video_quality_retry_count ?? 0) + 1), provider_poll_failure_count: 0, provider_next_poll_at: null, provider_last_poll_error: null, provider_reconciliation_required: false, error_message: null, updated_at: new Date().toISOString() }).eq('version_id', versionId).eq('shot_number', shotNumber).eq('status', 'generating');
+      const updateQuality = await admin.from('video_shots').update({ status: 'postprocessing', raw_path: rawPath, video_quality_status: 'checking', video_quality_request_id: qualityJob.requestId, video_quality_endpoint: KEYFRAME_VISION_ENDPOINT, actual_cost_usd: Number(shot.duration_seconds) * storedRenderSettings(briefData, Number(model?.price_usd_per_second ?? 0)).videoPriceUsdPerSecond * (Number(shot.video_quality_retry_count ?? 0) + 1), provider_poll_failure_count: 0, provider_next_poll_at: null, provider_last_poll_error: null, provider_reconciliation_required: false, error_message: null, updated_at: new Date().toISOString() }).eq('version_id', versionId).eq('shot_number', shotNumber).eq('status', 'generating');
       if (updateQuality.error) {
-        const patch = { status: 'postprocessing', raw_path: rawPath, video_quality_status: 'checking', video_quality_request_id: qualityJob.requestId, video_quality_endpoint: KEYFRAME_VISION_ENDPOINT, actual_cost_usd: Number(shot.duration_seconds) * Number(model?.price_usd_per_second ?? 0) * (Number(shot.video_quality_retry_count ?? 0) + 1), provider_poll_failure_count: 0, provider_next_poll_at: null, provider_last_poll_error: null, provider_reconciliation_required: false, error_message: null, updated_at: new Date().toISOString() };
+        const patch = { status: 'postprocessing', raw_path: rawPath, video_quality_status: 'checking', video_quality_request_id: qualityJob.requestId, video_quality_endpoint: KEYFRAME_VISION_ENDPOINT, actual_cost_usd: Number(shot.duration_seconds) * storedRenderSettings(briefData, Number(model?.price_usd_per_second ?? 0)).videoPriceUsdPerSecond * (Number(shot.video_quality_retry_count ?? 0) + 1), provider_poll_failure_count: 0, provider_next_poll_at: null, provider_last_poll_error: null, provider_reconciliation_required: false, error_message: null, updated_at: new Date().toISOString() };
         const recoveredWrite = await admin.from('video_shots').update(patch).eq('version_id', versionId).eq('shot_number', shotNumber).eq('status', 'generating');
         if (recoveredWrite.error) await admin.from('video_shots').update({ status: 'failed', video_quality_status: 'failed', raw_path: rawPath, provider_reconciliation_required: true, provider_last_poll_error: `request_id=${qualityJob.requestId}`, error_message: 'fal a accepté le contrôle du clip, mais son identifiant n’a pas pu être enregistré. Vérification manuelle nécessaire.', updated_at: new Date().toISOString() }).eq('version_id', versionId).eq('shot_number', shotNumber);
       }
     } else {
-      await admin.from('video_shots').update({ status: 'ready', raw_path: rawPath, actual_cost_usd: Number(shot.duration_seconds) * Number(model?.price_usd_per_second ?? 0), error_message: null, updated_at: new Date().toISOString() }).eq('version_id', versionId).eq('shot_number', shot.shot_number).eq('status', 'generating');
+      await admin.from('video_shots').update({ status: 'ready', raw_path: rawPath, actual_cost_usd: Number(shot.duration_seconds) * storedRenderSettings(briefData, Number(model?.price_usd_per_second ?? 0)).videoPriceUsdPerSecond, error_message: null, updated_at: new Date().toISOString() }).eq('version_id', versionId).eq('shot_number', shot.shot_number).eq('status', 'generating');
     }
     nextShotMetrics[String(shot.shot_number)] = firstObservedAt(nextShotMetrics[String(shot.shot_number)] ?? {}, 'rawStoredAt', new Date().toISOString());
   }));
@@ -1200,7 +1203,7 @@ export async function refreshLiveStoryboard(versionId: string, actor: Actor) {
 
   const { data: ledger, error: ledgerError } = await admin.from('usage_ledger').select('id,status').eq('version_id', versionId).eq('kind', 'generation').eq('ai_model_id', version.ai_model_id).maybeSingle();
   if (ledgerError) throw new HttpError(503, 'Impossible de clôturer le budget des plans.');
-  const priceUsdPerSecond = Number(model.price_usd_per_second);
+  const priceUsdPerSecond = storedRenderSettings(briefData, Number(model.price_usd_per_second)).videoPriceUsdPerSecond;
   if (ledger?.status === 'reserved') {
     metrics = firstObservedAt(metrics, 'costsSettlementStartedAt', new Date().toISOString());
     const { error: billingStartError } = await admin.from('video_versions').update({ brief_json: { ...mergedBrief, processingMetrics: metrics } }).eq('id', versionId);
