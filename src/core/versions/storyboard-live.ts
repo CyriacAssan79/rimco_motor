@@ -17,7 +17,7 @@ import { expandSingleShotStoryboard, validateStoryboardCast, vehicleDescriptionF
 import { assembleShotMontage, extractRepresentativeVideoFrames } from '@/core/postproduction/pipeline';
 import { MAX_MONTAGE_ATTEMPTS, montageFailureDecision } from '@/core/postproduction/montage-failure';
 import { peopleForShot, storedCast, withCastReferences, type StoredCastMember } from './casting';
-import { collectQualityWarnings, qualityDecision, storedQualityWarnings, warningIssues } from './quality-gate';
+import { collectQualityWarnings, qualityDecision, storedQualityWarnings, unreadableVerdictQuality, warningIssues } from './quality-gate';
 import type { CreateVersionInput } from './live';
 import { animationSubmitStateAfterFailure, canSubmitAnimation } from './animation-submit-state';
 import { reserveGenerationCost, reserveKeyframeCost, settleUsageCost } from '@/core/billing/ledger';
@@ -825,6 +825,12 @@ async function refreshKeyframes(input: {
         reason: state.error,
       }));
       if (state.costUsd !== null) await settleUsageCost(admin, { entryId: qualityLedgerId, outcome: 'charged', actualCostUsd: state.costUsd, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA, billable: false });
+      if (state.costUsd !== null && env.QUALITY_GATE_MODE === 'warn') {
+        // The judge answered (and was paid) but its verdict is unreadable: keep the keyframe, flagged for the validator.
+        if (attempt === 0) await Promise.all([imageLedgerIds[1], qualityLedgerIds[1]].map((entryId) => settleUsageCost(admin, { entryId, outcome: 'released', actualCostUsd: 0, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA, billable: false })));
+        await admin.from('video_shots').update({ keyframe_status: 'ready', keyframe_quality: unreadableVerdictQuality(), provider_poll_failure_count: 0, provider_next_poll_at: null, provider_last_poll_error: null, error_message: null, updated_at: now }).eq('version_id', version.id).eq('shot_number', shotNumber);
+        return;
+      }
       await admin.from('video_shots').update({ keyframe_status: 'failed', provider_reconciliation_required: true, provider_next_poll_at: null, provider_last_poll_error: state.error ?? 'réponse de contrôle invalide', error_message: `Le contrôle automatique a échoué. La réservation reste à réconcilier.${state.error ? ` Détail : ${safeProviderError(state.error, apiKey)}` : ''}`, updated_at: now }).eq('version_id', version.id).eq('shot_number', shotNumber);
       return;
     }
@@ -1033,6 +1039,13 @@ export async function refreshLiveStoryboard(versionId: string, actor: Actor) {
       const ledgerId = qualityLedgerIds[attempt];
       if (qualityState.status === 'failed' || !qualityState.quality) {
         if (qualityState.costUsd !== null && ledgerId) await settleQualityLedger(admin, ledgerId, qualityState.costUsd);
+        if (qualityState.error) console.error('video_quality_failed', JSON.stringify({ versionId, shotNumber, reason: qualityState.error }));
+        if (qualityState.costUsd !== null && env.QUALITY_GATE_MODE === 'warn') {
+          // 24/10: an approved clip was discarded because the judge's JSON was cut. Keep it, flagged for the validator.
+          if (attempt === 0 && qualityLedgerIds[1]) await settleUsageCost(admin, { entryId: qualityLedgerIds[1], outcome: 'released', actualCostUsd: 0, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA, billable: false });
+          await admin.from('video_shots').update({ status: 'ready', video_quality_status: 'passed', video_quality: unreadableVerdictQuality(), provider_poll_failure_count: 0, provider_next_poll_at: null, provider_last_poll_error: null, provider_reconciliation_required: false, error_message: null, updated_at: new Date().toISOString() }).eq('version_id', versionId).eq('shot_number', shotNumber);
+          return;
+        }
         await admin.from('video_shots').update({ status: 'failed', video_quality_status: 'failed', provider_reconciliation_required: qualityState.costUsd === null, error_message: 'Le contrôle qualité du clip a échoué; le plan ne sera pas inclus dans le montage.', updated_at: new Date().toISOString() }).eq('version_id', versionId).eq('shot_number', shotNumber);
         return;
       }
@@ -1214,8 +1227,10 @@ export async function refreshLiveStoryboard(versionId: string, actor: Actor) {
     const outcome = latestShots.some((shot) => Boolean(shot.raw_path)) ? 'charged' : 'released';
     const actualCostUsd = latestShots.filter((shot) => shot.raw_path).reduce((sum, shot) => sum + Number(shot.actual_cost_usd ?? Number(shot.duration_seconds) * priceUsdPerSecond), 0);
     const actualSeconds = latestShots.filter((shot) => shot.raw_path).reduce((sum, shot) => sum + (priceUsdPerSecond > 0 ? Number(shot.actual_cost_usd ?? 0) / priceUsdPerSecond : Number(shot.duration_seconds) * (Number(shot.video_quality_retry_count ?? 0) + 1)), 0);
+    // 24/10: a version that will not be assembled was billed 10 500 FCFA. Its real fal cost is kept, the client pays nothing.
     const { error: settleError } = await settleUsageCost(admin, {
       entryId: ledger.id, outcome, actualCostUsd, actualSeconds, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA,
+      billable: completedShots === latestShots.length,
     });
     if (settleError) throw new HttpError(503, 'La consommation fal doit être réconciliée avant de terminer le montage.');
   }
@@ -1261,6 +1276,9 @@ export async function refreshLiveStoryboard(versionId: string, actor: Actor) {
       updated_at: new Date().toISOString(),
     }).eq('id', versionId);
     if (decision.final) {
+      // Costs were settled before the montage: a definitive montage failure removes the client price (real cost kept).
+      const { error: unbillError } = await admin.from('usage_ledger').update({ price_fcfa: 0 }).eq('version_id', versionId).eq('kind', 'generation').eq('status', 'charged');
+      if (unbillError) console.error('montage_failed_unbill', JSON.stringify({ versionId, message: unbillError.message }));
       await admin.from('videos').update({ status: 'failed', updated_at: new Date().toISOString() }).eq('id', version.video_id);
       return { id: versionId, status: 'failed' as const, error: decision.userMessage, completedShots: latestShots.length, totalShots: latestShots.length };
     }

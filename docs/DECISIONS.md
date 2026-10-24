@@ -1,5 +1,13 @@
 # Décisions
 
+## Juge coupé et version échouée facturée (2026-10-24, essai A)
+
+- **Constat** : version `122cde4e` en échec mais facturée 10 500 FCFA. Les plans 2 et 4 n’avaient pas été rejetés par le juge : sa réponse était coupée au milieu du JSON (`completion_tokens` = 1 500 = `max_tokens`). Le modèle de vision raisonne obligatoirement avant de répondre, et les vérifications ajoutées (route, lieu, cadrage) ont consommé tout le budget. Le verdict illisible était traité comme un échec, alors que le juge approuvait le plan 4.
+- **Budget du juge** : `VISION_MAX_OUTPUT_TOKENS` = 4 000 au lieu de 1 500 ; réserve d’un contrôle relevée de 0,05 à 0,10 USD (0,039 USD mesuré pour 1 500 jetons, environ 0,10 USD au pire avec 4 000).
+- **Verdict illisible** : en mode « warn » (par défaut), si le juge a bien répondu (et a été payé) mais que son verdict est illisible, l’image-clé ou le clip est gardé avec l’avertissement « Contrôle automatique illisible : vérifier ce plan à l’œil », visible sur la page « À valider ». La vidéo n’échoue plus après que ses clips ont été payés. Sans réponse confirmée de fal, le comportement prudent (réconciliation) est inchangé. Les erreurs du juge vidéo sont maintenant journalisées (`video_quality_failed`).
+- **Facturation** : les coûts étaient clôturés avant de savoir si la vidéo serait assemblée. Une version qui n’est pas assemblée garde désormais son coût réel au journal, avec un prix client de 0 ; un échec définitif du montage remet aussi le prix client à 0. Défaut antérieur à aujourd’hui, révélé par le premier échec à ce stade.
+- **Donnée DEV à corriger à la main** (aucune écriture distante par l’agent) : ligne `usage_ledger` `a4b01b94-d8e1-4015-ba4d-f1cffbff9d7d`, prix client à remettre à 0.
+
 ## Image de fin par mouvement, étape 2 (2026-10-24)
 
 - **Principe** : le moteur vidéo reçoit l’image de départ **et** l’image de fin du plan (voiture sortie du virage, arrivée, arrêtée…) et n’anime que le trajet entre les deux. C’est le levier le plus fiable contre les dérapages, les virages ratés et les arrêts qui glissent. Le mécanisme existait (test A/B, désactivé) ; chaque mouvement du catalogue décrit maintenant sa propre dernière image.
