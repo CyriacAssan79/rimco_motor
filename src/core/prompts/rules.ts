@@ -35,8 +35,18 @@ export const STOP_DRIVING = 'Calm, normal stop: the car stays in its lane and sl
 /** A car shown at an angle to its lane forces the video model to rotate it, which reads as a drift. */
 export const HEADING_ALIGNED = 'The car points along its lane, in its direction of travel.';
 
-/** 22/10: a character walked beside the moving car. In a moving shot, people are inside the car. */
-export const PEOPLE_IN_MOVING_CAR = 'seated inside the car (the driver at the wheel), seen through the windows; nobody walks or stands outside the moving car';
+/** 22/10: a character walked beside the moving car. 24/10: the driver looked backwards while driving. */
+export const PEOPLE_IN_MOVING_CAR = 'seated inside the car (the driver at the wheel, facing forward, eyes on the road ahead), seen through the windows; nobody walks or stands outside the moving car';
+
+/** 24/10: cars drove on the wrong side of the road. Side read from the brand settings (`brands.traffic_side`). */
+export function trafficRule(side: 'right' | 'left'): string {
+  return `${side === 'right' ? 'Right' : 'Left'}-hand traffic: the car drives in the ${side}-hand lane of its direction of travel, never in the oncoming lane.`;
+}
+
+/** 24/10: the steering wheel switched sides between shots. Side read from `brands.steering_side`. */
+export function steeringRule(side: 'left' | 'right'): string {
+  return `${side === 'left' ? 'Left' : 'Right'}-hand drive: the steering wheel and the driver are on the car’s ${side} side.`;
+}
 
 /** People never touch the bodywork: frequent physical artefact of video models. */
 export const NO_BODYWORK_CONTACT = 'nobody leans on the car';

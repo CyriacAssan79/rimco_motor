@@ -1,5 +1,13 @@
 # Décisions
 
+## Règles de route, conducteur et showroom, étape 1 bis (2026-10-24)
+
+- **Constats des essais du 24/10** : voiture à contresens, volant tantôt à gauche tantôt à droite, conducteur qui regarde en arrière en roulant, voiture posée de biais sur les voies (« SUV broadside across the lanes ») qui dérape avant de rouler, voiture qui « entre » dans un showroom et flotte au-dessus d’un podium.
+- **Réglages de marque** (migration `0031_brand_driving_and_market.sql`, ajoutée à `supabase/setup.sql`) : `brands.traffic_side` (`right` par défaut), `brands.steering_side` (`left` par défaut) et `brands.market_location` (« Abidjan, Côte d’Ivoire » pour RIMCO, utilisé à l’étape 3). Multi-marques : rien n’est écrit en dur. Modifiables dans l’éditeur de table Supabase (aucune page Admin ne gère encore la marque). Ils sont lus au lancement et figés dans `brief_json.brandScene` : toutes les étapes d’une version utilisent les mêmes. Tant que la migration n’est pas appliquée, la vidéo est produite sans ces règles, comme avant (avertissement `brand_scene_unavailable` dans les logs).
+- **Prompts** : circulation dans la voie de son sens de marche pour les plans en mouvement (image-clé, animation, image de fin, réalisateur) ; volant et conducteur du bon côté dès qu’une personne est visible ; conducteur tourné vers l’avant, les yeux sur la route.
+- **Juges** : l’image-clé d’un plan en mouvement est refusée si la voiture est de biais par rapport à sa voie ou à contresens ; on rattrape ainsi le dérapage avant l’animation (une image à 0,08 USD au lieu d’un clip). Dans le clip, contresens, volant du mauvais côté et conducteur tourné sont bloquants.
+- **Showroom** (demande du responsable) : dans un lieu intérieur (`placeTimeOfDay` = `interior`), seuls « plan héros à l’arrêt » et « détail » sont admis ; un autre mouvement rend la réponse du réalisateur invalide.
+
 ## Suivi de génération réactif (2026-10-24)
 
 - **Constat** (demande du responsable : le fil de génération ne s’affiche pas de manière réactive) : (1) le serveur calculait le prochain suivi en ne regardant que les plans en reprise après une erreur fal ; un seul plan en attente de 180 s figeait l’affichage de tous les autres pendant 3 minutes ; (2) le Studio interrogeait toutes les 15 s, au lieu des 10 s d’AGENTS.md, et attendait 15 s avant le premier contrôle ; (3) le chronomètre de l’étape ne bougeait qu’à chaque réponse du serveur ; (4) l’avancement par plan renvoyé au lancement était ignoré jusqu’au premier suivi.

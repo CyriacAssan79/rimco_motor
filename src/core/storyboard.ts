@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { peoplePresets, type PeoplePresetId } from '@/core/people-presets';
+import { trafficRule } from '@/core/prompts/rules';
 import { directorMotionMenu, getMotion, motionIdSchema, normalizeMotion } from '@/core/motions/catalog';
 
 export const storyModeSchema = z.enum(['standard', 'pro', 'premium']);
@@ -293,13 +294,15 @@ export function buildDirectorInstruction(input: {
   mood?: string;
   cast?: CastMember[];
   peoplePreset?: PeoplePresetId;
+  trafficSide?: 'right' | 'left';
 }) {
   const limits = DIRECTOR_FIELD_LIMITS;
+  const indoor = input.places.some((place) => place.timeOfDay === 'interior');
   return [
     `You direct a premium live-action car commercial for RIMCO Motors in Côte d'Ivoire, ${input.format ?? '16:9'}. Return only this JSON: ${DIRECTOR_SCHEMA}`,
     `FORMAT: "title" in French (max ${limits.title} characters). scene (${limits.scene}), framing (${limits.framing}), location (${limits.location}), action (${limits.action}) and camera (${limits.camera}) in short English cinematographer language. ${directorShotPlan(input)} A ${STORYBOARD_LOGO_SECONDS} s logo card is added after the edit.`,
     'STORY: one clear idea taken from the user brief. Open on the place with the car already moving, vary shot sizes, end on a calm exterior hero shot (front three-quarter view if available).',
-    `MOTION: give every shot one "motion" from this menu: ${directorMotionMenu()}. One motion per shot ("arrives then stops" = two shots). At least half the shots move. travelDirection fits the motion (approach = towards_camera; drive_away, follow_behind = away_from_camera; turns = towards_camera or away_from_camera; hero_still, detail_glide = static). Match it to the photo angle: front three-quarter = towards_camera, profile = left_to_right or right_to_left, rear three-quarter = away_from_camera. Keep one lateral direction for the whole film. At most one side-tracking shot. In "action", name the fixed things the car passes. Normal, legal driving: the car stays in its lane; no drift, skid or high speed; travelSpeed is slow or cruise in towns, dynamic only on an open road. One simple camera move per shot; dust only on unpaved roads.`,
+    `MOTION: give every shot one "motion" from this menu: ${directorMotionMenu()}. One motion per shot ("arrives then stops" = two shots). At least half the shots move. travelDirection fits the motion (approach = towards_camera; drive_away, follow_behind = away_from_camera; turns = towards_camera or away_from_camera; hero_still, detail_glide = static). Match it to the photo angle: front three-quarter = towards_camera, profile = left_to_right or right_to_left, rear three-quarter = away_from_camera. Keep one lateral direction for the whole film. At most one side-tracking shot. In "action", name the fixed things the car passes. Normal, legal driving: the car stays in its lane; no drift, skid or high speed; travelSpeed is slow or cruise in towns, dynamic only on an open road. One simple camera move per shot; dust only on unpaved roads.${input.trafficSide ? ` ${trafficRule(input.trafficSide)}` : ''}${indoor ? ' In an interior place the car never moves: hero_still or detail_glide only.' : ''}`,
     `FIDELITY: use only the photo and place ids listed below. Each shot matches the angle of its photo: no interior, rear, profile or close-up without a matching photo. Invent nothing: no feature, colour, landmark, sign or text.${input.places.some((place) => place.timeOfDay) ? " The light of each shot follows its place's timeOfDay; prefer places with the same timeOfDay." : ''}`,
     peopleRule(input),
     'TEXT: no text, title, logo, caption or transition; avoid framing signs or billboards; plates unreadable.',

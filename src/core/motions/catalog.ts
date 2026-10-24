@@ -213,13 +213,13 @@ export function normalizePhotoAngle(value: string | null | undefined): PhotoAngl
   return undefined;
 }
 
-type MotionShot = { title?: string; motion?: MotionId; travelDirection?: TravelDirection; travelSpeed?: TravelSpeed; vehiclePhotoId?: string };
+type MotionShot = { title?: string; motion?: MotionId; locationPhotoId?: string | null; travelDirection?: TravelDirection; travelSpeed?: TravelSpeed; vehiclePhotoId?: string };
 
 /**
  * Coherence of one shot with its motion. The director's answer is checked, never silently rewritten:
  * an issue makes the answer invalid, which triggers the automatic corrected retry.
  */
-export function shotMotionIssues(shot: MotionShot, photoAngles: Record<string, string | null | undefined> = {}): string[] {
+export function shotMotionIssues(shot: MotionShot, photoAngles: Record<string, string | null | undefined> = {}, interiorPlaceIds: readonly string[] = []): string[] {
   const label = shot.title ? `Plan « ${shot.title} »` : 'Un plan';
   const motion = getMotion(shot.motion);
   if (!motion) return [`${label} : mouvement absent ou inconnu (motion doit être l’un de : ${motionIds.join(', ')}).`];
@@ -228,12 +228,14 @@ export function shotMotionIssues(shot: MotionShot, photoAngles: Record<string, s
   if (shot.travelSpeed && !motion.speeds.includes(shot.travelSpeed)) issues.push(`${label} : le mouvement ${motion.id} accepte travelSpeed ${motion.speeds.join(' ou ')}.`);
   const angle = shot.vehiclePhotoId ? normalizePhotoAngle(photoAngles[shot.vehiclePhotoId]) : undefined;
   if (angle && motion.photoAngles.length && !motion.photoAngles.includes(angle)) issues.push(`${label} : le mouvement ${motion.id} ne peut pas partir d’une photo « ${photoAngles[shot.vehiclePhotoId!]} ».`);
+  // 24/10 (Pro, « Entrée dans le showroom »): a car driving in a showroom floated over a podium. Indoors it never moves.
+  if (shot.locationPhotoId && interiorPlaceIds.includes(shot.locationPhotoId) && motion.driving !== 'none') issues.push(`${label} : dans un lieu intérieur (showroom), le véhicule reste immobile : hero_still ou detail_glide.`);
   return issues;
 }
 
 /** All motion issues of a storyboard, plus the « at most one side-tracking shot » rule; null when coherent. */
-export function storyboardMotionIssue(shots: MotionShot[], photoAngles: Record<string, string | null | undefined> = {}): string | null {
-  const issues = shots.flatMap((shot) => shotMotionIssues(shot, photoAngles));
+export function storyboardMotionIssue(shots: MotionShot[], photoAngles: Record<string, string | null | undefined> = {}, interiorPlaceIds: readonly string[] = []): string | null {
+  const issues = shots.flatMap((shot) => shotMotionIssues(shot, photoAngles, interiorPlaceIds));
   if (shots.filter((shot) => shot.motion === 'side_tracking').length > 1) issues.push('Un seul travelling latéral (side_tracking) par film.');
   return issues.length ? issues.join(' ') : null;
 }

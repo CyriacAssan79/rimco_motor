@@ -2,6 +2,8 @@
 insert into public.brands(name,primary_color,secondary_color)
 values ('RIMCO Motors','#c51e1c','#831810')
 on conflict(name) do update set primary_color=excluded.primary_color,secondary_color=excluded.secondary_color;
+-- Réglages de route et lieu de marché (migration 0031) : circulation à droite, volant à gauche par défaut.
+update public.brands set market_location='Abidjan, Côte d''Ivoire' where name='RIMCO Motors' and market_location='';
 
 insert into public.pricing_settings(brand_id,grid_fcfa_per_second_standard,grid_fcfa_per_second_premium)
 select id,460,700 from public.brands where name='RIMCO Motors'

@@ -5,6 +5,7 @@ import { createSupabaseServerClient } from '@/core/supabase/server';
 import { createStorageAdminClient } from '@/core/storage/supabase';
 import { env } from '@/env';
 import { storyboardMotionIssue } from '@/core/motions/catalog';
+import { BRAND_SCENE_COLUMNS, loadBrandScene } from '@/core/brand-scene';
 import { peoplePresetIds } from '@/core/people-presets';
 import { buildDirectorUserPrompt, buildSingleShotStoryboardInstruction, castDescriptionSchema, MAX_CAST_PER_VIDEO, validateStoryboardCast, vehicleDescriptionForPrompt, buildStoryboardInstruction, isTierDurationSupported, singleShotStoryboardSchema, storyboardDurationIssue, storyboardSchema, validatePremiumTwentySecondStoryboard, validateSingleShotStoryboard, validateStoryboard, type ClipDurationSeconds, type StoryboardShot } from '@/core/storyboard';
 import { getStoryboardModeRoute } from '@/core/providers/storyboard-routing';
@@ -99,6 +100,7 @@ export async function POST(request: Request) {
       throw new HttpError(422, 'Une ou plusieurs photos véhicule sélectionnées ne sont plus disponibles.');
     }
     const selectedPlaces = places;
+    const brandScene = await loadBrandScene(supabase.from('brands').select(BRAND_SCENE_COLUMNS).eq('id', actor.brandId).maybeSingle());
     const instructionInput = {
       durationSeconds: input.durationSeconds,
       vehicle: vehicleDescriptionForPrompt(dossier),
@@ -108,6 +110,7 @@ export async function POST(request: Request) {
       character: input.character, lighting: input.lighting, mood: input.mood,
       cast,
       peoplePreset: cast.length ? 'none' as const : input.peoplePreset,
+      trafficSide: brandScene?.trafficSide,
     };
     const instruction = input.workflow === 'single'
       ? buildSingleShotStoryboardInstruction({ ...instructionInput, mode: input.mode })
@@ -169,18 +172,19 @@ export async function POST(request: Request) {
         });
         // Motion catalogue: a missing or incoherent motion (direction, speed, photo angle) also triggers the corrected retry.
         const photoAngles = Object.fromEntries(selectedVehicle.map((photo) => [photo.id, photo.angle]));
+        const interiorPlaceIds = selectedPlaces.filter((place) => placeTimeOfDay(place) === 'interior').map((place) => place.id);
         // Without a sheet the people would be dropped at generation (patch v3.2, F9): a requested « Personnage » needs one.
         const peopleSheetIssue = (sheet: string | undefined) => !cast.length && input.peoplePreset !== 'none' && !sheet ? 'castDescription est obligatoire : décris les personnes demandées.' : null;
         const responseSchema = input.workflow === 'single'
           ? singleShotStoryboardResponseSchema.superRefine(({ shots, castDescription: sheet }, context) => {
-              const issue = [storyboardMotionIssue(shots, photoAngles), peopleSheetIssue(sheet)].filter(Boolean).join(' ');
+              const issue = [storyboardMotionIssue(shots, photoAngles, interiorPlaceIds), peopleSheetIssue(sheet)].filter(Boolean).join(' ');
               if (issue) context.addIssue({ code: 'custom', path: ['shots'], message: issue });
             })
           // Patch v3.2 (A5): wrong durations make the answer invalid (automatic corrected retry), never silently rewritten.
           : z.object({ castDescription: castDescriptionSchema.optional(), shots: storyboardSchema }).strict().superRefine(({ shots, castDescription: sheet }, context) => {
               const issue = [premiumTwentySecond
                 ? shots.length === 4 && shots.every((shot) => shot.durationSeconds === 5) ? null : 'Exactement 4 plans de 5 secondes.'
-                : storyboardDurationIssue(shots, input.durationSeconds, route.adapterFamily), storyboardMotionIssue(shots, photoAngles), peopleSheetIssue(sheet)].filter(Boolean).join(' ');
+                : storyboardDurationIssue(shots, input.durationSeconds, route.adapterFamily), storyboardMotionIssue(shots, photoAngles, interiorPlaceIds), peopleSheetIssue(sheet)].filter(Boolean).join(' ');
               if (issue) context.addIssue({ code: 'custom', path: ['shots'], message: issue });
             });
         // Layer 1 (locked rules + approved references) goes in the system prompt; layer 2 (user brief) is the only user content.
