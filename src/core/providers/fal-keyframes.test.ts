@@ -21,7 +21,7 @@ describe('fal keyframe helpers', () => {
     expect(prompt).toContain('Haval H9 noir');
     expect(prompt).toContain('Boulevard lagunaire');
     expect(prompt).toContain('Plan large');
-    expect(prompt).toContain('Photorealistic still');
+    expect(prompt).toContain('still frame');
     expect(prompt).toContain('No text');
   });
 
@@ -160,7 +160,7 @@ describe('fal keyframe helpers', () => {
     expect(mockSubmit).toHaveBeenCalledWith(KEYFRAME_VISION_ENDPOINT, { input: expect.objectContaining({
       model: 'anthropic/claude-sonnet-5.5',
       reasoning: true,
-      max_tokens: 4000,
+      max_tokens: 1500,
       system_prompt: expect.stringContaining('objet JSON compact'),
       image_urls: ['https://assets.example/keyframe.png'],
     }) });

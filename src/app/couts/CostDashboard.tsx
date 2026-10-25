@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { formatFcfa, formatSignedFcfa } from '@/core/pricing';
+import { formatFcfa } from '@/core/pricing';
 
 type CostRow = {
   version_id?: string | null;
@@ -89,7 +89,7 @@ export function CostDashboard() {
           <td className="px-4 py-4 text-[#716d66]">{row.seconds ?? 5} s</td>
           <td className="px-4 py-4 font-semibold">{row.status === 'released' ? '—' : formatFcfa(row.price_fcfa ?? 0)}</td>
           <td className="px-4 py-4 text-[#716d66]">{row.status === 'reserved' ? 'En cours' : formatFcfa(row.cost_real_fcfa ?? 0)}{typeof row.cost_eur === 'number' && row.status !== 'reserved' ? <small className="ml-1 text-[9px]">({row.cost_eur.toFixed(2)} €)</small> : null}</td>
-          <td className="px-4 py-4 text-[#716d66]">{row.status === 'reserved' ? 'En cours' : formatSignedFcfa(row.margin_fcfa ?? ((row.price_fcfa ?? 0) - (row.cost_real_fcfa ?? 0)))}</td>
+          <td className="px-4 py-4 text-[#716d66]">{row.status === 'reserved' ? 'En cours' : formatFcfa(row.margin_fcfa ?? ((row.price_fcfa ?? 0) - (row.cost_real_fcfa ?? 0)))}</td>
           <td className="px-4 py-4 text-[#716d66]">{row.status === 'reserved' ? 'En cours' : row.status === 'released' ? 'Annulée' : row.status === 'charged' || row.status === 'ready' ? 'Facturée' : row.status ?? '—'}</td>
         </tr>)}</tbody>
       </table>

@@ -1,6 +1,4 @@
 export const FAL_POLL_RETRY_DELAYS_MS = [15_000, 60_000, 180_000] as const;
-/** Normal Studio refresh interval while a version is in progress (AGENTS.md: every 10 s). */
-export const STUDIO_POLL_INTERVAL_SECONDS = 10;
 export const FAL_POLL_MAX_FAILURES = FAL_POLL_RETRY_DELAYS_MS.length + 1;
 
 export type FalPollFailurePlan =
@@ -47,16 +45,4 @@ export function isFalPollDue(nextPollAt: unknown, now = Date.now()): boolean {
   if (typeof nextPollAt !== 'string') return true;
   const dueAt = Date.parse(nextPollAt);
   return !Number.isFinite(dueAt) || dueAt <= now;
-}
-
-/**
- * Delay before the Studio's next refresh. A shot in fal back-off waits for its own slot, but it must never hold back
- * the others: a pending shot without back-off keeps the normal 10 s rhythm (24/10: one shot at 180 s froze the progress).
- */
-export function nextPollDelaySeconds(pendingShots: Array<{ provider_next_poll_at?: string | null }>, now = Date.now()): number {
-  const delays = pendingShots.map((shot) => {
-    const dueAt = typeof shot.provider_next_poll_at === 'string' ? Date.parse(shot.provider_next_poll_at) : Number.NaN;
-    return Number.isFinite(dueAt) ? Math.max(1, Math.ceil((dueAt - now) / 1000)) : STUDIO_POLL_INTERVAL_SECONDS;
-  });
-  return delays.length ? Math.min(STUDIO_POLL_INTERVAL_SECONDS, ...delays) : STUDIO_POLL_INTERVAL_SECONDS;
 }

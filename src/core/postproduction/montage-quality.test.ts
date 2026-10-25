@@ -66,7 +66,7 @@ describe('prompts orientés mouvement', () => {
   it('ne reprend plus le cadrage de la photo studio et décrit un véhicule en mouvement', () => {
     const still = buildKeyframePrompt({ shot: base, vehicle: 'Haval H6 beige', lighting: 'golden hour', format: '16:9', retryReason: null, vehicleReferenceCount: 3, hasLocationReference: true });
     expect(still).not.toContain('preserve its framing');
-    expect(still).toContain("Ignore the vehicle photos' backgrounds and light");
+    expect(still).toContain("ignore the photos' backgrounds and studio light");
     expect(still).toContain('Captured mid-drive');
     const motion = buildKeyframeAnimationPrompt({ shot: base, vehicle: 'Haval H6 beige', durationS: 5, mood: 'premium', lighting: 'golden hour' });
     expect(motion).not.toContain('smallest physically credible motion');

@@ -15,8 +15,6 @@ export type ReferenceVideoInput = {
   endUserId?: string;
   /** Optional last frame, used only by the image-to-video keyframe animation. */
   endImageUrl?: string;
-  /** Output resolution where the engine offers one (Seedance: Premium 1080p when enabled, étape 4). */
-  resolution?: '720p' | '1080p';
 };
 
 export type ReferenceVideoProvider = {

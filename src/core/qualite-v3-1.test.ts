@@ -58,9 +58,8 @@ describe('A · le texte n’empêche plus la génération', () => {
 });
 
 describe('F · juge du lieu recalibré', () => {
-  it('accepte un cadrage plus serré du même lieu, refuse une route inventée (25/10)', () => {
-    expect(SAME_PLACE_CHECK).toContain('a closer framing or a slightly different camera position along that road is expected');
-    expect(SAME_PLACE_CHECK).toContain('a road, street or buildings that do not exist in the location reference');
+  it('accepte un autre point de vue du même lieu', () => {
+    expect(SAME_PLACE_CHECK).toContain('different camera viewpoint');
     expect(buildKeyframeQualityPrompt({ vehicleReferenceCount: 1, hasLocationReference: true })).toContain(SAME_PLACE_CHECK);
     expect(buildKeyframeQualityPrompt({ vehicleReferenceCount: 1, hasLocationReference: false })).not.toContain(SAME_PLACE_CHECK);
   });
@@ -123,7 +122,7 @@ describe('Limite de longueur du prompt Kling (422 observé le 22/10)', () => {
     expect(full.length).toBeLessThanOrEqual(2000);
     const fitted = animation(rolling, { maxLength: ANIMATION_PROMPT_MAX_LENGTH.kling });
     expect(fitted).toBe(full);
-    expect(fitted).toContain('Details: a.');
+    expect(fitted).toContain('Action: a.');
     expect(fitted).toContain('Tyres roll on the road without slipping');
     expect(fitted).toContain('Same people as in the first frame');
     expect(fitted).toContain('Mood:');

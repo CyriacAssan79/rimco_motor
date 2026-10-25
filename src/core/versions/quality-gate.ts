@@ -28,15 +28,6 @@ export function qualityDecision(verdict: QualityVerdict, retryCount: number, inp
   return input.mode === 'warn' ? 'accept_with_warning' : 'reject';
 }
 
-/**
- * 24/10: the judge answered but its verdict was unreadable (cut JSON). That is not a defect of the shot: in « warn »
- * mode the shot is kept, flagged for the validator, instead of failing the whole video after its clips were paid.
- */
-export const UNREADABLE_VERDICT_WARNING = 'Contrôle automatique illisible : vérifier ce plan à l’œil';
-export function unreadableVerdictQuality() {
-  return { approved: true, issues: [UNREADABLE_VERDICT_WARNING], reason: UNREADABLE_VERDICT_WARNING, warning: true, warningIssues: [UNREADABLE_VERDICT_WARNING] };
-}
-
 /** Short, user-facing list of defects recorded on a shot accepted with warnings. */
 export function warningIssues(verdict: QualityVerdict): string[] {
   const issues = verdict.issues.length ? [...verdict.issues] : verdict.approved ? [] : [verdict.reason];

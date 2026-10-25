@@ -6,10 +6,7 @@ import { createSupabaseServerClient } from '@/core/supabase/server';
 import { createStorageAdminClient } from '@/core/storage/supabase';
 import { createSignedStoragePreviewUrl } from '@/core/storage/signed-video';
 import { assertPlaceUploadAdmin, assertVehicleDossierAdmin } from '@/core/assets/permissions';
-import { curatedLocationAsset, selectableLocations } from '@/core/assets/location-catalog';
-import { PLACE_GEOMETRY_COLUMNS, placeGeometryFromRow, placeGeometrySchema, placeGeometryToRow, type PlaceGeometryRow } from '@/core/assets/place-geometry';
-
-const ASSET_COLUMNS = 'id,kind,title,category,make,model,color,angle,variant,path,status,review_reason';
+import { curatedLocationAsset, locationCatalog } from '@/core/assets/location-catalog';
 
 export async function GET(request: Request) {
   try {
@@ -25,40 +22,33 @@ export async function GET(request: Request) {
       const search = new URL(request.url).searchParams;
       const kind = search.get('kind');
       const status = search.get('status');
-      const demoAssets = [...fixtures.filter((asset) => asset.kind !== 'place'), ...selectableLocations.map(curatedLocationAsset)];
+      const demoAssets = [...fixtures.filter((asset) => asset.kind !== 'place'), ...locationCatalog.map(curatedLocationAsset)];
       return NextResponse.json({ assets: demoAssets.filter((asset) => (!kind || asset.kind === kind) && (!status || asset.status === status)) });
     }
     const supabase = await createSupabaseServerClient();
+    let query = supabase.from('assets').select('id,kind,title,category,make,model,color,angle,variant,path,status,review_reason').order('created_at', { ascending: false });
     const search = new URL(request.url).searchParams;
     const requestedKind = search.get('kind');
     const requestedStatus = search.get('status');
-    if (actor.role !== 'admin' && !actor.brandId) return NextResponse.json({ assets: [] });
-    const list = (columns: string) => {
-      let query = supabase.from('assets').select(columns).order('created_at', { ascending: false });
-      if (requestedKind) query = query.eq('kind', requestedKind);
-      if (requestedStatus) query = query.eq('status', requestedStatus);
-      if (actor.role !== 'admin') query = query.or(`and(brand_id.eq.${actor.brandId},status.eq.validée),created_by.eq.${actor.id}`);
-      return query;
-    };
-    // Before migration 0032 the place columns do not exist: the library still loads, places then read as undescribed.
-    let { data, error } = await list(`${ASSET_COLUMNS},${PLACE_GEOMETRY_COLUMNS}`);
-    if (error && /place_viewpoint|column/i.test(error.message)) ({ data, error } = await list(ASSET_COLUMNS));
+    if (requestedKind) query = query.eq('kind', requestedKind);
+    if (requestedStatus) query = query.eq('status', requestedStatus);
+    if (actor.role !== 'admin') {
+      if (!actor.brandId) return NextResponse.json({ assets: [] });
+      query = query.or(`and(brand_id.eq.${actor.brandId},status.eq.validée),created_by.eq.${actor.id}`);
+    }
+    const { data, error } = await query;
     if (error) throw error;
-    const rows = (data ?? []) as unknown as Array<Record<string, string | null> & { kind: string; path: string }>;
-    const assets = await Promise.all(rows.map(async (row) => {
-      const asset = { ...Object.fromEntries(Object.entries(row).filter(([key]) => !key.startsWith('place_'))), kind: row.kind, path: row.path };
+    const assets = await Promise.all((data ?? []).map(async (asset) => {
       const bucket = asset.kind === 'audio' ? 'audio' : asset.kind === 'logo' ? 'brand' : 'assets';
       const previewUrl = await createSignedStoragePreviewUrl((path, expiresIn) => supabase.storage.from(bucket).createSignedUrl(path, expiresIn), bucket, asset.path);
-      return { ...asset, previewUrl, ...(asset.kind === 'place' ? { placeGeometry: placeGeometryFromRow(row as PlaceGeometryRow) } : {}) };
+      return { ...asset, previewUrl };
     }));
-    const curatedPlaces = selectableLocations.map(curatedLocationAsset).filter(() => (!requestedKind || requestedKind === 'place') && (!requestedStatus || requestedStatus === 'validée'));
+    const curatedPlaces = locationCatalog.map(curatedLocationAsset).filter(() => (!requestedKind || requestedKind === 'place') && (!requestedStatus || requestedStatus === 'validée'));
     return NextResponse.json({ assets: [...curatedPlaces, ...assets] });
   } catch (error) { return errorResponse(error); }
 }
 
-const createSchema = z.object({ kind: z.enum(['vehicle','logo','audio','place','decor','wardrobe','badge','character']), path: z.string().trim().min(1).max(500), title: z.string().trim().max(160).optional(), category: z.string().trim().max(80).optional(), make: z.string().max(100).optional(), model: z.string().max(100).optional(), color: z.string().max(100).optional(), angle: z.string().max(100).optional(), variant: z.string().max(100).optional(), vehicleDossierId: z.string().uuid().optional(), photoRole: z.enum(['exterior','interior','detail']).optional(), placeGeometry: placeGeometrySchema.optional() }).superRefine((value, context) => {
-  if (value.kind === 'place' && !value.placeGeometry) context.addIssue({ code: 'custom', message: 'Décrivez le lieu : point de vue, route, moment de la journée et éléments visibles.', path: ['placeGeometry'] });
-  if (value.placeGeometry && value.kind !== 'place') context.addIssue({ code: 'custom', message: 'Seul un lieu a une description de route.', path: ['placeGeometry'] });
+const createSchema = z.object({ kind: z.enum(['vehicle','logo','audio','place','decor','wardrobe','badge','character']), path: z.string().trim().min(1).max(500), title: z.string().trim().max(160).optional(), category: z.string().trim().max(80).optional(), make: z.string().max(100).optional(), model: z.string().max(100).optional(), color: z.string().max(100).optional(), angle: z.string().max(100).optional(), variant: z.string().max(100).optional(), vehicleDossierId: z.string().uuid().optional(), photoRole: z.enum(['exterior','interior','detail']).optional() }).superRefine((value, context) => {
   if (value.vehicleDossierId && value.kind !== 'vehicle') context.addIssue({ code: 'custom', message: 'Un dossier ne peut contenir que des photos de véhicule.', path: ['kind'] });
   if (value.photoRole && !value.vehicleDossierId) context.addIssue({ code: 'custom', message: 'Le type de vue nécessite un dossier véhicule.', path: ['vehicleDossierId'] });
 });
@@ -84,8 +74,8 @@ export async function POST(request: Request) {
       const { data: dossier, error: dossierError } = await supabase.from('vehicle_dossiers').select('id,brand_id').eq('id', input.vehicleDossierId).single();
       if (dossierError || !dossier || dossier.brand_id !== actor.brandId) throw new HttpError(404, 'Dossier véhicule introuvable.');
     }
-    const { vehicleDossierId, photoRole, placeGeometry, ...assetInput } = input;
-    const { data, error } = await supabase.from('assets').insert({ ...assetInput, ...(placeGeometry ? placeGeometryToRow(placeGeometry) : {}), vehicle_dossier_id: vehicleDossierId ?? null, photo_role: photoRole ?? null, brand_id: actor.brandId, created_by: actor.id, status: 'en_attente' }).select('id,kind,title,category,make,model,color,angle,variant,path,status,review_reason,vehicle_dossier_id,photo_role').single();
+    const { vehicleDossierId, photoRole, ...assetInput } = input;
+    const { data, error } = await supabase.from('assets').insert({ ...assetInput, vehicle_dossier_id: vehicleDossierId ?? null, photo_role: photoRole ?? null, brand_id: actor.brandId, created_by: actor.id, status: 'en_attente' }).select('id,kind,title,category,make,model,color,angle,variant,path,status,review_reason,vehicle_dossier_id,photo_role').single();
     if (error) throw new HttpError(400, 'Impossible d’enregistrer ce média. Vérifiez son téléversement et réessayez.');
     return NextResponse.json({ asset: data }, { status: 201 });
   } catch (error) { return errorResponse(error); }

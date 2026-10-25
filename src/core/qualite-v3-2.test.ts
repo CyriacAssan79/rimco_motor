@@ -49,15 +49,15 @@ describe('v3.2 · garde-fou de longueur', () => {
 
   it('prompt usuel nettement plus court qu’avant (environ 1 000 caractères)', () => {
     const shot = shotDraftSchema.parse({ title: 'Suivi', shotType: 'rolling', travelDirection: 'left_to_right', travelSpeed: 'cruise', scene: 'SUV on the lagoon boulevard', framing: 'Medium wide', location: 'Abidjan lagoon boulevard', action: 'The SUV passes lamp posts and lane markings', camera: 'Static camera, slow pan', durationSeconds: 5, vehiclePhotoId: 'front', locationPhotoId: 'place' });
-    expect(buildKeyframeAnimationPrompt({ shot, vehicle: 'Haval H6 Gris', durationS: 5, mood: 'premium', lighting: 'Natural daylight', excludePeople: true }).length).toBeLessThan(1_350); // 24/10 : +marche avant et défilement (essais A et B)
+    expect(buildKeyframeAnimationPrompt({ shot, vehicle: 'Haval H6 Gris', durationS: 5, mood: 'premium', lighting: 'Natural daylight', excludePeople: true }).length).toBeLessThan(1_100);
   });
 });
 
 describe('v3.2 · réalisateur', () => {
-  const base = { vehicle: 'GWM Tank 300', vehiclePhotos: [{ id: 'front', role: 'exterior', title: 'Avant', angle: '3/4 avant' }], places: [{ id: 'p', title: 'Boulevard', geometry: null }] };
-  it('écrit chaque règle une seule fois et reste sous 4 000 caractères (budget relevé le 24/10 : lieux décrits, circulation, showroom ; ce n’est pas une limite du modèle de langage)', () => {
+  const base = { vehicle: 'GWM Tank 300', vehiclePhotos: [{ id: 'front', role: 'exterior', title: 'Avant', angle: '3/4 avant' }], places: [{ id: 'p', title: 'Boulevard', timeOfDay: 'day' as const }] };
+  it('écrit chaque règle une seule fois et reste sous 3 500 caractères', () => {
     const instruction = buildStoryboardInstruction({ ...base, durationSeconds: 20, mode: 'premium', format: '16:9' });
-    expect(instruction.length).toBeLessThan(4_000);
+    expect(instruction.length).toBeLessThan(3_500);
     for (const once of ['Return only this JSON', 'FIDELITY:', 'TEXT:', 'MOTION:', 'Exactly 4 shots of 5 seconds']) {
       expect(instruction.split(once).length - 1).toBe(1);
     }
@@ -100,7 +100,7 @@ describe('v3.2 · conduite normale et personnes dans la voiture (essais du 22/10
 
   it('met les personnes dans la voiture quand elle roule, dehors seulement quand elle est arrêtée', () => {
     const inside = buildKeyframeAnimationPrompt({ shot: moving, vehicle: 'Haval H6', durationS: 5, mood: '', lighting: 'day', castDescription: 'Woman, 30, white shirt' });
-    expect(inside).toContain('seated inside the car (the driver at the wheel, facing forward, eyes on the road ahead)');
+    expect(inside).toContain('seated inside the car (the driver at the wheel)');
     expect(inside).toContain('nobody walks or stands outside the moving car');
     const outside = buildKeyframeAnimationPrompt({ shot: stopped, vehicle: 'Haval H6', durationS: 5, mood: '', lighting: 'day', castDescription: 'Woman, 30, white shirt' });
     expect(outside).toContain('nobody leans on the car');
@@ -124,9 +124,9 @@ describe('v3.2 · conduite normale et personnes dans la voiture (essais du 22/10
 
   it('demande au réalisateur une vitesse de ville, un sens cohérent avec la photo et la place des personnes', () => {
     const instruction = buildStoryboardInstruction({ durationSeconds: 10, mode: 'standard', vehicle: 'H6', vehiclePhotos: [{ id: 'front', role: 'exterior', title: 'Avant', angle: '3/4 avant' }], places: [], format: '16:9' });
-    expect(instruction).toContain("dynamic only where the place's roadType is open");
-    expect(instruction).toContain('never mirrored');
+    expect(instruction).toContain('slow or cruise in towns');
+    expect(instruction).toContain('front three-quarter = towards_camera');
     expect(instruction).toContain('While the car moves, the people are inside it');
-    expect(instruction.length).toBeLessThan(4_000);
+    expect(instruction.length).toBeLessThan(3_500);
   });
 });

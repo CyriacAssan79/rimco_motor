@@ -12,7 +12,7 @@ export const IMAGE_PROMPT_MAX_CHARS = 2_200;
 // ——— Shared rules (English: the image and video models follow English best) ———
 
 /** Vehicle identity kept by the animation (layer 1, locked). */
-export const KEEP_IDENTITY = 'Keep the exact car (shape, paint, wheels, badges), place and light; warm light never changes the paint colour.';
+export const KEEP_IDENTITY = 'Keep the exact car (shape, paint, wheels, badges), place and light.';
 
 /** Tyre-road contact: the defect the client sees first. */
 export const GROUND_CONTACT = 'Every visible tyre touches the road with a contact shadow; the car never floats.';
@@ -27,37 +27,11 @@ export const NO_TEXT_VIDEO = 'One continuous full-frame shot, no cuts, never a s
 /** Normal road driving (22/10: a car drifted on a city street at the start of a clip). */
 export const CALM_DRIVING = 'Calm, normal driving: the car stays in its lane and follows the road at a constant speed; no drift, skid, spin, sharp turn or sudden acceleration.';
 
-/** 24/10: the video engine invented streets of another country as the camera moved. */
-export function placeRule(place: string, market?: string): string {
-  return `Place: ${place}${market ? ` (${market})` : ''}. Everything the camera reveals belongs to this same place: same road layout, buildings and vegetation; nothing from another city or country.`;
-}
-
-/** 24/10 (essai B): a car moving right ended facing left, so the clip showed a U-turn then reversing. */
-export const FORWARD_ONLY = 'The car only drives forward, nose first; it never reverses, spins round or flips direction.';
-
-/** 24/10 (essai A): the camera followed the car and the bridge cables never went by, so the set looked frozen. */
-export const PARALLAX = 'Fixed posts, cables, pylons and trees stay put and the car passes them one by one; with a moving camera, near objects slide by faster than the distance.';
-
-/** Catalogue motions that change speed or heading replace CALM_DRIVING with their own normal-driving rule. */
-export const TURN_DRIVING = 'Calm, normal turn: the car follows the curve of its lane at a slow speed, front wheels steered into the turn, the body leaning slightly; no drift, skid, spin or sideways slide.';
-export const PULL_AWAY_DRIVING = 'Calm, normal start: the car stays in its lane and accelerates progressively; no wheelspin, jump, drift or skid.';
-export const STOP_DRIVING = 'Calm, normal stop: the car stays in its lane and slows down progressively; no skid, slide or nose dive.';
-
 /** A car shown at an angle to its lane forces the video model to rotate it, which reads as a drift. */
 export const HEADING_ALIGNED = 'The car points along its lane, in its direction of travel.';
 
-/** 22/10: a character walked beside the moving car. 24/10: the driver looked backwards while driving. */
-export const PEOPLE_IN_MOVING_CAR = 'seated inside the car (the driver at the wheel, facing forward, eyes on the road ahead), seen through the windows; nobody walks or stands outside the moving car';
-
-/** 24/10: cars drove on the wrong side of the road. Side read from the brand settings (`brands.traffic_side`). */
-export function trafficRule(side: 'right' | 'left'): string {
-  return `${side === 'right' ? 'Right' : 'Left'}-hand traffic: the car keeps to the ${side}-hand lane of its direction, never the oncoming lane.`;
-}
-
-/** 24/10: the steering wheel switched sides between shots. Side read from `brands.steering_side`. */
-export function steeringRule(side: 'left' | 'right'): string {
-  return `${side === 'left' ? 'Left' : 'Right'}-hand drive: the steering wheel and the driver are on the car’s ${side} side.`;
-}
+/** 22/10: a character walked beside the moving car. In a moving shot, people are inside the car. */
+export const PEOPLE_IN_MOVING_CAR = 'seated inside the car (the driver at the wheel), seen through the windows; nobody walks or stands outside the moving car';
 
 /** People never touch the bodywork: frequent physical artefact of video models. */
 export const NO_BODYWORK_CONTACT = 'nobody leans on the car';

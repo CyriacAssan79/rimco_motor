@@ -24,7 +24,7 @@ describe('storyboard', () => {
   it('asks the Premium director for four full 5-second shots at 20 seconds', () => {
     const instruction = buildStoryboardInstruction({
       durationSeconds: 20, mode: 'premium', vehicle: 'GWM Tank 300 gris', vehiclePhotos: [{ id: 'front', role: 'exterior', title: 'Avant' }],
-      places: [{ id: 'hkb', title: 'Pont HKB', geometry: null }], purpose: 'advertising', format: '16:9',
+      places: [{ id: 'hkb', title: 'Pont HKB' }], purpose: 'advertising', format: '16:9',
     });
     expect(instruction).toContain('Exactly 4 shots of 5 seconds (20 s).');
   });
@@ -49,7 +49,7 @@ describe('storyboard', () => {
       mode: 'standard',
       vehicle: 'GWM Tank 300 noir',
       vehiclePhotos: [{ id: 'vehicle-front', role: 'exterior', title: 'Avant trois-quarts' }],
-      places: [{ id: 'place-plateau', title: 'Abidjan, Plateau', geometry: null }],
+      places: [{ id: 'place-plateau', title: 'Abidjan, Plateau' }],
       format: '9:16',
       lighting: 'Fin de journée',
     });
@@ -67,7 +67,7 @@ describe('storyboard', () => {
   it('asks the Pro director for shots of 3 to 15 seconds totalling the runtime', () => {
     const instruction = buildStoryboardInstruction({
       durationSeconds: 10, mode: 'pro', vehicle: 'GWM Tank 300 gris', vehiclePhotos: [{ id: 'front', role: 'exterior', title: 'Avant' }],
-      places: [{ id: 'hkb', title: 'Pont HKB', geometry: null }], format: '16:9',
+      places: [{ id: 'hkb', title: 'Pont HKB' }], format: '16:9',
     });
     expect(instruction).toContain('2 to 3 shots of 3 to 15 whole seconds each, totalling exactly 10 s.');
   });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { estimateGridPriceFcfa, estimatePriceFcfa, estimateRealCost, formatFcfa, formatSignedFcfa } from './pricing';
+import { estimateGridPriceFcfa, estimatePriceFcfa, estimateRealCost, formatFcfa } from './pricing';
 
 describe('pricing',()=>{
   it('applies the fixed five-second client price by tier',()=>{
@@ -20,12 +20,6 @@ describe('pricing',()=>{
   it('formats FCFA without decimals and with a non-breaking thousands separator',()=>{
     expect(formatFcfa(1234567)).toBe('1\u00a0234\u00a0567 FCFA');
     expect(formatFcfa(3500)).toBe('3\u00a0500 FCFA');
-  });
-  it('formats a negative margin instead of crashing the cost page (24/10)',()=>{
-    expect(formatSignedFcfa(-13)).toBe('\u221213 FCFA');
-    expect(formatSignedFcfa(-1234.4)).toBe('\u22121\u00a0234 FCFA');
-    expect(formatSignedFcfa(2300)).toBe('2\u00a0300 FCFA');
-    expect(()=>formatFcfa(-1)).toThrow();
   });
   it('rejects invalid inputs at the pricing boundary',()=>{
     expect(()=>estimatePriceFcfa(0,'standard')).toThrow();
