@@ -3,7 +3,7 @@ import { HttpError } from '@/core/auth/guards';
 import { buildBrief } from '@/core/brief';
 import { getStoryboardModeRoute } from '@/core/providers/storyboard-routing';
 import { wanReferenceVideoProvider, klingReferenceVideoProvider, seedanceReferenceVideoProvider, safeProviderError, type ReferenceVideoProvider } from '@/core/providers/fal-reference-video';
-import { ANIMATION_PROMPT_MAX_LENGTH, buildEndKeyframePrompt, buildEndKeyframeQualityPrompt, buildKeyframeAnimationPrompt, buildKeyframePrompt, buildKeyframeQualityPrompt, buildVideoQualityPrompt, canAnimateKeyframes, needsEndKeyframe, resolveShotType, KEYFRAME_IMAGE_COST_USD, KEYFRAME_MAX_REFERENCES, KEYFRAME_QUALITY_RESERVE_USD, KEYFRAME_VIDEO_ENDPOINTS, KEYFRAME_IMAGE_ENDPOINT, KEYFRAME_VISION_ENDPOINT, keyframeVideoProviders, readKeyframe, readKeyframeQuality, selectKeyframeReferenceIds, shouldGenerateKeyframes, submitKeyframe, submitKeyframeQuality } from '@/core/providers/fal-keyframes';
+import { ANIMATION_PROMPT_MAX_LENGTH, buildEndKeyframePrompt, buildEndKeyframeQualityPrompt, buildKeyframeAnimationPrompt, buildKeyframePrompt, buildKeyframeQualityPrompt, buildVideoQualityPrompt, canAnimateKeyframes, needsEndKeyframe, resolveShotType, KEYFRAME_MAX_REFERENCES, KEYFRAME_QUALITY_RESERVE_USD, KEYFRAME_VIDEO_ENDPOINTS, KEYFRAME_IMAGE_ENDPOINT, KEYFRAME_VISION_ENDPOINT, keyframeVideoProviders, readKeyframe, readKeyframeQuality, selectKeyframeReferenceIds, shouldGenerateKeyframes, submitKeyframe, submitKeyframeQuality } from '@/core/providers/fal-keyframes';
 import { logFalStatusFailure } from '@/core/providers/fal-observability';
 import { klingVideoProvider, KLING_ENDPOINT } from '@/core/providers/fal-kling';
 import { createStorageAdminClient } from '@/core/storage/supabase';
@@ -13,6 +13,7 @@ import { createSupabaseServerClient } from '@/core/supabase/server';
 import { env } from '@/env';
 import { estimateGridPriceFcfa } from '@/core/pricing';
 import { firstObservedAt, type ProcessingMetrics } from './processing-metrics';
+import { renderSettingsFor, storedRenderSettings } from './render-settings';
 import { expandSingleShotStoryboard, holdStillInInterior, validateStoryboardCast, vehicleDescriptionForPrompt, finalVideoSeconds,  type ClipDurationSeconds, type StoryboardShot, validatePremiumTwentySecondStoryboard, validateSingleShotStoryboard, validateStoryboard, validateTierDuration } from '@/core/storyboard';
 import { assembleShotMontage, extractRepresentativeVideoFrames } from '@/core/postproduction/pipeline';
 import { MAX_MONTAGE_ATTEMPTS, montageFailureDecision } from '@/core/postproduction/montage-failure';
@@ -226,6 +227,8 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
     return buildKeyframePrompt({ shot, vehicle: vehicleDescription, lighting: shotLighting[index], format: input.format, retryReason: null, vehicleReferenceCount, hasLocationReference, excludePeople: people.excludePeople, castTitles: people.castTitles, castDescription: people.castDescription, place: shot.locationPhotoId ? placeDescriptions[shot.locationPhotoId] : undefined, market: marketLocation, steeringSide, interior: Boolean(shot.locationPhotoId && interiorPlaceIds.includes(shot.locationPhotoId)) });
   }) : [];
   const displayPrompts = keyframeMode ? keyframePrompts : prompts;
+  // Premium keyframes in 2K (0,12 USD instead of 0,08): frozen for every image, reservation and settlement of this version.
+  const render = renderSettingsFor(input.storyMode);
   const generatedSeconds = generationShots.reduce((sum, shot) => sum + shot.durationSeconds, 0);
   const maximumGeneratedSeconds = generatedSeconds * (premiumQualityMode ? 2 : 1);
   const { data: pricingSettings, error: pricingError } = await admin.from('pricing_settings')
@@ -244,12 +247,12 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
     generatedSeconds,
     videoPriceUsdPerSecond: Number(videoModel.price_usd_per_second),
     shotCount: generationShots.length,
-    keyframeImageCostUsd: keyframeMode ? KEYFRAME_IMAGE_COST_USD : 0,
+    keyframeImageCostUsd: keyframeMode ? render.keyframeImageCostUsd : 0,
     keyframeQualityCostUsd: keyframeMode ? KEYFRAME_QUALITY_RESERVE_USD : 0,
     videoQualityCostUsd: premiumQualityMode ? KEYFRAME_QUALITY_RESERVE_USD : 0,
     storyboardCostUsd: (plannedStoryboardCosts ?? []).reduce((sum, row) => sum + Number(row.cost_usd ?? 0), 0),
     endFrameCount,
-    endFrameCostUsd: KEYFRAME_IMAGE_COST_USD + KEYFRAME_QUALITY_RESERVE_USD,
+    endFrameCostUsd: render.keyframeImageCostUsd + KEYFRAME_QUALITY_RESERVE_USD,
   });
   const capCheck = env.VIDEO_COST_CAP_USD === undefined ? { ok: true as const } : checkVideoCostCap(nominalCost, env.VIDEO_COST_CAP_USD);
   if (!capCheck.ok) throw new HttpError(422, capCheck.message);
@@ -261,7 +264,7 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
     department: actor.department, status: 'generating',
   }).select('id').single();
   if (videoError || !video) throw new HttpError(500, 'Impossible de créer la vidéo. Réessayez.');
-  const storedBrief = { ...brief, storyboard: generationShots, approvedStoryboard: input.storyboard, generationTier: input.storyMode, overlayLogo: input.overlayLogo, audioAssetId: input.audioAssetId ?? null, multiClipMode: !isSingleShot, singleStoryboardMode: isSingleShot, storyMode: input.storyMode, clipDurationSeconds: input.clipDurationSeconds, finalDurationSeconds: finalVideoSeconds(input.clipDurationSeconds), purpose: input.purpose, vehicleDossierId: input.vehicleDossierId, vehiclePhotoIds: selectedVehiclePhotos.map((photo) => photo.id), keyframeReferencesByShot, placeIds: input.placeIds,  castAssets, castDescription, placeDescriptions, interiorPlaceIds, ...(marketLocation ? { marketLocation } : {}), ...(steeringSide ? { steeringSide } : {}), endFrameMode: endFrameCount > 0, promptRules: 'v3.2', ...(pricingWarning ? { pricingWarning } : {}), ...(premiumQualityMode ? { videoQualityMode: true } : {}), costPlanUsd: { ...nominalCost, capUsd: env.VIDEO_COST_CAP_USD ?? null }, shotLighting, processingMetrics: { requestedAt: new Date().toISOString() }, shotProcessingMetrics: {}, ...(input.comparisonCampaignId ? { comparisonCampaignId: input.comparisonCampaignId } : {}) };
+  const storedBrief = { ...brief, storyboard: generationShots, approvedStoryboard: input.storyboard, generationTier: input.storyMode, overlayLogo: input.overlayLogo, audioAssetId: input.audioAssetId ?? null, multiClipMode: !isSingleShot, singleStoryboardMode: isSingleShot, storyMode: input.storyMode, clipDurationSeconds: input.clipDurationSeconds, finalDurationSeconds: finalVideoSeconds(input.clipDurationSeconds), purpose: input.purpose, vehicleDossierId: input.vehicleDossierId, vehiclePhotoIds: selectedVehiclePhotos.map((photo) => photo.id), keyframeReferencesByShot, placeIds: input.placeIds,  castAssets, castDescription, placeDescriptions, interiorPlaceIds, renderSettings: render, ...(marketLocation ? { marketLocation } : {}), ...(steeringSide ? { steeringSide } : {}), endFrameMode: endFrameCount > 0, promptRules: 'v3.2', ...(pricingWarning ? { pricingWarning } : {}), ...(premiumQualityMode ? { videoQualityMode: true } : {}), costPlanUsd: { ...nominalCost, capUsd: env.VIDEO_COST_CAP_USD ?? null }, shotLighting, processingMetrics: { requestedAt: new Date().toISOString() }, shotProcessingMetrics: {}, ...(input.comparisonCampaignId ? { comparisonCampaignId: input.comparisonCampaignId } : {}) };
   const { data: version, error: versionError } = await admin.from('video_versions').insert({
     video_id: video.id, number: 1, brief_json: storedBrief, generated_prompt: displayPrompts.join('\n\n--- Plan suivant ---\n\n'),
     ai_model_id: videoModel.id, fal_credential_id: falCredential.id, status: 'queued', generation_seconds: finalVideoSeconds(input.clipDurationSeconds),
@@ -331,7 +334,7 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
         for (let attempt = 0; attempt < 1 + MAX_KEYFRAME_CORRECTIONS; attempt += 1) {
           const imageReservation = await reserveKeyframeCost(admin, {
             userId: actor.id, versionId: version.id, department: actor.department,
-            estimatedCostUsd: KEYFRAME_IMAGE_COST_USD, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA,
+            estimatedCostUsd: render.keyframeImageCostUsd, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA,
           });
           if (imageReservation.error || !imageReservation.data) throw new HttpError(503, 'Impossible de réserver le coût de création des images-clés.');
           reservations.push(imageReservation.data); imageIds.push(imageReservation.data);
@@ -354,7 +357,7 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
         }
         const endFrameIds: string[] = [];
         if (endFrameShots[index]) {
-          for (const estimatedCostUsd of [KEYFRAME_IMAGE_COST_USD, KEYFRAME_QUALITY_RESERVE_USD]) {
+          for (const estimatedCostUsd of [render.keyframeImageCostUsd, KEYFRAME_QUALITY_RESERVE_USD]) {
             const endReservation = await reserveKeyframeCost(admin, {
               userId: actor.id, versionId: version.id, department: actor.department,
               estimatedCostUsd, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA,
@@ -400,7 +403,7 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
       const imageUrls = await Promise.all(references.map((reference) => resolveFalAssetUrl(reference.path, admin, falStorage, uploads)));
       const vehicleReferenceCount = references.filter((reference) => reference.id !== place?.id && !shotCast.includes(reference.id)).length;
       if (vehicleReferenceCount !== Math.max(1, referenceIds.filter((id) => id !== shot.locationPhotoId && !shotCast.includes(id)).length)) throw new HttpError(422, 'Les références image-clé ne correspondent pas au prompt préparé.');
-      return submitKeyframe({ prompt: keyframePrompts[index], imageUrls, aspectRatio: input.format }, falCredential.apiKey);
+      return submitKeyframe({ prompt: keyframePrompts[index], imageUrls, aspectRatio: input.format, resolution: render.keyframeResolution }, falCredential.apiKey);
     }));
     let submittedKeyframes = 0;
     for (let index = 0; index < keyframeSubmissions.length; index += 1) {
@@ -529,6 +532,7 @@ async function refreshEndKeyframe(input: {
   now: string;
 }) {
   const { admin, version, shot, draft, brief, apiKey, people, now } = input;
+  const render = storedRenderSettings(brief);
   const status = String(shot.end_keyframe_status ?? 'skipped');
   if (!['queued', 'generating', 'checking'].includes(status)) return;
   const shotNumber = Number(shot.shot_number);
@@ -543,7 +547,7 @@ async function refreshEndKeyframe(input: {
   const startedAt = typeof shot.updated_at === 'string' ? new Date(shot.updated_at).getTime() : Date.now();
   if (status !== 'queued' && Date.now() - startedAt > END_KEYFRAME_TIMEOUT_MS) {
     // Conservative settlement: an image job that never answered is assumed billed.
-    await giveUp('Délai dépassé pour l’image de fin.', status === 'generating' ? [charge(imageLedgerId, KEYFRAME_IMAGE_COST_USD), release(qualityLedgerId)] : [charge(qualityLedgerId, KEYFRAME_QUALITY_RESERVE_USD)]);
+    await giveUp('Délai dépassé pour l’image de fin.', status === 'generating' ? [charge(imageLedgerId, render.keyframeImageCostUsd), release(qualityLedgerId)] : [charge(qualityLedgerId, KEYFRAME_QUALITY_RESERVE_USD)]);
     return;
   }
   const startUrl = typeof shot.keyframe_path === 'string'
@@ -557,13 +561,13 @@ async function refreshEndKeyframe(input: {
   if (status === 'queued') {
     const prompt = buildEndKeyframePrompt({ shot: draft, durationS: Number(shot.duration_seconds), format: String(brief.format ?? '16:9'), excludePeople: people.excludePeople, castTitles: people.castTitles, castDescription: people.castDescription, ...placeForShot(brief, draft) });
     try {
-      const job = await submitKeyframe({ prompt, imageUrls: [startUrl, input.vehicleUrl], aspectRatio: String(brief.format ?? '16:9') }, apiKey);
+      const job = await submitKeyframe({ prompt, imageUrls: [startUrl, input.vehicleUrl], aspectRatio: String(brief.format ?? '16:9'), resolution: render.keyframeResolution }, apiKey);
       const { error } = await update({ end_keyframe_status: 'generating', end_keyframe_request_id: job.requestId });
-      if (error) await giveUp(`Identifiant de l’image de fin non enregistré (request_id=${job.requestId}).`, [charge(imageLedgerId, KEYFRAME_IMAGE_COST_USD), release(qualityLedgerId)]);
+      if (error) await giveUp(`Identifiant de l’image de fin non enregistré (request_id=${job.requestId}).`, [charge(imageLedgerId, render.keyframeImageCostUsd), release(qualityLedgerId)]);
     } catch (cause) {
       const statusCode = falErrorStatusCode(cause);
       const uncertain = statusCode === null || statusCode >= 500;
-      await giveUp(`fal n’a pas accepté l’image de fin : ${safeProviderError(cause, apiKey)}`, [uncertain ? charge(imageLedgerId, KEYFRAME_IMAGE_COST_USD) : release(imageLedgerId), release(qualityLedgerId)]);
+      await giveUp(`fal n’a pas accepté l’image de fin : ${safeProviderError(cause, apiKey)}`, [uncertain ? charge(imageLedgerId, render.keyframeImageCostUsd) : release(imageLedgerId), release(qualityLedgerId)]);
     }
     return;
   }
@@ -573,7 +577,7 @@ async function refreshEndKeyframe(input: {
     try { state = await readKeyframe(shot.end_keyframe_request_id, apiKey); } catch { return; /* network blip: next poll, bounded by the timeout */ }
     if (state.status === 'generating') return;
     if (state.status === 'failed') { await giveUp('fal a déclaré l’image de fin en échec.', [release(imageLedgerId), release(qualityLedgerId)]); return; }
-    await charge(imageLedgerId, KEYFRAME_IMAGE_COST_USD);
+    await charge(imageLedgerId, render.keyframeImageCostUsd);
     const parsed = acceptedFalUrl(state.imageUrl);
     if (!parsed) { await giveUp('URL de l’image de fin non autorisée.', [release(qualityLedgerId)]); return; }
     try {
@@ -694,7 +698,7 @@ async function refreshKeyframes(input: {
       const retryPatch = { ...patch, keyframe_status: 'generating', keyframe_endpoint: KEYFRAME_IMAGE_ENDPOINT, keyframe_quality_request_id: null, keyframe_quality_endpoint: null, keyframe_path: null, keyframe_retry_count: nextAttempt, revision_request_id: null, revision_ledger_id: null, provider_poll_failure_count: 0, provider_next_poll_at: null, provider_last_poll_error: null };
       let retryRequestId: string | null = null;
       try {
-        const retryJob = await submitKeyframe({ prompt, imageUrls: referenceUrls, aspectRatio: String(brief.format ?? '16:9') }, apiKey);
+        const retryJob = await submitKeyframe({ prompt, imageUrls: referenceUrls, aspectRatio: String(brief.format ?? '16:9'), resolution: storedRenderSettings(brief).keyframeResolution }, apiKey);
         retryRequestId = retryJob.requestId;
         const { error: updateError } = await updateShot({ ...retryPatch, keyframe_request_id: retryJob.requestId });
         if (updateError) throw new HttpError(503, 'Impossible d’enregistrer la reprise de l’image-clé.');
@@ -780,7 +784,7 @@ async function refreshKeyframes(input: {
       if (state.status === 'generating') return;
       const parsed = acceptedFalUrl(state.imageUrl);
       if (!parsed) throw new HttpError(502, `L’URL de l’image-clé ${shotNumber} n’est pas autorisée.`);
-      await settleUsageCost(admin, { entryId: imageLedgerId, outcome: 'charged', actualCostUsd: KEYFRAME_IMAGE_COST_USD, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA, billable: false });
+      await settleUsageCost(admin, { entryId: imageLedgerId, outcome: 'charged', actualCostUsd: storedRenderSettings(brief).keyframeImageCostUsd, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA, billable: false });
       const response = await fetch(parsed, { signal: AbortSignal.timeout(30000), redirect: 'error' });
       if (!response.ok) throw new HttpError(502, `Impossible de récupérer l’image-clé ${shotNumber}.`);
       const bytes = await readBoundedImage(response, MAX_IMAGE_BYTES);

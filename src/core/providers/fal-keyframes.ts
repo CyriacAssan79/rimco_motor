@@ -465,11 +465,11 @@ function fal(apiKey: string) {
   return createFalClient({ credentials: apiKey });
 }
 
-export async function submitKeyframe(input: { prompt: string; imageUrls: string[]; aspectRatio: string }, apiKey: string) {
+export async function submitKeyframe(input: { prompt: string; imageUrls: string[]; aspectRatio: string; resolution?: '1K' | '2K' }, apiKey: string) {
   if (!input.imageUrls.length || input.imageUrls.length > 14) throw new Error('La création d’une image-clé exige entre 1 et 14 références.');
   const result = await fal(apiKey).queue.submit(KEYFRAME_IMAGE_ENDPOINT, { input: {
     prompt: input.prompt, image_urls: input.imageUrls, aspect_ratio: input.aspectRatio as '16:9' | '9:16' | '1:1' | '4:5',
-    output_format: 'png', resolution: '1K', num_images: 1, limit_generations: true,
+    output_format: 'png', resolution: input.resolution ?? '1K', num_images: 1, limit_generations: true,
   } });
   return { requestId: result.request_id };
 }

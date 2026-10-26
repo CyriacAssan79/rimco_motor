@@ -1,5 +1,13 @@
 # Décisions
 
+## Images clés Premium en 2K (2026-10-26)
+
+- **Demande du responsable** : remettre la résolution 2K du Premium (étape 4 du 24/10), sans le reste de cette étape.
+- **Ce qui change** : en Premium, Nano Banana 2 produit les images clés (et les images de fin) en 2K au lieu de 1K. C’est la base de chaque plan : badges, calandre et jantes plus nets avant l’animation. Standard et Pro restent en 1K.
+- **Coût** : 0,12 USD par image au lieu de 0,08 (page fal du 24/10 : « 2K … 1.5 times the standard rate »), soit +0,16 USD par vidéo Premium de 4 plans, jusqu’à +0,48 USD avec les 2 corrections par plan de la boucle. Le prix client ne change pas (14 000 FCFA).
+- **Coûts justes** : la résolution et son prix sont figés dans `brief_json.renderSettings` au lancement (`src/core/versions/render-settings.ts`) et relus pour chaque image, réservation, facturation et relance humaine. Les versions créées avant restent en 1K à 0,08 USD.
+- **Non repris** : clips Seedance en 1080p (+13,80 USD par vidéo, au-dessus du prix de vente ; disponibilité à confirmer chez fal) et juges plus stricts en Premium.
+
 ## Boucle de vérification : réalisateur, deux vérificateurs, décision humaine (2026-10-25)
 
 Architecture visée par le responsable : brief → réalisateur (découpage) → images clés (Nano Banana) → **vérificateur** (porte les contraintes ; si le script ou une image a un souci, retour au réalisateur) → choix du modèle → plans vidéo → montage. Décisions du responsable : **2 corrections au plus** par plan ; plan encore refusé = **pause pour décision humaine** ; orchestrateur **automatique par plan dans le niveau choisi** (étape suivante, non livrée ici).
