@@ -18,6 +18,7 @@ import { deleteVersionsByVideoIds } from '@/core/versions/store';
 import { aggregateGenerationCost } from '@/core/billing/aggregate';
 import { castDescriptionSchema, MAX_CAST_PER_VIDEO, isTierDurationSupported, photoFidelityShotSchema, singleShotStoryboardSchema, storyboardSchema, validatePhotoFidelityPlan, validatePremiumTwentySecondStoryboard, validateSingleShotStoryboard, validateStoryboard } from '@/core/storyboard';
 import { createLiveStoryboard } from '@/core/versions/storyboard-live';
+import { assertStoryboardSignature } from '@/core/storyboard-signature';
 import { createLivePhotoFidelity } from '@/core/versions/photo-fidelity';
 import { getStoryboardModeRoute } from '@/core/providers/storyboard-routing';
 import { resolveGenerationTier } from '@/core/versions/generation-tier';
@@ -38,6 +39,8 @@ const multiClipSchema = requestSchema.extend({
   storyboard: storyboardSchema,
   castAssetIds: z.array(z.string().uuid()).max(MAX_CAST_PER_VIDEO).default([]),
   castDescription: castDescriptionSchema.default(''),
+  /** 26/10: signature of /api/storyboard/suggest; without it the storyboard is refused. */
+  storyboardSignature: z.string().max(200).optional(),
 }).strict().refine((input) => input.clipDurationSeconds >= 10 || input.placeIds.length <= 1, {
   message: 'Une seule référence de lieu est autorisée pour une vidéo de moins de 10 secondes.',
   path: ['placeIds'],
@@ -53,6 +56,7 @@ const singleStoryboardSchema = requestSchema.extend({
   storyboard: singleShotStoryboardSchema,
   castAssetIds: z.array(z.string().uuid()).max(MAX_CAST_PER_VIDEO).default([]),
   castDescription: castDescriptionSchema.default(''),
+  storyboardSignature: z.string().max(200).optional(),
 }).strict().refine((input) => input.placeIds.length <= 1, {
   message: 'Une vidéo en un seul plan utilise un seul lieu.',
   path: ['placeIds'],
@@ -177,6 +181,8 @@ export async function POST(request: Request) {
     }
     if (payload && typeof payload === 'object' && 'workflow' in payload && payload.workflow === 'single_storyboard') {
       const single = singleStoryboardSchema.parse(payload);
+      // 26/10: the texts of the shots go into the generator prompts: only the storyboard signed by the director's route.
+      assertStoryboardSignature(single.storyboardSignature, { storyboard: single.storyboard, castDescription: single.castDescription, context: { userId: actor.id, vehicleDossierId: single.vehicleDossierId, workflow: 'single', mode: single.storyMode, durationSeconds: single.clipDurationSeconds, format: single.format } });
       if (!isTierDurationSupported(single.storyMode, single.clipDurationSeconds)) throw new HttpError(422, 'Le niveau Premium est disponible uniquement en 20 secondes.');
       if (single.storyMode === 'premium') throw new HttpError(422, 'Le niveau Premium utilise quatre plans de 5 secondes, pas un plan unique.');
       validateSingleShotStoryboard(single.storyboard, single.clipDurationSeconds, getStoryboardModeRoute(single.storyMode).adapterFamily);
@@ -188,6 +194,7 @@ export async function POST(request: Request) {
     }
     if (payload && typeof payload === 'object' && 'workflow' in payload && payload.workflow === 'multi_clip') {
       const multi = multiClipSchema.parse(payload);
+      assertStoryboardSignature(multi.storyboardSignature, { storyboard: multi.storyboard, castDescription: multi.castDescription, context: { userId: actor.id, vehicleDossierId: multi.vehicleDossierId, workflow: 'multi_clip', mode: multi.storyMode, durationSeconds: multi.clipDurationSeconds, format: multi.format } });
       if (!isTierDurationSupported(multi.storyMode, multi.clipDurationSeconds)) throw new HttpError(422, 'Le niveau Premium est disponible uniquement en 20 secondes.');
       if (multi.storyMode === 'premium') validatePremiumTwentySecondStoryboard(multi.storyboard);
       validateStoryboard(multi.storyboard, multi.clipDurationSeconds, getStoryboardModeRoute(multi.storyMode).adapterFamily);

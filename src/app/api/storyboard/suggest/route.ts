@@ -4,15 +4,19 @@ import { errorResponse, getActor, HttpError } from '@/core/auth/guards';
 import { createSupabaseServerClient } from '@/core/supabase/server';
 import { createStorageAdminClient } from '@/core/storage/supabase';
 import { env } from '@/env';
-import { buildDirectorUserPrompt, buildSingleShotStoryboardInstruction, castDescriptionSchema, interiorShotIssue, MAX_CAST_PER_VIDEO, validateStoryboardCast, vehicleDescriptionForPrompt, buildStoryboardInstruction, isTierDurationSupported, singleShotStoryboardSchema, storyboardDurationIssue, storyboardSchema, validatePremiumTwentySecondStoryboard, validateSingleShotStoryboard, validateStoryboard, type ClipDurationSeconds, type StoryboardShot } from '@/core/storyboard';
+import { buildDirectorUserPrompt, buildSingleShotStoryboardInstruction, castDescriptionSchema, interiorShotIssue, peopleShotsIssue, MAX_CAST_PER_VIDEO, validateStoryboardCast, vehicleDescriptionForPrompt, buildStoryboardInstruction, isTierDurationSupported, singleShotStoryboardSchema, storyboardDurationIssue, storyboardSchema, validatePremiumTwentySecondStoryboard, validateSingleShotStoryboard, validateStoryboard, type ClipDurationSeconds, type StoryboardShot } from '@/core/storyboard';
 import { getStoryboardModeRoute } from '@/core/providers/storyboard-routing';
 import { buildFalLlmInput, createFalLlmProvider, FalLlmBriefError, llmReservationUsd } from '@/core/providers/fal-llm';
 import { createFalClient } from '@fal-ai/client';
 import { getActiveFalCredential } from '@/core/providers/fal-credential-vault';
 import { reserveLlmCost, settleUsageCost } from '@/core/billing/ledger';
-import { findCuratedLocation, placeDescription, placeTimeOfDay } from '@/core/assets/location-catalog';
+import { findSelectableLocation, placeDescription, placeProfileFor, placeTimeOfDay } from '@/core/assets/location-catalog';
+import { buildMotionMatrix, fitShotToMatrix, loadPlaceProfiles, vehicleViewOf, motionMatrixIssue, PLACE_PROFILE_COLUMNS } from '@/core/motion/place-motion';
 import { BRAND_SETTINGS_COLUMNS, loadBrandSettings } from '@/core/brand-market';
 import { peoplePresetIds } from '@/core/people-presets';
+import { detectBriefConflicts, forbiddenShotsIssue, mergeBriefConflicts } from '@/core/brief/conflicts';
+import { signStoryboard, storyboardSigningKey } from '@/core/storyboard-signature';
+import { onlyCatalogLighting, onlyCatalogMood } from '@/core/scenes/prompt-values';
 import { estimateGridPriceFcfa } from '@/core/pricing';
 import { storyboardDirectionSchema } from '@/core/storyboard-direction';
 
@@ -30,11 +34,14 @@ const requestSchema = z.object({
   character: z.string().trim().max(160).default(''),
   /** Studio « Personnage » choice, ignored when a casting is selected. */
   peoplePreset: z.enum(peoplePresetIds).default('none'),
-  lighting: z.string().trim().max(160).default(''),
-  mood: z.string().trim().max(160).default(''),
+  // 26/10: only the Studio catalogue values reach the director; anything else is ignored without error.
+  lighting: z.string().trim().max(160).default('').transform(onlyCatalogLighting),
+  mood: z.string().trim().max(160).default('').transform(onlyCatalogMood),
   castAssetIds: z.array(z.string().uuid()).max(MAX_CAST_PER_VIDEO).default([]),
 });
-const singleShotStoryboardResponseSchema = z.object({ castDescription: castDescriptionSchema.optional(), shots: singleShotStoryboardSchema }).strict();
+/** 26/10: the brief requests the director set aside or adapted (French, shown to the user before launch; cleaned later). */
+const briefConflictsSchema = z.array(z.string().max(400)).max(10).optional();
+const singleShotStoryboardResponseSchema = z.object({ briefConflicts: briefConflictsSchema, castDescription: castDescriptionSchema.optional(), shots: singleShotStoryboardSchema }).strict();
 
 export async function POST(request: Request) {
   const referenceId = crypto.randomUUID();
@@ -56,6 +63,8 @@ export async function POST(request: Request) {
       }, { status: 422 });
     }
     const input = parsedInput.data;
+    // 26/10: checked before any paid call: without the key no storyboard can be signed, so none could be launched.
+    const signingKey = storyboardSigningKey();
     if (!isTierDurationSupported(input.mode, input.durationSeconds)) throw new HttpError(422, 'Le niveau Premium est disponible uniquement en 20 secondes.');
     if (input.mode === 'premium' && input.workflow !== 'multi_clip') throw new HttpError(422, 'Le niveau Premium utilise quatre plans de 5 secondes.');
     const premiumTwentySecond = input.workflow === 'multi_clip' && input.mode === 'premium' && input.durationSeconds === 20;
@@ -75,7 +84,7 @@ export async function POST(request: Request) {
 
     let places: Array<{ id: string; title: string | null; category: string | null; path: string }> = [];
     if (input.placeIds.length) {
-      const curated = input.placeIds.map(findCuratedLocation).filter((place) => place !== undefined);
+      const curated = input.placeIds.map(findSelectableLocation).filter((place) => place !== undefined);
       const curatedIds = new Set<string>(curated.map((place) => place.id));
       const uploadedIds = input.placeIds.filter((id) => !curatedIds.has(id));
       const { data, error } = uploadedIds.length ? await supabase.from('assets').select('id,title,category,path,kind,status,brand_id')
@@ -101,17 +110,24 @@ export async function POST(request: Request) {
     const selectedPlaces = places;
     // Aucun plan 100 % IA : chaque plan est tourné dans un lieu choisi par l’utilisateur (sinon le moteur invente une ville).
     if (!selectedPlaces.length) throw new HttpError(422, 'Choisissez au moins un lieu dans la médiathèque : chaque plan est tourné dans un lieu sélectionné.');
-    const { marketLocation } = await loadBrandSettings(supabase.from('brands').select(BRAND_SETTINGS_COLUMNS).eq('id', actor.brandId).maybeSingle());
+    // 26/10 motion matrix: what each place and photo allow, given to the director and checked on its answer.
+    const uploadedPlaceIds = selectedPlaces.filter((place) => !findSelectableLocation(place.id)).map((place) => place.id);
+    const uploadedProfiles = await loadPlaceProfiles(uploadedPlaceIds.length ? supabase.from('assets').select(PLACE_PROFILE_COLUMNS).in('id', uploadedPlaceIds) : Promise.resolve({ data: [], error: null }));
+    const motionMatrix = buildMotionMatrix(selectedPlaces.map((place) => ({ id: place.id, ...placeProfileFor({ ...place, place_profile: uploadedProfiles[place.id] }) })), selectedVehicle);
+    const { marketLocation, trafficSide, steeringSide } = await loadBrandSettings(supabase.from('brands').select(BRAND_SETTINGS_COLUMNS).eq('id', actor.brandId).maybeSingle());
     const instructionInput = {
       durationSeconds: input.durationSeconds,
       vehicle: vehicleDescriptionForPrompt(dossier),
       vehiclePhotos: selectedVehicle.map((photo) => ({ id: photo.id, role: photo.photo_role ?? 'exterior', title: photo.title ?? 'Photo véhicule', angle: photo.angle })),
-      places: selectedPlaces.map((place) => ({ id: place.id, title: place.title ?? 'Lieu', category: place.category, timeOfDay: placeTimeOfDay(place), description: placeDescription(place) })),
+      places: selectedPlaces.map((place) => ({ id: place.id, title: place.title ?? 'Lieu', category: place.category, timeOfDay: motionMatrix.places[place.id]?.timeOfDay ?? placeTimeOfDay(place), description: placeDescription({ ...place, profile: motionMatrix.places[place.id] }) })),
       purpose: input.purpose, direction: input.direction, format: input.format,
       character: input.character, lighting: input.lighting, mood: input.mood,
       cast,
       peoplePreset: cast.length ? 'none' as const : input.peoplePreset,
       marketLocation,
+      trafficSide,
+      steeringSide,
+      motionMatrix,
     };
     const instruction = input.workflow === 'single'
       ? buildSingleShotStoryboardInstruction({ ...instructionInput, mode: input.mode })
@@ -121,6 +137,7 @@ export async function POST(request: Request) {
     const directorUserPrompt = buildDirectorUserPrompt(input.direction);
     let shots: StoryboardShot[];
     let castDescription = '';
+    let directorConflicts: string[] = [];
     let storyboardLedgerId: string | null = null;
     let storyboardCostUsd = 0;
     let totalEstimatedPriceFcfa: number | null = null;
@@ -128,9 +145,8 @@ export async function POST(request: Request) {
       const total = input.durationSeconds;
       const durations = input.workflow === 'single'
         ? [total]
-        : input.mode === 'standard' ? Array.from({ length: total / 5 }, () => 5)
-            : premiumTwentySecond ? [5, 5, 5, 5]
-          : total === 10 ? [5, 5] : total === 15 ? [8, 7] : [10, 10];
+        // 26/10: shots of 5 s on every tier (architecture: 3 to 5 s per shot).
+        : Array.from({ length: total / 5 }, () => 5);
       const premiumTitles = ['Décor et révélation', 'Suivi trois-quarts', 'Détail du véhicule', 'Plan héros'];
       const premiumActions = ['Le véhicule apparaît dans le lieu choisi.', 'La caméra suit le véhicule de façon fluide.', 'Un détail visible sur les photos devient le sujet du plan.', 'Le véhicule s’immobilise dans un cadrage trois-quarts élégant.'];
       const premiumCreative = premiumTwentySecond;
@@ -148,8 +164,12 @@ export async function POST(request: Request) {
         vehiclePhotoId: selectedVehicle[index % selectedVehicle.length].id,
         locationPhotoId: selectedPlaces[index % Math.max(1, selectedPlaces.length)]?.id ?? null,
       }));
-      shots = input.workflow === 'single' ? singleShotStoryboardSchema.parse(drafts) : storyboardSchema.parse(drafts);
-      if (!cast.length && input.peoplePreset !== 'none') castDescription = 'Adult driver in their thirties, warm brown skin, short black hair, white shirt and navy trousers.';
+      shots = (input.workflow === 'single' ? singleShotStoryboardSchema.parse(drafts) : storyboardSchema.parse(drafts)).map((shot) => fitShotToMatrix(shot, motionMatrix));
+      if (!cast.length && input.peoplePreset !== 'none') {
+        castDescription = 'Adult driver in their thirties, warm brown skin, short black hair, white shirt and navy trousers.';
+        // Simulation: the people appear from the second shot on (or in the single shot).
+        shots = shots.map((shot, index) => ({ ...shot, withPeople: index > 0 || shots.length === 1 }));
+      }
       totalEstimatedPriceFcfa = 0;
     } else {
       const admin = createStorageAdminClient();
@@ -172,23 +192,25 @@ export async function POST(request: Request) {
         });
         // Without a sheet the people would be dropped at generation (patch v3.2, F9): a requested « Personnage » needs one.
         const peopleSheetIssue = (sheet: string | undefined) => !cast.length && input.peoplePreset !== 'none' && !sheet ? 'castDescription est obligatoire : décris les personnes demandées.' : null;
-        const interiorPlaceIds = selectedPlaces.filter((place) => placeTimeOfDay(place) === 'interior').map((place) => place.id);
+        const peopleShots = (shots: StoryboardShot[], sheet: string | undefined) => cast.length ? null : peopleShotsIssue(shots, sheet);
+        const interiorPlaceIds = Object.entries(motionMatrix.places).filter(([, profile]) => profile.timeOfDay === 'interior').map(([id]) => id);
         const placeIssue = (shots: StoryboardShot[]) => shots.some((shot) => !shot.locationPhotoId) ? 'Chaque plan doit avoir un locationPhotoId choisi parmi les lieux listés.' : null;
         const responseSchema = input.workflow === 'single'
           ? singleShotStoryboardResponseSchema.superRefine(({ shots, castDescription: sheet }, context) => {
-              const issue = [placeIssue(shots), interiorShotIssue(shots, interiorPlaceIds), peopleSheetIssue(sheet)].filter(Boolean).join(' ');
+              const issue = [placeIssue(shots), interiorShotIssue(shots, interiorPlaceIds), motionMatrixIssue(shots, motionMatrix), forbiddenShotsIssue(shots), peopleSheetIssue(sheet), peopleShots(shots, sheet)].filter(Boolean).join(' ');
               if (issue) context.addIssue({ code: 'custom', path: ['shots'], message: issue });
             })
           // Patch v3.2 (A5): wrong durations make the answer invalid (automatic corrected retry), never silently rewritten.
-          : z.object({ castDescription: castDescriptionSchema.optional(), shots: storyboardSchema }).strict().superRefine(({ shots, castDescription: sheet }, context) => {
+          : z.object({ briefConflicts: briefConflictsSchema, castDescription: castDescriptionSchema.optional(), shots: storyboardSchema }).strict().superRefine(({ shots, castDescription: sheet }, context) => {
               const issue = [premiumTwentySecond
                 ? shots.length === 4 && shots.every((shot) => shot.durationSeconds === 5) ? null : 'Exactement 4 plans de 5 secondes.'
-                : storyboardDurationIssue(shots, input.durationSeconds, route.adapterFamily), placeIssue(shots), interiorShotIssue(shots, interiorPlaceIds), peopleSheetIssue(sheet)].filter(Boolean).join(' ');
+                : storyboardDurationIssue(shots, input.durationSeconds, route.adapterFamily), placeIssue(shots), interiorShotIssue(shots, interiorPlaceIds), motionMatrixIssue(shots, motionMatrix), forbiddenShotsIssue(shots), peopleSheetIssue(sheet), peopleShots(shots, sheet)].filter(Boolean).join(' ');
               if (issue) context.addIssue({ code: 'custom', path: ['shots'], message: issue });
             });
         // Layer 1 (locked rules + approved references) goes in the system prompt; layer 2 (user brief) is the only user content.
         const result = await provider.buildStoryboardWithCost(directorUserPrompt, responseSchema, directorSystemPrompt);
         shots = result.fields.shots;
+        directorConflicts = result.fields.briefConflicts ?? [];
         castDescription = cast.length ? '' : result.fields.castDescription ?? '';
         storyboardCostUsd = result.costUsd ?? (env.LLM_MAX_COST_USD ?? 0) * result.completedRequests;
         totalEstimatedPriceFcfa = estimateGridPriceFcfa(input.durationSeconds, input.mode, {
@@ -214,8 +236,9 @@ export async function POST(request: Request) {
       }
     }
     // Without a selected casting, castIds are meaningless: drop them instead of failing the storyboard.
+    // With a casting, withPeople is meaningless (castIds says who is visible).
     if (!cast.length) shots = shots.map((shot) => { const rest = { ...shot }; delete rest.castIds; return rest; });
-    else if (env.PROVIDERS_MODE === 'mock') shots = shots.map((shot) => ({ ...shot, castIds: cast.map((member) => member.id) }));
+    else shots = shots.map((shot) => { const rest = { ...shot }; delete rest.withPeople; return env.PROVIDERS_MODE === 'mock' ? { ...rest, castIds: cast.map((member) => member.id) } : rest; });
     validateStoryboardCast(shots, cast.map((member) => member.id));
     if (input.workflow === 'single') validateSingleShotStoryboard(shots, input.durationSeconds as ClipDurationSeconds, route.adapterFamily);
     else if (premiumTwentySecond) validatePremiumTwentySecondStoryboard(shots);
@@ -225,7 +248,14 @@ export async function POST(request: Request) {
     if (shots.some((shot) => !vehicleIds.has(shot.vehiclePhotoId) || (shot.locationPhotoId && !placeIds.has(shot.locationPhotoId)))) {
       throw new HttpError(422, 'Le storyboard référence une image non autorisée. Régénérez la proposition.');
     }
-    return NextResponse.json({ storyboard: shots, castDescription, prompt: `${directorSystemPrompt}\n\n${directorUserPrompt}`, mode: input.mode, durationSeconds: input.durationSeconds, finalVideoSeconds: input.durationSeconds + 2, storyboardLedgerId, storyboardCostUsd, storyboardCostFcfa: Math.round(storyboardCostUsd * env.USD_TO_EUR_RATE * env.EUR_TO_FCFA * 1.3), totalEstimatedPriceFcfa });
+    // 26/10: what the brief asked that the rules forbid (director + closed list in the code), shown before launch.
+    const briefConflicts = mergeBriefConflicts(directorConflicts, detectBriefConflicts(input.direction, {
+      placeTimes: selectedPlaces.map((place) => motionMatrix.places[place.id]?.timeOfDay ?? null),
+      hasInteriorPhoto: selectedVehicle.some((photo) => vehicleViewOf(photo).angle === 'interior'),
+    }));
+    // The launch route accepts only this exact storyboard (and people sheet), for this user and these choices.
+    const storyboardSignature = signStoryboard({ storyboard: shots, castDescription, context: { userId: actor.id, vehicleDossierId: input.vehicleDossierId, workflow: input.workflow, mode: input.mode, durationSeconds: input.durationSeconds, format: input.format } }, signingKey);
+    return NextResponse.json({ storyboard: shots, castDescription, briefConflicts, storyboardSignature, prompt: `${directorSystemPrompt}\n\n${directorUserPrompt}`, mode: input.mode, durationSeconds: input.durationSeconds, finalVideoSeconds: input.durationSeconds + 2, storyboardLedgerId, storyboardCostUsd, storyboardCostFcfa: Math.round(storyboardCostUsd * env.USD_TO_EUR_RATE * env.EUR_TO_FCFA * 1.3), totalEstimatedPriceFcfa });
   } catch (error) {
     if (error instanceof HttpError) return errorResponse(error);
     if (error instanceof z.ZodError) {

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { vehicleCategories } from '@/core/scenes/catalog';
+import { lightingSentence, moodForPrompt } from '@/core/scenes/prompt-values';
 import { MAX_STORYBOARD_DIRECTION_LENGTH } from '@/core/storyboard-direction';
 
 export const briefSchema = z.object({
@@ -55,5 +56,5 @@ export function briefToPrompt(brief: Brief, family: string): string {
     : brief.complexity === 'balanced'
       ? 'Balanced complexity: two closely related visual beats with one camera move; preserve an uncluttered background.'
       : 'Higher complexity: up to three coordinated visual beats, all physically plausible and within the same location and continuous camera take.';
-  return `Create a ${brief.duration_s}-second ${brief.format} image-to-video commercial. Keep the vehicle exactly faithful to the provided reference photo: ${brief.vehicle_description}. Vehicle category: ${brief.vehicle_category}. Location: ${brief.location || brief.setting || 'modern urban architecture'}. Setting: ${brief.setting || 'clean, uncluttered surroundings'}. Vehicle action: ${brief.vehicle_action}. Character: ${character}. Lighting: ${brief.lighting}. Camera: ${brief.camera_movement}. Mood: ${brief.mood}. Creative direction: ${brief.creative_direction || 'A polished, realistic automotive shot that follows the selected scene.'}. Additional user direction: ${brief.user_direction || 'none; do not contradict the selected scene'}. ${pacing} ${complexity} Use one continuous shot, a simple composition, natural people only if explicitly selected, and about 90% blue and 10% red tones. ${cameraGuidance} Do not alter the vehicle identity, model, proportions, or paint.`;
+  return `Create a ${brief.duration_s}-second ${brief.format} image-to-video commercial. Keep the vehicle exactly faithful to the provided reference photo: ${brief.vehicle_description}. Vehicle category: ${brief.vehicle_category}. Location: ${brief.location || brief.setting || 'modern urban architecture'}. Setting: ${brief.setting || 'clean, uncluttered surroundings'}. Vehicle action: ${brief.vehicle_action}. Character: ${character}. Lighting: ${lightingSentence(brief.lighting)}. Camera: ${brief.camera_movement}. Mood: ${moodForPrompt(brief.mood) || 'confident'}. Creative direction: ${brief.creative_direction || 'A polished, realistic automotive shot that follows the selected scene.'}. Additional user direction: ${brief.user_direction || 'none; do not contradict the selected scene'}. ${pacing} ${complexity} Use one continuous shot, a simple composition, natural people only if explicitly selected, and about 90% blue and 10% red tones. ${cameraGuidance} Do not alter the vehicle identity, model, proportions, or paint.`;
 }

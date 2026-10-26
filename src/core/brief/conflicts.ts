@@ -1,0 +1,86 @@
+import type { PlaceTimeOfDay } from '@/core/motion/place-motion';
+import type { StoryboardShot } from '@/core/storyboard';
+
+/**
+ * Brief conflicts (26/10): what the user asked that the locked rules forbid. The director lists them (French, one
+ * sentence each); this closed list, checkable without AI, adds the ones it forgot and alone provides them in
+ * simulation. Shown to the user before the video is paid; never sent to the generators or the judges.
+ */
+export const MAX_BRIEF_CONFLICTS = 5;
+const CONFLICT_MAX_CHARS = 200;
+
+const plain = (value: string) => value.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+/** Word match on accent-free text (« dérapage » → « derapage »). */
+const word = (pattern: string) => new RegExp(`(?<![a-z])(?:${pattern})(?![a-z])`);
+
+type BriefContext = { placeTimes: Array<PlaceTimeOfDay | null>; hasInteriorPhoto: boolean };
+type ConflictRule = { id: string; keywords: RegExp; applies?: (text: string, context: BriefContext) => boolean; message: string };
+
+const NIGHT = word('nuit|nocturne|night|soir|soiree');
+const DAY = word('plein jour|en journee|grand soleil|sunny|daylight|en matinee|le matin');
+
+const RULES: ConflictRule[] = [
+  { id: 'drift', keywords: word('drift\\w*|derap\\w*|burn ?out|donut\\w*|tete.a.queue|glisse\\w*|frein a main|skid\\w*'), message: 'Drift ou dérapage demandé : remplacé par une conduite dynamique et légale qui garde l’énergie de la scène.' },
+  { id: 'speed', keywords: word('course|rallye|racing|race|pleine vitesse|a fond|tres vite|exces de vitesse'), message: 'Vitesse excessive demandée : remplacée par une vitesse soutenue et légale, sur route dégagée seulement.' },
+  { id: 'text', keywords: word('logo\\w*|slogan\\w*|texte\\w*|ecrit\\w*|inscription\\w*|lettrage|banniere\\w*|affiche\\w*|tag\\w*|graffiti\\w*'), message: 'Texte ou logo à l’image demandé : aucun texte n’est généré dans la scène ; le logo RIMCO est ajouté au montage.' },
+  {
+    id: 'night', keywords: NIGHT,
+    applies: (_text, context) => context.placeTimes.length > 0 && context.placeTimes.every((time) => time === 'day' || time === 'golden' || time === 'interior'),
+    message: 'Scène de nuit demandée : les lieux choisis sont de jour, la lumière suit le lieu.',
+  },
+  {
+    id: 'day', keywords: DAY,
+    applies: (text, context) => !NIGHT.test(text) && context.placeTimes.length > 0 && context.placeTimes.every((time) => time === 'night'),
+    message: 'Scène de jour demandée : les lieux choisis sont de nuit, la lumière suit le lieu.',
+  },
+  {
+    id: 'interior', keywords: word('habitacle|tableau de bord|cockpit|interieur de la voiture|interieur du vehicule|sieges?'),
+    applies: (_text, context) => !context.hasInteriorPhoto,
+    message: 'Plan intérieur demandé sans photo d’habitacle validée : remplacé par des plans extérieurs.',
+  },
+  {
+    id: 'showroom', keywords: word('showroom'),
+    applies: (text, context) => context.placeTimes.includes('interior') && word('roule\\w*|entre dans|entrer|rentre\\w*|arrive\\w*|sort\\w*|drive\\w*|traverse\\w*').test(text),
+    message: 'Voiture en mouvement dans le showroom demandée : en showroom la voiture reste immobile, seule la caméra bouge.',
+  },
+];
+
+/** Conflicts found by the code in the user brief (closed list), most specific first. */
+export function detectBriefConflicts(brief: string, context: BriefContext): Array<{ id: string; message: string }> {
+  const text = plain(brief);
+  return RULES.filter((rule) => rule.keywords.test(text) && (rule.applies?.(text, context) ?? true)).map(({ id, message }) => ({ id, message }));
+}
+
+/** Model output shown to the user: plain text, bounded. */
+export function cleanConflict(value: string): string {
+  const text = value.replace(/[<>{}[\]`]/g, ' ').replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return text.length > CONFLICT_MAX_CHARS ? `${text.slice(0, CONFLICT_MAX_CHARS - 1).replace(/[ ,;:.]+[^ ]*$/, '')}…` : text;
+}
+
+/** Words that show the director already reported a rule (no duplicate of the code's sentence). */
+const RULE_MENTIONS: Record<string, RegExp> = {
+  drift: /drift|derap/, speed: /vitesse|course|rallye/, text: /texte|logo|slogan|inscription/, night: /nuit|nocturne/,
+  day: /jour|soleil/, interior: /habitacle|interieur|cockpit/, showroom: /showroom/,
+};
+
+/** The director's conflicts, completed by the code's (deduplicated), at most 5. */
+export function mergeBriefConflicts(director: string[], detected: Array<{ id: string; message: string }>): string[] {
+  const own = director.map(cleanConflict).filter((entry) => entry.length >= 5);
+  const reported = plain(own.join(' '));
+  const added = detected.filter((conflict) => !RULE_MENTIONS[conflict.id]?.test(reported)).map((conflict) => conflict.message);
+  return [...new Set([...own, ...added])].slice(0, MAX_BRIEF_CONFLICTS);
+}
+
+/** Forbidden manoeuvres written in a shot (English director text): a shot or a correction that contains one is refused. */
+const FORBIDDEN_MOTION = word('drift\\w*|skid\\w*|burn ?outs?|donuts?|handbrake turns?|power ?slides?|racing|races?');
+
+export function forbiddenShotText(shot: Pick<StoryboardShot, 'scene' | 'framing' | 'location' | 'action' | 'camera'>): string | null {
+  const match = plain([shot.scene, shot.framing, shot.location, shot.action, shot.camera].join(' ')).match(FORBIDDEN_MOTION);
+  return match ? match[0] : null;
+}
+
+/** Same mechanism as interiorShotIssue: the director's answer is refused and corrected. */
+export function forbiddenShotsIssue(shots: StoryboardShot[]): string | null {
+  const found = shots.map((shot) => ({ shot, word: forbiddenShotText(shot) })).filter((entry) => entry.word);
+  return found.length ? `${found.map(({ shot, word: found }) => `« ${shot.title} » (${found})`).join(', ')} : manœuvre interdite ; garde l’énergie par une conduite dynamique et légale, et signale-le dans briefConflicts.` : null;
+}

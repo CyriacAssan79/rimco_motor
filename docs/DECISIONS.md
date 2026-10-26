@@ -1,5 +1,301 @@
 # Décisions
 
+## Plans Pro de 3 à 5 s, coût maximal affiché, mode du plafond au choix de l’équipe (2026-10-26)
+
+- **Constat** :
+  - Pro autorisait des plans de 3 à 15 s, alors que l’architecture fixe des plans de 3 à 5 s, parce que les moteurs tiennent mal au-delà de quelques secondes ;
+  - le plafond `VIDEO_COST_CAP_USD`, facultatif, ne visait que le coût nominal (une tentative de chaque étape), alors que le code réserve bien plus en cas de relances.
+- **Décision** :
+  - **Pro** : le storyboard impose des plans de 3 à 5 s. Le réalisateur reçoit « 2 à 3 plans » pour 10 s, « 3 à 5 plans » pour 15 s, « 4 à 6 plans » pour 20 s. Un plan unique Pro long est découpé en plans de 5 s. Le catalogue du moteur Kling n’est pas modifié (il accepte toujours 15 s). Le storyboard simulé utilise des plans de 5 s sur tous les niveaux.
+  - **Coût maximal** (`worstCaseVideoCostUsd`, `src/core/billing/video-cap.ts`), calculé à partir des mêmes constantes que les réservations du lancement. Par plan : 3 images clés et 3 contrôles, 2 corrections du réalisateur à 0,05 $, 2 clips et 2 contrôles de clip ; plus les images de fin et le storyboard. Les relances demandées ensuite par un humain n’y sont pas : chacune est réservée au moment où elle est demandée.
+  - **Enregistrement** : les deux montants sont figés à la création dans `brief_json.costPlanUsd`. Le nominal garde son format d’avant ; le coût maximal et le mode du plafond sont ajoutés à côté.
+  - **Affichage** : la page Coûts de l’admin affiche la colonne « Coût prévu (nominal / maximum) » en dollars, aussi dans l’export CSV. Pour les vidéos créées avant, seul le nominal est connu.
+  - **Mode du plafond inchangé** : nouvelle variable `VIDEO_COST_CAP_MODE` = `nominal` (défaut, comportement actuel) ou `worst_case`. C’est à l’équipe de choisir. Sans `VIDEO_COST_CAP_USD`, il n’y a toujours aucun plafond.
+- **Ordres de grandeur** (tarifs indicatifs du catalogue, sans storyboard ni images de fin) :
+
+  | Vidéo | Nominal | Maximum |
+  |---|---|---|
+  | Standard 20 s (4 plans Wan) | 3,12 $ | 7,36 $ |
+  | Pro 15 s (3 plans Kling de 5 s) | 2,52 $ | 5,88 $ |
+  | Premium 20 s (4 plans Seedance, images 2K) | 10,74 $ | 22,76 $ |
+
+  En mode `worst_case`, un plafond de 15 $ refuserait donc le Premium 20 s, qu’il accepte en mode `nominal`.
+- **Vidéos déjà lancées** : leurs plans gardent leur durée. Les corrections du réalisateur ne peuvent pas changer la durée d’un plan.
+
+## Demandes du brief écartées signalées avant le lancement, storyboard signé (2026-10-26)
+
+- **Constat** :
+  - le réalisateur écartait en silence ce que les règles interdisent (drift, texte ou logo à l’écran, nuit sur un lieu de jour…), et rien ne remontait à l’utilisateur ;
+  - `/api/versions` acceptait le storyboard envoyé par le navigateur : ses textes allaient tels quels dans les prompts des générateurs ;
+  - aucun ordre de priorité n’était écrit entre le brief et les règles.
+- **Décision** :
+  - **Priorité** : le message système du réalisateur dit maintenant « règles verrouillées > brief > choix créatifs ». Quand le brief est en conflit avec une règle, le réalisateur garde son intention (énergie, émotion, lieu) par un moyen autorisé et le signale.
+  - **Conflits signalés** (`briefConflicts`, de 0 à 5 phrases en français) : ils sont écrits par le réalisateur et complétés par une liste fermée vérifiée par le code (`src/core/brief/conflicts.ts`) : drift ou dérapage, vitesse excessive, texte ou logo, nuit sur un lieu de jour et l’inverse, intérieur sans photo d’habitacle, voiture qui roule en showroom. En simulation, cette liste fournit seule les conflits. Les conflits ne vont jamais aux générateurs ni aux juges.
+  - **Studio** : quand il y a au moins un conflit, le lancement s’arrête après la préparation. Un encadré « Votre demande a été adaptée aux règles de la marque » s’affiche avec deux boutons, « Lancer la vidéo » et « Modifier ma demande ». La préparation du réalisateur (quelques centimes) est déjà payée ; la génération ne l’est pas. Sans conflit, le parcours reste d’un seul clic.
+  - **Storyboard signé** : `/api/storyboard/suggest` signe (HMAC-SHA256) les plans et la fiche des personnes exactement tels qu’il les renvoie, pour cet utilisateur, ce dossier véhicule, ce niveau, cette durée, ce format et ce parcours, avec une validité de 24 h. `/api/versions` refuse tout autre storyboard avec un 422 en français. Le parcours `photo_fidelity`, qui n’envoie ni texte ni prompt et n’est pas utilisé par le Studio, n’est pas concerné.
+  - **Textes du réalisateur** : balises, accolades et caractères de contrôle sont retirés avant tout prompt. Un plan qui décrit une manœuvre interdite (drift, dérapage, burnout, course) est refusé et corrigé.
+  - **Corrections dans la boucle** : `applyShotRevision` ne modifie que la scène, le cadrage, le lieu (texte), l’action, la caméra, le type de plan, le sens et la vitesse (vérifié et testé). Elles ne passent jamais par le navigateur, donc pas de signature. Une correction qui écrit une manœuvre interdite est écartée : nouvelle image avec les seuls défauts du juge.
+- **Nouvelle variable `STORYBOARD_SIGNING_KEY`** :
+  - serveur uniquement ;
+  - 32 caractères au moins ; 64 caractères aléatoires recommandés, tirés d’un générateur de mots de passe et collés dans Vercel (procédure dans le README) ;
+  - **obligatoire en mode live, donc dans l’aperçu Vercel actuel** : sans elle, la préparation affiche un message clair avant tout appel payant. L’application ne refuse pas de démarrer pour autant ;
+  - en simulation, une clé de développement fixe est utilisée (CI et test de bout en bout) ;
+  - la changer invalide seulement les storyboards préparés et pas encore lancés.
+- **Futur écran de validation du storyboard** : une route `POST /api/storyboard/validate` recevra le storyboard modifié et la signature d’origine.
+  - Les **champs fermés** (type de plan, sens, vitesse, photo, lieu, personnes oui ou non, durée, ordre, suppression) pourront être modifiés directement, puis revérifiés par le code et resignés.
+  - Les **textes** ne seront jamais saisis librement : une consigne de l’utilisateur passera par le réalisateur, comme donnée, avec un coût réservé ; le résultat sera revérifié puis resigné.
+- **Longueur** : la consigne du réalisateur passe de 3 500 à 4 000 caractères au plus (règle de priorité et champ des conflits). C’est un budget de lisibilité ; aucun moteur n’impose de limite ici.
+- **Non traité** :
+  - le français des conflits écrits par le réalisateur n’est pas vérifié ;
+  - le détecteur par mots-clés peut manquer une formulation inhabituelle, ou signaler un conflit en trop (par exemple « affiche » au sens de « montre »).
+
+## Une lumière par plan, prompts en anglais, plus de texte libre dans la couche verrouillée (2026-10-26)
+
+- **Constat** :
+  - un même prompt d’image clé pouvait dire « plein jour » (description du lieu) et « Lumière douce de fin de journée » (puce du Studio) : seuls les conflits jour, nuit et intérieur étaient détectés ;
+  - la lumière, l’ambiance et les noms de lieux étaient en français dans des prompts anglais ;
+  - les routes `/api/storyboard/suggest` et `/api/versions` acceptaient la lumière et l’ambiance en texte libre (160 caractères), injecté dans le message système du réalisateur et dans le prompt d’image : c’était une porte du brief vers la couche verrouillée.
+- **Décision** :
+  - **Lieux** : chaque lieu du catalogue a un nom anglais (`placeEn`), suivi de sa description anglaise sans moment de la journée. Le titre d’un lieu importé est envoyé sans ses mots de moment de la journée (« nuit », « fin de journée », « coucher de soleil »…). Les textes français du catalogue restent pour l’équipe.
+  - **Lumière** : chaque puce du Studio a une phrase anglaise et un moment de la journée (`src/core/scenes/prompt-values.ts`). Une seule lumière par plan : la puce n’est utilisée que si son moment est celui du lieu ; sinon la lumière du lieu l’emporte. Le réalisateur reçoit la même phrase anglaise.
+  - **Ambiance (option retenue : traduire)** : les 15 ambiances du catalogue des scènes sont traduites. L’ambiance oriente encore le réalisateur, et elle reste le premier bloc supprimé du prompt vidéo s’il est trop long. Si elle n’apporte rien à l’essai, la retirer du prompt vidéo est un changement d’une ligne.
+  - **Catalogue seulement** : la lumière et l’ambiance n’acceptent que les valeurs du catalogue des scènes. Toute autre valeur est ignorée sans erreur, donc une page du Studio restée en cache continue de fonctionner. Les constructeurs eux-mêmes ignorent une ambiance hors catalogue.
+  - **Message système des juges** : il est en anglais, comme leur prompt.
+- **Effets visibles** :
+  - les défauts listés par les juges (avertissements vus par le valideur) arrivent en anglais ;
+  - un lieu « plein jour » choisi avec la puce « fin de journée » est maintenant éclairé en plein jour.
+- **Vidéos déjà lancées** : la lumière déjà figée par plan est gardée. Si elle était en français, l’image clé reçoit à la place la lumière neutre « lumière naturelle du lieu ». Une ambiance ancienne hors catalogue n’est plus envoyée.
+- **Non traité** : l’ancien parcours plan unique (`briefToPrompt`, route `/api/versions` hors storyboard) envoie encore en français le lieu, le décor, l’action, la caméra et le personnage saisis. Seules la lumière et l’ambiance y sont traduites ou filtrées.
+
+## Personnes sans casting : seulement dans les plans prévus, apparence contrôlée (2026-10-26)
+
+- **Constat** :
+  - sans photo de casting, la fiche des personnes écrite par le réalisateur partait dans **tous** les plans, y compris les plans larges et les détails ;
+  - les juges ne la recevaient pas : ils vérifiaient où étaient les personnes (dans la voiture quand elle roule), jamais leur apparence ;
+  - la fiche finissait par « . » suivi de « ; » dans le prompt.
+- **Décision** :
+  - **Choix du réalisateur, plan par plan** : chaque plan porte un indicateur `withPeople` (personnes visibles : oui ou non). Le réalisateur doit le remplir pour chaque plan, avec au moins un plan où les personnes sont visibles, dès qu’il écrit une fiche. Sinon sa réponse est refusée et corrigée.
+  - **Plan sans personnes** : la voiture est vide, avec la consigne « personne dans ni autour de la voiture », et le juge refuse toute personne visible.
+  - **Plan avec personnes** : il reçoit la fiche.
+  - **Juges** : les deux juges (et celui de l’image de fin) reçoivent la fiche comme donnée nettoyée. Toute personne visible doit lui correspondre ; une personne différente ou en trop est bloquante.
+  - **Inchangé** : « personne hors d’une voiture qui roule » et « personne ne s’appuie sur la carrosserie ».
+  - **Avec un casting photo** : `withPeople` est ignoré ; c’est la liste des photos de casting de chaque plan qui décide, comme avant.
+- **Correction d’un plan** : la correction du réalisateur ne peut pas changer `withPeople`, car les personnes font partie de ce qui est verrouillé.
+- **Vidéos déjà lancées** :
+  - leurs plans n’ont pas `withPeople` : la fiche reste dans tous les plans, comme avant ;
+  - les juges reçoivent toutefois la fiche dès leur prochain contrôle ;
+  - l’image clé dit maintenant « identiques là où elles apparaissent » au lieu de « identiques dans chaque plan ».
+- **Longueurs** : la consigne du réalisateur reste sous son budget de 3 500 caractères. Les pires cas des prompts d’image et de vidéo passent.
+- **Ce qui n’est pas traité** : la fiche est comparée plan par plan. Aucun juge ne compare deux plans entre eux, et une dérive progressive reste donc possible si chaque plan correspond « à peu près » à la fiche.
+
+## Chaque règle a son contrôle : plan du storyboard, effet collé, véhicule en trop (2026-10-26)
+
+- **Constat** :
+  - du plan, les juges ne recevaient que le titre, la scène, le cadrage et le lieu ;
+  - ils ne vérifiaient ni le sens de marche, ni l’arrêt d’une arrivée, ni le mouvement de caméra, ni l’effet « collé », ni un véhicule en trop, ni l’alignement de la voiture sur sa voie (image clé) ;
+  - le juge du clip ne voyait pas l’image clé validée.
+- **Décision** :
+  - **Plan du storyboard** : il est donné aux deux juges comme donnée, nettoyée et bornée : type de plan, phrase de trajet, action, caméra, et la scène pour le juge de l’image clé.
+  - **Image clé** : le sens se lit à l’orientation de la voiture ; une voiture tournée dans le mauvais sens ou en biais sur sa voie est bloquante.
+  - **Clip** : sont bloquants une voiture qui va dans le mauvais sens, qui ne bouge pas alors qu’elle doit rouler, qui roule alors qu’elle doit être arrêtée, ou une arrivée qui ne s’arrête jamais. Un mouvement de caméra différent du plan est mineur.
+  - **Effet collé et véhicule en trop** : deux contrôles écrits une seule fois dans `rules.ts` (`INTEGRATION_CHECK`, `NO_EXTRA_VEHICLE_CHECK`) et utilisés par les deux juges. Une voiture « collée » (perspective, échelle, ombre, reflets) est bloquante ; un autre véhicule bien visible est bloquant, un minuscule véhicule au loin est mineur.
+  - **Image clé validée pour le juge du clip** : elle est sa première référence, après les images extraites du clip, et la numérotation des images en tient compte.
+  - **Lisibilité** : le prompt du juge du clip garde une liste de défauts bloquants courte et fixe ; seuls les détails dépendent du type de plan.
+- **Longueur des prompts des juges** (plan type avec personnes, règles de conduite, matrice et cadrage) : juge de l’image clé +12 à +20 %, juge du clip +16 à +20 %, au lieu de +21 à +24 % avant resserrage. La consigne sur le texte lisible a été raccourcie pour y arriver.
+- **Coût** : le juge du clip lit une image de plus, une hausse de l’ordre de quelques millièmes de dollar, couverte par la réserve de 0,10 USD.
+- **Règles et leur contrôle** :
+
+  | Règle (réalisateur ou générateurs) | Contrôle |
+  |---|---|
+  | Durées, nombre de plans, photos et lieux autorisés, lieu obligatoire | code (réponse refusée puis corrigée) |
+  | Combinaisons photo × lieu, vitesse maximale, poussière | code (matrice) |
+  | Showroom immobile | code, et juges image et clip |
+  | Identité, couleur, badge, calandre, logo | juges image et clip |
+  | Pneus au sol, pas de collage ni d’écran partagé | juges image et clip |
+  | Même lieu, rien d’une autre ville ou d’un autre pays | juges image et clip |
+  | Côté de circulation, côté du volant, conducteur tourné vers la route | juges image et clip |
+  | Personnes : aucune si non demandée, casting fidèle, à bord quand la voiture roule | juges image et clip |
+  | Cadrage demandé, voiture entière (sauf plan de détail) | juges image et clip |
+  | Voiture alignée sur sa voie, le long de la route du lieu | juge image (**nouveau** hors matrice) ; juge clip (trajectoire) |
+  | Sens de marche | juge image (orientation, **nouveau**) ; juge clip (**nouveau**) |
+  | Roule / à l’arrêt / arrivée qui s’arrête | juge clip (**nouveau**) |
+  | Mouvement de caméra | juge clip, mineur (**nouveau**) |
+  | Éclairée comme le lieu : ombres, reflets, perspective | juges image et clip (**nouveau**) |
+  | Aucun autre véhicule | juges image et clip (**nouveau**) |
+  | Aucun texte, enseignes vierges, plaques illisibles | juges : signalé en avertissement, jamais bloquant (choix existant) |
+  | Conduite calme, pas de dérapage, roues qui tournent | juge clip |
+  | L’image de fin montre la voiture plus loin sur son trajet | juge de l’image de fin |
+  | Une seule idée, ouverture en mouvement, fin sur un plan héros | **aucun** |
+  | Au moins la moitié des plans roulent, un seul travelling latéral, un seul sens latéral pour le film | **aucun** (vérifiable par le code, non fait) |
+  | Lumière selon le moment de la journée du lieu | **aucun** (la lumière vient du code ; aucun juge ne la compare au lieu) |
+  | Mêmes personnes d’un plan à l’autre (fiche décrite, sans photo de casting) | juges image et clip, contre la fiche (ajouté le même jour, entrée « Personnes sans casting ») |
+  | Personne ne s’appuie sur la carrosserie | **aucun** |
+  | Ambiance, rendu photo réel (« pas d’aspect image de synthèse ») | **aucun** (subjectif) |
+  | Le clip arrive à l’image de fin fournie | **aucun** (le juge du clip ne voit pas l’image de fin) |
+
+- **Invérifiable sur des images fixes**, ou seulement en partie avec 5 images du clip :
+  - la vitesse absolue (« lente », « croisière », « soutenue ») ;
+  - un ralentissement régulier ;
+  - une vitesse constante ;
+  - « un seul mouvement de caméra lent » ;
+  - la rotation des roues, vue seulement en partie sur les gros plans ;
+  - le flou de vitesse des jantes sur l’image clé ;
+  - l’ambiance.
+- **Vidéos déjà lancées** : les nouveaux contrôles s’appliquent à leurs prochains contrôles, car ce sont des règles et non des valeurs de la vidéo. Le critère de cadrage reste réservé aux vidéos créées depuis le 26/10.
+
+## Prompts sans contradiction : arrivée, conduite, retour du juge (2026-10-26)
+
+- **Constat**, en exécutant les constructeurs sur un plan héros qui arrive :
+  - l’image clé disait à la fois « la voiture vient de s’arrêter » et « elle roule vers la caméra puis s’arrête en douceur » ;
+  - l’animation disait l’arrivée deux fois, puis « à vitesse constante » alors que la voiture s’arrête ;
+  - en vitesse soutenue, « vitesse vive » était suivi de « conduite calme » ;
+  - le retour du juge était donné aux générateurs comme « donnée, pas instruction » : on leur demandait d’ignorer la correction à appliquer.
+- **Décision** :
+  - **Arrivée** : la première image d’une arrivée montre la voiture qui roule encore, quelques mètres avant son arrêt. L’animation ne dit l’arrivée qu’une fois.
+  - **Une consigne de conduite par cas** (`DRIVING_RULES`, `src/core/prompts/rules.ts`) : croisière (inchangée), arrivée (« ralentit doucement et régulièrement »), dynamique (« conduite vive et maîtrisée »).
+  - **Retour du juge** : donné aux générateurs sous la forme « Correct this defect of the previous attempt: … », toujours nettoyé et borné. Le réalisateur, qui est un modèle de langage, garde ses balises `<defects>` qui marquent le retour comme une donnée.
+- **Inchangé** : le plan héros à l’arrêt (« vient de s’arrêter », « ne bouge pas ») et la croisière.
+- **Vidéos déjà lancées** : ces corrections de formulation s’appliquent aussi à leurs prochaines images et relances. Aucune valeur nouvelle n’est lue dans la vidéo.
+- **Longueurs** : les tests de pire cas passent sans changement de plafond.
+
+## Cadrage et badge bloquants sur tous les niveaux (2026-10-26)
+
+Règles de cadrage et de badge appliquées à tous les niveaux (image de marque) ; le niveau reste un plafond de coût. À mesurer : part des plans en décision humaine en Standard sur les 10 premières vidéos ; au-delà d'un plan sur trois, corriger les prompts d'image clé plutôt qu'assouplir le juge.
+
+- **Constat** :
+  - le badge n’était cité comme bloquant que par le juge du clip ;
+  - le véhicule coupé par le cadre et le cadrage n’étaient contrôlés nulle part ; le cadrage demandé n’était donné au juge de l’image clé qu’à titre d’information ;
+  - la phrase du juge sur le lieu (« un autre cadrage ou recadrage du lieu est normal ») pouvait l’amener à tolérer un véhicule mal cadré.
+- **Règle de cadrage** (`src/core/prompts/rules.ts`), selon le type de plan : en plan d’ensemble, plan qui roule ou plan héros, la voiture est entière dans le cadre, avec de l’air autour ; en plan de détail, le détail demandé est net et entier, et la voiture peut être coupée. Dans un passage latéral, la voiture peut entrer dans le cadre ou en sortir.
+- **Générateurs** : l’image clé reçoit cette règle (bloc verrouillé). L’animation la reçoit aussi, en rappel : elle peut être supprimée en dernier recours si le prompt est trop long, car le cadrage est déjà fixé par l’image clé de départ et le juge du clip le vérifie.
+- **Juges, image clé et clip, tous niveaux** :
+  - **bloquant** : véhicule coupé par le cadre (sauf plan de détail) ; badge, calandre, logo constructeur, phare ou jante déformé, mal écrit ou recoloré (même texte pour les deux juges) ; cadrage nettement différent de celui demandé ;
+  - **mineur** : cadrage un peu plus serré, plus large ou légèrement décentré. Il est gardé comme avertissement pour le valideur ; c’est maintenant aussi le cas sur l’image clé, comme sur le clip ;
+  - le cadrage demandé par le storyboard devient un critère explicite ;
+  - **le niveau n’est jamais transmis** pour ces règles : un test vérifie que la liste envoyée aux juges est identique en Standard, Pro et Premium.
+- **Phrase du lieu reformulée** : « un autre angle ou une autre partie du même décor est normal ». Elle ne parle plus de cadrage.
+- **Longueur des prompts** : la règle tient au pire cas, pour chaque mouvement et chaque type de plan (test). Pour cela, l’action, le bloc cadrage-caméra et la lumière peuvent être raccourcis davantage, seulement sur des plans exceptionnellement longs.
+- **Vidéos déjà lancées** : la règle de cadrage est figée dans la vidéo à sa création (`brief_json.framingRules`). Les vidéos lancées avant gardent leurs prompts et leurs juges, sauf deux points qui s’appliquent à toutes : le badge cité par le juge de l’image clé, et la phrase du lieu reformulée.
+- **Coût** : aucun appel nouveau. Le juge du clip tournait déjà sur les trois niveaux. Un refus déclenche la boucle existante : 2 corrections du réalisateur pour l’image clé, 1 relance pour le clip, puis décision humaine. Les règles rendent seulement ce maximum plus fréquent ; il est déjà réservé au lancement, et le prix client ne change pas.
+- **Surcoût maximal par plan** (toutes les corrections automatiques consommées, juge compté à sa réservation de 0,10 USD ; coût réel mesuré ≈ 0,04 USD) :
+
+  | Niveau | Image clé (2 corrections) | Clip (1 relance) | Total par plan |
+  |---|---|---|---|
+  | Standard (Wan, 5 s) | 0,46 USD | 0,60 USD | **1,06 USD** |
+  | Pro (Kling, 5 s ; 15 s) | 0,46 USD | 0,66 USD ; 1,78 USD | **1,12 USD ; 2,24 USD** |
+  | Premium (Seedance, 5 s, image clé 2K) | 0,54 USD | 2,47 USD | **3,01 USD** |
+
+  Une correction d’image clé coûte : réalisateur 0,05 + image 0,08 (0,12 en 2K) + juge 0,10. Une relance de clip coûte : 5 s de vidéo (Wan 0,10, Kling 0,112, Seedance 0,473 USD/s) + juge 0,10. Une relance demandée ensuite par un humain coûte environ 0,23 USD (0,27 en Premium) de plus.
+- **Ce qui n’est pas traité** :
+  - **Image de fin** : son juge ne reçoit pas encore la règle de cadrage. Une image de fin refusée ne bloque jamais la vidéo : le plan est animé sans elle.
+  - **Critère de cadrage non vérifié** : le cadrage demandé est un texte du réalisateur ; aucun contrôle ne vérifie qu’il correspond au type de plan (par exemple « gros plan » pour un plan héros).
+  - **Tests en parallèle** : sur ce poste, la suite complète lancée avec tous les processus fait parfois dépasser à des tests d’adaptateurs fal leur délai de 5 s ; avec 4 processus, tout passe. Cela n’a pas de lien avec ce changement.
+
+## Lieux réintégrés : contrôle des photos (2026-10-26)
+
+- **Historique Git** : les seuls lieux ajoutés après le kit du 16/10 sont les 8 lieux du samedi 24/10 (commit `a0b41cb`). Ils sont réintégrés depuis la livraison de la matrice, en WebP de 1600 px de large, avec leurs identifiants du 24/10 (`…d212` à `…d219`). Les identifiants des 11 lieux existants ne changent pas.
+- **Chaque lieu** a son moment de la journée dans sa fiche et un texte anglais pour les modèles, sans moment de la journée.
+- **Plus de texte français envoyé aux modèles** : le texte français des lieux intégrés (« en plein jour », « de nuit »…) ne leur est plus jamais transmis, même en secours ; un test le vérifie.
+- **Corrections après relecture des photos** :
+  - la « Route rouge · virage » est une piste sinueuse qui descend, et non un virage à gauche (texte anglais et texte français corrigés) ;
+  - le **showroom** montre du texte et des logos lisibles (enseigne « …INGO MOTORS », arche « NOUVEAU KIA TASMAN », logos Kia) : il est maintenant marqué « texte lisible ».
+- **Texte lisible** : La Pyramide (journée, coucher, nuit), la rue urbaine (journée, coucher) et le showroom.
+- **Photos sous 800 px de large** : Boulevard lagunaire · nuit (447×447), Front lagunaire · nuit, vue aérienne (399×501), Plateau et bord de mer · journée (739×415).
+- **Photos sous 1280 px, au format d’origine** : Pont HKB · journée (1000×759, PNG), Route rouge · végétation tropicale (1024×678, JPEG), Plateau et lagune · nuit (1140×740, JPEG).
+- **Non traité** : ces 6 photos ne sont ni agrandies (cela n’ajoute aucun détail) ni converties (les vidéos passées retrouvent leur lieu par son chemin de fichier). Il faut les remplacer par des photos d’origine plus grandes, sous un nouveau nom de fichier.
+- **Autres constats sur les photos** :
+  - le « Boulevard côtier · journée », la vue « Plateau et bord de mer » et les vues de nuit du front lagunaire montrent d’autres voitures ;
+  - la « Route rouge · végétation tropicale » montre des deux-roues au loin ;
+  - la règle « aucun autre véhicule » des prompts s’applique, mais ces photos invitent le moteur à en recopier.
+
+## Fiche de lieu proposée par le modèle de vision et validée par l’admin (2026-10-26)
+
+- **Constat** : un lieu ajouté à la médiathèque n’avait qu’un titre et une catégorie. Son moment de la journée était deviné d’après les mots du titre, et sa description envoyée aux modèles était « titre · catégorie ». La matrice de mouvement du matin donnait au lieu un profil prudent tant que l’admin ne le décrivait pas à la main.
+- **Décision : une fiche par lieu, même schéma pour le catalogue et les lieux importés** (`src/core/motion/place-motion.ts`). Elle contient :
+  - le moment de la journée (journée, lever ou coucher du soleil, nuit, intérieur) ;
+  - le point de vue (route, en hauteur, aérien) ;
+  - les axes de la route (la voiture suit la route, passage latéral) ;
+  - les plans permis, la poussière, la vitesse maximale ;
+  - une **description anglaise** de 140 caractères au plus, sans moment de la journée (refusée sinon) ;
+  - un indicateur **« texte lisible »**.
+
+  Les sens de marche ne sont pas stockés : ils se déduisent des axes de la route croisés avec la photo du véhicule. Les 19 lieux intégrés ont leur fiche dans `location-catalog.ts`, avec les descriptions anglaises relevées photo par photo le 24/10. La route rouge, qui n’avait pas de moment de la journée, est maintenant « journée ».
+- **Proposition automatique, une fois par lieu** :
+  - à l’ajout d’un lieu, le coût (0,10 USD au plus) est réservé dans le journal des coûts **avant** l’appel ;
+  - le modèle de vision des juges lit la photo par la file d’attente fal et propose la fiche ;
+  - la proposition est stockée comme « proposée » (migration `0035_place_profile_proposal.sql`, ajoutée à `supabase/setup.sql`) ;
+  - la médiathèque suit la proposition toutes les 10 s ; le coût est clôturé à son montant réel, libéré si fal a échoué, facturé à la réservation au plus après 10 min sans réponse ;
+  - la réponse du modèle est ramenée à une fiche cohérente : valeurs fermées seulement, description nettoyée et débarrassée des mots de moment de la journée ;
+  - un lieu n’est jamais proposé deux fois ;
+  - en mode simulation, la fiche est fictive et aucun appel n’est fait.
+- **Validation par l’admin** :
+  - la carte d’un lieu en attente affiche la fiche en champs fermés (listes, cases), modifiables ;
+  - le bouton « Valider le lieu et sa fiche » valide les deux ensemble, et le serveur refuse de valider un lieu sans fiche valide ;
+  - la description anglaise est en lecture seule ; l’admin peut la vider, le lieu est alors décrit par « titre · catégorie » ;
+  - si la photo montre du texte lisible, un avertissement s’affiche (première cause de texte recopié dans les images).
+- **Repli prudent** : un lieu validé avant cette évolution, ou sans fiche, reçoit plans héros et détails seulement, une arrivée lente au plus, pas de poussière, vitesse lente (intérieur si son nom le dit). Ce profil **remplace** le profil prudent du matin, plus permissif. Le réalisateur voit ce lieu marqué « profile: default » et la consigne « garder des plans simples ».
+- **Vidéos déjà lancées** : la fiche, sa description et son moment de la journée sont figés dans la vidéo à sa création, avec la matrice. Modifier un lieu ne change aucune vidéo lancée.
+- **À faire par le responsable** : coller `supabase/setup.sql` dans l’éditeur SQL de Supabase (migration 0035 ; la 0034 est déjà appliquée). Avant cela, l’ajout de lieux fonctionne sans proposition automatique : aucun coût n’est réservé et l’admin remplit la fiche à la main.
+- **Ce qui n’est pas traité** :
+  - **Fidélité de la description** : la description anglaise vient du modèle de vision et va dans les prompts des générateurs. Elle est bornée, nettoyée et relue par l’admin, mais aucun juge ne vérifie qu’elle décrit fidèlement la photo.
+  - **Usage de « texte lisible »** : l’indicateur ne sert qu’à l’avertissement ; il ne change pas encore les prompts.
+  - **Clé fal remplacée** : si la clé fal est remplacée pendant une proposition, la proposition échoue et l’admin remplit la fiche à la main.
+  - **Lieux non relus** : les lieux importés avant aujourd’hui ne reçoivent pas de proposition automatique ; l’admin peut les décrire avec « Décrire ».
+
+## Mouvement cohérent avec la photo et le lieu : matrice simple (2026-10-26)
+
+- **Constat** : le réalisateur ne recevait qu’une consigne générale (« 3/4 avant = vers la caméra, profil = latéral, 3/4 arrière = s’éloigne ») et le lieu ne limitait aucun mouvement : rien n’empêchait un passage latéral sur le tablier d’un pont, une vitesse soutenue sur une piste rouge ou un showroom importé « Showroom · nuit » traité comme une rue de nuit. Aucun juge ne contrôlait cette cohérence. Le catalogue de mouvements du samedi 24/10 avait été retiré avec le retour à la version du vendredi.
+- **Ce qui est repris du 24/10** : les 8 lieux au niveau de la route (dont 2 photos du tablier du pont HKB), le retrait de « Pont HKB · approche » (la photo montre un autre pont ; il reste lisible pour les anciennes vidéos), le côté du nez des photos véhicule (« 3/4 avant · nez à gauche »…) et l’étiquetage corrigé du kit d’essai (le « profil avant » du Haval H6 est un 3/4 arrière). **Non repris** : les 12 mouvements imposés, la caméra imposée et les axes « sur la photo ».
+- **Décision : une matrice fermée** (`src/core/motion/place-motion.ts`, fonctions pures et testées). Chaque lieu a un profil :
+  - intérieur ou extérieur, enregistré tel quel et non plus deviné d’après le titre ;
+  - point de vue : au niveau de la route, en hauteur ou aérien ;
+  - sens possibles : la voiture suit la route (vers la caméra ou en s’éloignant) et/ou passe latéralement ;
+  - types de plan permis, poussière possible ou non, vitesse maximale.
+
+  Chaque photo autorise des sens de marche : 3/4 avant vers la caméra, 3/4 arrière en s’éloignant, profil latéral du côté du nez. Sans côté du nez connu, une photo garde le comportement d’avant. Exemples : sur le tablier du pont, la voiture suit le tablier, jamais en passage latéral ; la piste rouge permet la poussière à vitesse lente ; le boulevard lagunaire permet le passage latéral ; le showroom reste immobile ; une vue aérienne ne permet que le plan d’ensemble.
+- **Où vivent les profils** : dans le code (`location-catalog.ts`) pour les 19 lieux intégrés ; dans la colonne `assets.place_profile` (migration `0034_place_profile.sql`, ajoutée à `supabase/setup.sql`) pour les lieux importés. L’admin les décrit dans la médiathèque (bouton « Décrire » sur la carte du lieu). Un lieu non décrit reçoit un **profil prudent** : il n’est pas refusé (route au niveau du sol, la voiture suit la route, vitesse normale, pas de poussière ; intérieur si son nom le dit).
+- **Ce que vérifie chaque étape** :
+  - **Réalisateur** : il reçoit, pour chaque lieu et chaque photo, la liste des combinaisons permises. Une réponse hors matrice (sens, type de plan, vitesse, poussière dans le texte) est refusée et déclenche sa tentative corrigée, comme pour le showroom.
+  - **Correction d’un plan refusé** : sa correction ne peut pas sortir de la matrice ; si elle en sort, le plan garde son mouvement validé.
+  - **Création de la vidéo** : un storyboard modifié dans le Studio est ramené dans la matrice, comme le showroom est ramené à l’arrêt.
+  - **Image clé** : elle décrit l’orientation de la voiture par rapport à la route du lieu (« dans sa voie, le long de la route ; sur un pont, le long du tablier »), et non plus par rapport au cadre.
+  - **Juges** : celui de l’image clé et celui de l’image de fin refusent une voiture en biais, contre l’axe ou hors de la route. Celui du clip refuse une trajectoire qui sort de la route ou change d’axe.
+- **Détection du showroom corrigée** : l’intérieur est testé avant la nuit ; il est surtout enregistré explicitement dans le profil. Les lieux « coucher de soleil » reçoivent une lumière basse et chaude au lieu de la lumière du brief.
+- **Longueur des prompts** : la règle d’axe remplace l’ancienne phrase « la voiture pointe le long de sa voie ». Au pire cas, la scène du plan peut maintenant être supprimée en dernier recours ; l’action et le cadrage décrivent toujours le plan. Le pire cas tient pour chaque mouvement et chaque type de plan (test ajouté).
+- **Vidéos déjà lancées** : la matrice est figée dans la vidéo à sa création (`brief_json.motionMatrix`). Une vidéo qui ne l’a pas garde exactement ses prompts, ses juges et ses corrections (test ajouté).
+- **À faire par le responsable** :
+  1. Coller `supabase/setup.sql` dans l’éditeur SQL de Supabase (migration 0034). Avant, tout fonctionne avec le profil prudent, mais l’enregistrement d’un profil de lieu affiche un message clair.
+  2. Relancer l’import dans l’espace Admin, onglet « Kit d’essai », pour que les photos du kit prennent leur côté du nez.
+  3. Décrire les lieux importés.
+- **Ce qui n’est pas traité** :
+  - **Erreur de saisie** : un profil de lieu ou un côté du nez mal saisi n’est contrôlé par personne ; les juges n’en verront que les effets.
+  - **Poussière** : la règle « pas de poussière » est vérifiée sur le texte du réalisateur, mais aucun juge ne refuse un nuage de poussière sur une route goudronnée.
+  - **Côté de la voiture** : aucun juge ne vérifie que l’image montre bien la voiture du côté de sa photo. Une voiture retournée en miroir n’est repérée qu’indirectement, par le juge du volant.
+  - **Mouvements absents** : les virages et la continuité du lieu d’un plan à l’autre ne sont pas dans la matrice.
+
+## Côté de circulation et volant de la marque, même sans personne à bord (2026-10-26)
+
+- **Constat** : le réglage `brands.traffic_side` (« à droite » pour RIMCO, migration 0031) existait mais n’était lu nulle part : rien ne demandait aux moteurs de faire rouler la voiture du bon côté de la route. La règle du volant (à gauche) n’était envoyée que si une personne était visible : une voiture vide pouvait avoir son volant à droite. Le réalisateur ne connaissait aucune des deux règles.
+- **Décision** :
+  - **Réglage de la marque** : le côté de circulation est lu avec les autres réglages (`src/core/brand-market.ts`) et figé dans la vidéo à sa création (`brief_json.trafficSide`), comme la ville et le côté du volant. Rien n’est écrit en dur : une autre marque peut avoir d’autres valeurs.
+  - **Règle écrite une seule fois** (`src/core/prompts/rules.ts`) : « la voiture reste dans la voie de droite de **son propre sens** de circulation (sa droite, pas celle de l’image) ; les véhicules en face passent à sa gauche ». Elle parle de la voie de la voiture et non de la gauche ou de la droite de l’image. C’est important pour une voiture qui vient vers la caméra : en circulation à droite, elle apparaît dans la moitié gauche de l’image, et c’est correct (cas testé).
+  - **Où elle s’applique** : image clé, image de fin et animation des plans en mouvement. Un plan à l’arrêt ou en showroom ne la reçoit pas. Elle s’applique aussi au réalisateur (bloc MOTION) et au réalisateur qui corrige un plan refusé.
+  - **Volant** : tous les plans reçoivent désormais la règle du volant. Dans une voiture vide, elle devient « le volant, visible à travers le pare-brise, est à gauche ».
+  - **Contrôles** : le juge de l’image clé, celui de l’image de fin et celui du clip classent **bloquant** un volant du mauvais côté, que quelqu’un soit à bord ou non, ainsi qu’une voiture qui roule dans la voie du mauvais côté. Sur l’image clé, un refus renvoie le plan au réalisateur (boucle du 25/10) avant tout paiement de clip.
+- **Longueur des prompts** : en mesurant le pire cas réel (éclairage de 160 caractères, description des personnes de 400, deux photos de casting), le prompt d’image clé dépassait **déjà** la limite de 2 200 caractères avant ce changement, jusqu’à 2 223. La génération aurait été refusée avec un message d’erreur. Pour faire de la place sans couper aucune règle :
+  - la règle de circulation a été raccourcie ;
+  - le texte d’éclairage peut maintenant être raccourci (« la voiture est éclairée comme le lieu » reste intact) ;
+  - l’action, le cadrage et la caméra peuvent être raccourcis un peu plus.
+
+  Le pire cas tient maintenant pour chaque mouvement et chaque type de plan : au plus 2 200 caractères pour l’image, 2 000 pour la vidéo (test ajouté). Ces raccourcis ne jouent que sur des plans exceptionnellement longs.
+- **Vidéos déjà lancées** : celles qui n’ont pas `trafficSide` dans leur brief, c’est-à-dire toutes celles créées avant cette mise en ligne, gardent exactement leurs prompts et leurs contrôles : pas de règle de circulation, et la règle du volant seulement si une personne est visible (test ajouté).
+- **Aucune migration** : la colonne existe déjà (0031) avec « droite » par défaut ; `supabase/setup.sql` est inchangé.
+- **Ce qui n’est pas traité** :
+  - **Contrôle chez le réalisateur** : son texte n’est pas vérifié par le code, car ses plans n’ont pas de champ « voie » à contrôler. Le respect de la règle n’est vérifié qu’en aval, par le juge de l’image clé (payant, environ 0,04 à 0,10 USD par contrôle).
+  - **Voiture garée** : une voiture à l’arrêt garée du mauvais côté de la rue n’est pas contrôlée. La règle de circulation ne vise que les plans en mouvement.
+  - **Réglage dans l’espace Admin** : le côté de circulation et le côté du volant ne sont pas encore modifiables dans l’espace Admin. Ils se changent dans la table `brands` depuis Supabase.
+  - **Éclairage saisi** : le texte d’éclairage saisi dans le Studio va toujours directement dans le prompt d’image clé, sans passer par le réalisateur. C’est un point existant, signalé ici et non corrigé.
+
 ## Images clés Premium en 2K (2026-10-26)
 
 - **Demande du responsable** : remettre la résolution 2K du Premium (étape 4 du 24/10), sans le reste de cette étape.

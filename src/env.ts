@@ -5,6 +5,8 @@ const schema = z.object({
   LLM_MAX_COST_USD: z.coerce.number().positive().optional(),
   // Optional per-video cap (AGENTS.md: no app-level block by default); an empty Vercel variable means "no cap" instead of breaking the app at boot.
   VIDEO_COST_CAP_USD: z.preprocess((value) => (typeof value === 'string' && value.trim() === '' ? undefined : value), z.coerce.number().positive().optional()),
+  // 26/10: estimate the optional cap applies to: « nominal » (default, one attempt of everything) or « worst_case » (every automatic retry). Team decision.
+  VIDEO_COST_CAP_MODE: z.preprocess((value) => (typeof value === 'string' && value.trim() === '' ? undefined : value), z.enum(['nominal', 'worst_case']).default('nominal')),
   // Optional end frame for rolling shots (A/B test). Only "true"/"1"/"on"/"oui" enable it; anything else = off.
   KEYFRAME_END_FRAME_ROLLING: z.preprocess((value) => typeof value === 'string' && ['true', '1', 'on', 'oui', 'yes'].includes(value.trim().toLowerCase()), z.boolean()).default(false),
   // Quality gate (patch v3.1): "warn" (default, temporary) keeps a shot still rejected after its retry, with warnings; "block" fails it.
@@ -13,7 +15,9 @@ const schema = z.object({
   SUPABASE_SERVICE_ROLE_KEY: z.string().optional(), SUPABASE_SECRET_KEY: z.string().optional(),
   USD_TO_EUR_RATE: z.coerce.number().positive().default(0.92),
   EUR_TO_FCFA: z.coerce.number().positive().default(655.957), APP_URL: z.string().url().optional(),
-  FAL_WEBHOOK_SECRET: z.string().optional(), CRON_SECRET: z.string().optional()
+  FAL_WEBHOOK_SECRET: z.string().optional(), CRON_SECRET: z.string().optional(),
+  // Server-only HMAC key of the storyboards signed by the director (26/10). Required in live at use, never NEXT_PUBLIC_.
+  STORYBOARD_SIGNING_KEY: z.preprocess((value) => (typeof value === 'string' && value.trim() === '' ? undefined : value), z.string().min(32, 'STORYBOARD_SIGNING_KEY doit faire au moins 32 caractères aléatoires.').optional())
 }).superRefine((values, ctx) => {
   const publicKey = values.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? values.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
   if (Boolean(values.NEXT_PUBLIC_SUPABASE_URL) !== Boolean(publicKey)) {

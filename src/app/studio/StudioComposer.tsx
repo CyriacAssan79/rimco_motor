@@ -85,6 +85,7 @@ type StoryShot = {
   travelDirection?: string;
   travelSpeed?: string;
   castIds?: string[];
+  withPeople?: boolean;
   scene: string;
   framing: string;
   location: string;
@@ -142,6 +143,8 @@ export function StudioComposer({ mode }: { mode: "mock" | "live" }) {
   const [job, setJob] = useState<Job | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  /** 26/10: storyboard ready but adapted by the director: the user sees why before the video is paid. */
+  const [pendingLaunch, setPendingLaunch] = useState<{ payload: Record<string, unknown>; conflicts: string[] } | null>(null);
   const purpose = "advertising" as const;
   const [vehicleDossiers, setVehicleDossiers] = useState<VehicleDossier[]>([]);
   const [places, setPlaces] = useState<PlaceAsset[]>([]);
@@ -406,9 +409,50 @@ export function StudioComposer({ mode }: { mode: "mock" | "live" }) {
     };
   }, [jobStatus, jobId, nextPollInSeconds, reconciliationRequired]);
 
+  async function launch(payload: Record<string, unknown>) {
+    const response = await fetch("/api/versions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await response.json();
+    if (!response.ok)
+      throw new Error(data.error ?? "La génération n’a pas pu démarrer.");
+    setJob({
+      id: data.id,
+      status: data.status,
+      prompt: data.prompt,
+      completedShots: data.completedShots,
+      totalShots: data.totalShots,
+      completedKeyframes: data.completedKeyframes,
+      totalKeyframes: data.totalKeyframes,
+      keyframes: data.keyframes,
+      estimatedPriceFcfa: data.estimatedPriceFcfa,
+    });
+  }
+
+  async function confirmLaunch() {
+    if (!pendingLaunch) return;
+    setError("");
+    setBusy(true);
+    try {
+      await launch(pendingLaunch.payload);
+      setPendingLaunch(null);
+    } catch (launchError) {
+      setError(
+        launchError instanceof Error
+          ? launchError.message
+          : "Une erreur est survenue.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError("");
+    setPendingLaunch(null);
     setBusy(true);
     try {
       if (!selectedDossier?.id || !selectedDossier.photos.length)
@@ -500,26 +544,19 @@ export function StudioComposer({ mode }: { mode: "mock" | "live" }) {
           "Le véhicule avance lentement et régulièrement",
         cameraMovement: selectedScene?.cameraMovement ?? "",
         mood: selectedScene?.mood ?? "",
+        // 26/10: the server launches only the storyboard signed by the director's route.
+        storyboardSignature: directorData.storyboardSignature,
       };
-      const response = await fetch("/api/versions", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      const data = await response.json();
-      if (!response.ok)
-        throw new Error(data.error ?? "La génération n’a pas pu démarrer.");
-      setJob({
-        id: data.id,
-        status: data.status,
-        prompt: data.prompt,
-        completedShots: data.completedShots,
-        totalShots: data.totalShots,
-        completedKeyframes: data.completedKeyframes,
-        totalKeyframes: data.totalKeyframes,
-        keyframes: data.keyframes,
-        estimatedPriceFcfa: data.estimatedPriceFcfa,
-      });
+      const conflicts = Array.isArray(directorData.briefConflicts)
+        ? (directorData.briefConflicts as unknown[]).filter(
+            (entry): entry is string => typeof entry === "string",
+          )
+        : [];
+      if (conflicts.length) {
+        setPendingLaunch({ payload, conflicts });
+        return;
+      }
+      await launch(payload);
     } catch (submitError) {
       setError(
         submitError instanceof Error
@@ -1167,6 +1204,42 @@ export function StudioComposer({ mode }: { mode: "mock" | "live" }) {
         </p>
       </aside>
       <div className="space-y-3 xl:col-span-2">
+        {pendingLaunch && (
+          <div
+            role="status"
+            className="rounded-md border border-[#e7d7b9] bg-[#fbf6ed] p-4 text-xs leading-5 text-[#765d39]"
+          >
+            <p className="font-semibold">
+              Votre demande a été adaptée aux règles de la marque
+            </p>
+            <ul className="mt-2 list-disc space-y-1 pl-4">
+              {pendingLaunch.conflicts.map((conflict) => (
+                <li key={conflict}>{conflict}</li>
+              ))}
+            </ul>
+            <p className="mt-2">
+              Le storyboard est prêt ; la vidéo n’est pas encore lancée.
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => void confirmLaunch()}
+                disabled={busy}
+                className="rounded-md bg-[#c51e1c] px-3 py-2 font-semibold text-white disabled:opacity-50"
+              >
+                Lancer la vidéo
+              </button>
+              <button
+                type="button"
+                onClick={() => setPendingLaunch(null)}
+                disabled={busy}
+                className="rounded-md border border-[#d2cec6] bg-white px-3 py-2 font-semibold text-[#253b4e]"
+              >
+                Modifier ma demande
+              </button>
+            </div>
+          </div>
+        )}
         {error && (
           <div
             role="alert"

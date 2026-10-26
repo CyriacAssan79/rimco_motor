@@ -5,6 +5,13 @@ import { allVersions } from '@/core/versions/store';
 import { createStorageAdminClient } from '@/core/storage/supabase';
 import { createSupabaseServerClient } from '@/core/supabase/server';
 import { aggregateGenerationCost } from '@/core/billing/aggregate';
+import { storedCostPlan } from '@/core/billing/video-cap';
+
+/** 26/10: planned cost of a version (nominal and worst case, USD), for the admin. */
+const plannedCost = (brief: unknown) => {
+  const plan = storedCostPlan(brief && typeof brief === 'object' ? brief as Record<string, unknown> : null);
+  return plan ? { nominal_cost_usd: plan.nominalUsd, worst_case_cost_usd: plan.worstCaseUsd } : {};
+};
 export async function GET() {
   try {
     const actor = await getActor();
@@ -27,7 +34,7 @@ export async function GET() {
           const ledgerRows = Array.isArray(version.usage_ledger) ? version.usage_ledger : [];
           const generationCost = aggregateGenerationCost(ledgerRows, env.USD_TO_EUR_RATE, env.EUR_TO_FCFA);
           if (!generationCost) return [];
-          return [{ id: `${version.id}-generation`, version_id: version.id, video_id: video.id, title: video.title, kind: 'generation', price_fcfa: generationCost.priceFcfa, cost_real_fcfa: 0, cost_eur: 0, department: video.department, model_name: 'Simulation', seconds: generationCost.seconds, status: generationCost.status, created_at: version.created_at }];
+          return [{ id: `${version.id}-generation`, version_id: version.id, video_id: video.id, title: video.title, kind: 'generation', price_fcfa: generationCost.priceFcfa, cost_real_fcfa: 0, cost_eur: 0, department: video.department, model_name: 'Simulation', seconds: generationCost.seconds, status: generationCost.status, created_at: version.created_at, ...plannedCost(version.brief_json) }];
         });
       });
       return NextResponse.json({ rows });
@@ -41,7 +48,7 @@ export async function GET() {
       versionIds = (data ?? []).map((v) => v.id);
     }
     const admin = createStorageAdminClient();
-    let query = admin.from('usage_ledger').select('id,version_id,user_id,kind,ai_model_id,seconds,cost_usd,billable_cost_usd,cost_eur,cost_real_fcfa,price_fcfa,status,created_at,video_versions(video_id,created_at,videos(title))').in('kind', ['generation', 'keyframe']).order('created_at', { ascending: false });
+    let query = admin.from('usage_ledger').select('id,version_id,user_id,kind,ai_model_id,seconds,cost_usd,billable_cost_usd,cost_eur,cost_real_fcfa,price_fcfa,status,created_at,video_versions(video_id,created_at,brief_json,videos(title))').in('kind', ['generation', 'keyframe']).order('created_at', { ascending: false });
     if (role === 'collaborateur') query = query.eq('user_id', actor.id);
     if (versionIds) {
       if (!versionIds.length) return NextResponse.json({ rows: [] });
@@ -68,7 +75,7 @@ export async function GET() {
       const chargedCosts = ledgerRows.filter((row) => row.status === 'charged');
       const costEur = chargedCosts.reduce((sum, row) => sum + Number(row.cost_eur ?? 0), 0);
       const costRealFcfa = chargedCosts.reduce((sum, row) => sum + Number(row.cost_real_fcfa ?? 0), 0);
-      return [{ id: `${versionId}-generation`, version_id: versionId, video_id: version?.video_id, title: video?.title ?? 'Vidéo', kind: 'generation', price_fcfa: generationCost.priceFcfa, cost_real_fcfa: costRealFcfa, cost_eur: costEur, margin_fcfa: generationCost.priceFcfa - costRealFcfa, seconds: generationCost.seconds, status: generationCost.status, created_at: version?.created_at ?? first.created_at }];
+      return [{ id: `${versionId}-generation`, version_id: versionId, video_id: version?.video_id, title: video?.title ?? 'Vidéo', kind: 'generation', price_fcfa: generationCost.priceFcfa, cost_real_fcfa: costRealFcfa, cost_eur: costEur, margin_fcfa: generationCost.priceFcfa - costRealFcfa, seconds: generationCost.seconds, status: generationCost.status, created_at: version?.created_at ?? first.created_at, ...plannedCost(version?.brief_json) }];
     });
     return NextResponse.json({ rows });
   } catch (error) { return errorResponse(error); }

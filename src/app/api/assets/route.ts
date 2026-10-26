@@ -6,7 +6,9 @@ import { createSupabaseServerClient } from '@/core/supabase/server';
 import { createStorageAdminClient } from '@/core/storage/supabase';
 import { createSignedStoragePreviewUrl } from '@/core/storage/signed-video';
 import { assertPlaceUploadAdmin, assertVehicleDossierAdmin } from '@/core/assets/permissions';
-import { curatedLocationAsset, locationCatalog } from '@/core/assets/location-catalog';
+import { curatedLocationAsset, selectableLocations } from '@/core/assets/location-catalog';
+import { placeProfileSchema, resolvePlaceProfile } from '@/core/motion/place-motion';
+import { proposePlaceSheet } from '@/core/assets/place-proposal-live';
 
 export async function GET(request: Request) {
   try {
@@ -22,7 +24,7 @@ export async function GET(request: Request) {
       const search = new URL(request.url).searchParams;
       const kind = search.get('kind');
       const status = search.get('status');
-      const demoAssets = [...fixtures.filter((asset) => asset.kind !== 'place'), ...locationCatalog.map(curatedLocationAsset)];
+      const demoAssets = [...fixtures.filter((asset) => asset.kind !== 'place'), ...selectableLocations.map(curatedLocationAsset)];
       return NextResponse.json({ assets: demoAssets.filter((asset) => (!kind || asset.kind === kind) && (!status || asset.status === status)) });
     }
     const supabase = await createSupabaseServerClient();
@@ -38,12 +40,23 @@ export async function GET(request: Request) {
     }
     const { data, error } = await query;
     if (error) throw error;
+    // 26/10: sheet of each uploaded place (prudent default until validated), and for an admin the proposed sheet.
+    // Read apart and tolerant: before migrations 0034/0035 the media library keeps working.
+    const placeIds = (data ?? []).filter((asset) => asset.kind === 'place').map((asset) => asset.id);
+    const sheets = await loadPlaceSheets(supabase, placeIds, actor.role === 'admin');
     const assets = await Promise.all((data ?? []).map(async (asset) => {
       const bucket = asset.kind === 'audio' ? 'audio' : asset.kind === 'logo' ? 'brand' : 'assets';
       const previewUrl = await createSignedStoragePreviewUrl((path, expiresIn) => supabase.storage.from(bucket).createSignedUrl(path, expiresIn), bucket, asset.path);
-      return { ...asset, previewUrl };
+      const sheet = sheets.get(asset.id);
+      const resolved = resolvePlaceProfile({ ...asset, place_profile: sheet?.place_profile });
+      const proposal = placeProfileSchema.safeParse(sheet?.place_profile_proposal);
+      const profile = asset.kind === 'place' ? {
+        placeProfile: resolved.profile, placeProfileDescribed: resolved.described,
+        ...(actor.role === 'admin' ? { placeProfileProposal: proposal.success ? proposal.data : null, placeProposalStatus: sheet?.place_profile_proposal_status ?? null } : {}),
+      } : {};
+      return { ...asset, previewUrl, ...profile };
     }));
-    const curatedPlaces = locationCatalog.map(curatedLocationAsset).filter(() => (!requestedKind || requestedKind === 'place') && (!requestedStatus || requestedStatus === 'validée'));
+    const curatedPlaces = selectableLocations.map(curatedLocationAsset).filter(() => (!requestedKind || requestedKind === 'place') && (!requestedStatus || requestedStatus === 'validée'));
     return NextResponse.json({ assets: [...curatedPlaces, ...assets] });
   } catch (error) { return errorResponse(error); }
 }
@@ -77,6 +90,20 @@ export async function POST(request: Request) {
     const { vehicleDossierId, photoRole, ...assetInput } = input;
     const { data, error } = await supabase.from('assets').insert({ ...assetInput, vehicle_dossier_id: vehicleDossierId ?? null, photo_role: photoRole ?? null, brand_id: actor.brandId, created_by: actor.id, status: 'en_attente' }).select('id,kind,title,category,make,model,color,angle,variant,path,status,review_reason,vehicle_dossier_id,photo_role').single();
     if (error) throw new HttpError(400, 'Impossible d’enregistrer ce média. Vérifiez son téléversement et réessayez.');
+    // 26/10: the vision model proposes the place sheet once; the admin checks it before validating the place.
+    if (data.kind === 'place') await proposePlaceSheet({ assetId: data.id, path: data.path, title: data.title, actor: { id: actor.id, department: actor.department } });
     return NextResponse.json({ asset: data }, { status: 201 });
   } catch (error) { return errorResponse(error); }
+}
+
+type PlaceSheetRow = { id: string; place_profile?: unknown; place_profile_proposal?: unknown; place_profile_proposal_status?: string | null };
+
+async function loadPlaceSheets(supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>, ids: string[], withProposal: boolean): Promise<Map<string, PlaceSheetRow>> {
+  if (!ids.length) return new Map();
+  for (const columns of [withProposal ? 'id,place_profile,place_profile_proposal,place_profile_proposal_status' : null, 'id,place_profile'].filter((value): value is string => Boolean(value))) {
+    const { data, error } = await supabase.from('assets').select(columns).in('id', ids);
+    if (!error) return new Map(((data ?? []) as unknown as PlaceSheetRow[]).map((row) => [row.id, row]));
+    console.warn('place_sheets_unavailable', error.message);
+  }
+  return new Map();
 }

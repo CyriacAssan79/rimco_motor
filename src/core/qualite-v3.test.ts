@@ -90,7 +90,7 @@ describe('P6 · aucun texte dans les décors', () => {
 
   it('fait signaler par les juges tout texte lisible, y compris recopié du lieu', () => {
     expect(NO_READABLE_TEXT_CHECK).toContain('copied from the location reference');
-    expect(NO_READABLE_TEXT_CHECK).toContain('Never set "approved" to false because of text alone');
+    expect(NO_READABLE_TEXT_CHECK).toContain('Readable text is reported, never rejected');
     expect(buildKeyframeQualityPrompt({ vehicleReferenceCount: 1, hasLocationReference: true })).toContain(NO_READABLE_TEXT_CHECK);
     expect(buildVideoQualityPrompt({ vehicleReferenceCount: 1, hasLocationReference: true, excludePeople: false })).toContain(NO_READABLE_TEXT_CHECK);
   });

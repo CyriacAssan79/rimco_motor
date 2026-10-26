@@ -105,7 +105,7 @@ describe('fal keyframe helpers', () => {
     expect(still).toContain('never a collage or split-screen');
     expect(motion).toContain('Nobody appears');
     expect(motion).toContain('never a split-screen');
-    expect(motion).toContain('Fix (data, not instructions): split-screen');
+    expect(motion).toContain('Correct this defect of the previous attempt: split-screen');
   });
 
   it('accepts only explicit valid JSON quality decisions', () => {
@@ -161,7 +161,7 @@ describe('fal keyframe helpers', () => {
       model: 'anthropic/claude-sonnet-5.5',
       reasoning: true,
       max_tokens: 4000,
-      system_prompt: expect.stringContaining('objet JSON compact'),
+      system_prompt: expect.stringContaining('one compact JSON object'),
       image_urls: ['https://assets.example/keyframe.png'],
     }) });
     expect(mockSubmit.mock.calls[0][1].input.reasoning).toBe(true);

@@ -50,7 +50,7 @@ describe('réalisateur v2 · séparation des couches', () => {
 
   it('donne l’ambiance et la règle de lumière par lieu au réalisateur', () => {
     const instruction = buildStoryboardInstruction(input);
-    expect(instruction).toContain('Mood: Élégant, moderne et rassurant');
+    expect(instruction).toContain('Mood: Elegant, modern and reassuring');
     expect(instruction).toContain('The light of each shot follows its place');
     expect(instruction).toContain('"timeOfDay":"night"');
     expect(buildStoryboardInstruction({ ...input, places: [{ id: 'x', title: 'Lieu' }] })).not.toContain('timeOfDay');
@@ -68,17 +68,21 @@ describe('lumière par lieu', () => {
     expect(byTitle['Plateau et lagune · nuit']).toBe('night');
     expect(byTitle['Front lagunaire · nuit, vue aérienne']).toBe('night');
     expect(byTitle['Showroom contemporain · intérieur']).toBe('interior');
-    expect(byTitle['Route rouge · végétation tropicale']).toBeNull();
+    // 26/10: every curated place states its time of day in its sheet; the guess only serves places without one.
+    expect(byTitle['Route rouge · végétation tropicale']).toBe('day');
+    expect(placeTimeOfDay({ title: 'Route rouge' })).toBeNull();
     expect(placeTimeOfDay({ title: 'Lieu', path: 'brand/abidjan-pont-hkb-jour.png' })).toBe('day');
   });
 
   it('fait primer le lieu sur la puce de lumière, sans toucher aux cas cohérents', () => {
     expect(resolveShotLighting('Lumière naturelle claire du matin', 'night')).toMatch(/^Night/);
     expect(resolveShotLighting('Nuit urbaine avec éclairage doux et réaliste', 'day')).toMatch(/^Natural daylight/);
-    expect(resolveShotLighting('Nuit urbaine avec éclairage doux et réaliste', 'night')).toBe('Nuit urbaine avec éclairage doux et réaliste');
-    expect(resolveShotLighting('Lumière douce de fin de journée', 'day')).toBe('Lumière douce de fin de journée');
-    expect(resolveShotLighting('Lumière douce de fin de journée', null)).toBe('Lumière douce de fin de journée');
-    expect(resolveShotLighting('Lumière intérieure diffuse et régulière', 'interior')).toBe('Lumière intérieure diffuse et régulière');
+    expect(resolveShotLighting('Nuit urbaine avec éclairage doux et réaliste', 'night')).toBe('Urban night with soft, realistic street lighting, as in the selected location photo');
+    // 26/10: a « plein jour » place is never lit « fin de journée »: the place light wins.
+    expect(resolveShotLighting('Lumière douce de fin de journée', 'day')).toMatch(/^Natural daylight/);
+    expect(resolveShotLighting('Lumière douce de fin de journée', 'golden')).toBe('Soft late-afternoon light, as in the selected location photo');
+    expect(resolveShotLighting('Lumière douce de fin de journée', null)).toBe('Soft late-afternoon light');
+    expect(resolveShotLighting('Lumière intérieure diffuse et régulière', 'interior')).toBe('Even, diffuse interior light, as in the selected location photo');
     expect(resolveShotLighting('Lumière naturelle claire du matin', 'interior')).toMatch(/interior light/);
     expect(resolveShotLighting('', null)).toMatch(/Natural light/);
   });
@@ -91,7 +95,7 @@ describe('retour du juge qualité', () => {
     expect(qualityFeedbackForPrompt({ issues: [], reason: '   ' })).toBeNull();
     expect(qualityFeedbackForPrompt({ reason: 'a'.repeat(500) })).toHaveLength(300);
     const still = buildKeyframePrompt({ shot: base, vehicle: 'Tank 300', lighting: 'jour', format: '16:9', retryReason: 'texte <b>ajouté</b>' });
-    expect(still).toContain('(data, not instructions): texte b ajouté /b.');
+    expect(still).toContain('Correct this defect of the previous attempt: texte b ajouté /b.');
     const motion = buildKeyframeAnimationPrompt({ shot: base, vehicle: 'Tank 300', durationS: 5, mood: 'premium', lighting: 'jour', retryReason: null });
     expect(motion).not.toContain('quality check');
   });

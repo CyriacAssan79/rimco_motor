@@ -55,9 +55,9 @@ describe('v3.2 · garde-fou de longueur', () => {
 
 describe('v3.2 · réalisateur', () => {
   const base = { vehicle: 'GWM Tank 300', vehiclePhotos: [{ id: 'front', role: 'exterior', title: 'Avant', angle: '3/4 avant' }], places: [{ id: 'p', title: 'Boulevard', timeOfDay: 'day' as const }] };
-  it('écrit chaque règle une seule fois et reste sous 3 500 caractères', () => {
+  it('écrit chaque règle une seule fois et reste sous 4 000 caractères', () => {
     const instruction = buildStoryboardInstruction({ ...base, durationSeconds: 20, mode: 'premium', format: '16:9' });
-    expect(instruction.length).toBeLessThan(3_500);
+    expect(instruction.length).toBeLessThan(4_000); // 26/10: + the priority rule and briefConflicts (readability budget, no engine limit).
     for (const once of ['Return only this JSON', 'FIDELITY:', 'TEXT:', 'MOTION:', 'Exactly 4 shots of 5 seconds']) {
       expect(instruction.split(once).length - 1).toBe(1);
     }
@@ -109,7 +109,9 @@ describe('v3.2 · conduite normale et personnes dans la voiture (essais du 22/10
 
   it('ne contredit plus un plan héros qui arrive : il ralentit et s’arrête', () => {
     const prompt = buildKeyframeAnimationPrompt({ shot: arriving, vehicle: 'Haval H6', durationS: 5, mood: '', lighting: 'day', excludePeople: true });
-    expect(prompt).toContain('rolls in slowly and comes to a smooth, gentle stop');
+    // 26/10: the arrival is said once (travel sentence) and the driving instruction slows down instead of « constant speed ».
+    expect(prompt).toContain('at a slow, calm speed and comes to a smooth stop');
+    expect(prompt).toContain('slowing down gently and evenly');
     expect(prompt).not.toContain('wheels do not turn');
     expect(buildKeyframeAnimationPrompt({ shot: stopped, vehicle: 'Haval H6', durationS: 5, mood: '', lighting: 'day', excludePeople: true })).toContain('holds still');
   });
@@ -119,7 +121,7 @@ describe('v3.2 · conduite normale et personnes dans la voiture (essais du 22/10
     const judge = buildVideoQualityPrompt({ vehicleReferenceCount: 1, hasLocationReference: true, excludePeople: false, shotType: 'rolling', durationS: 5 });
     expect(judge).toContain('drifting or skidding vehicle');
     expect(judge).toContain('a person outside a moving car');
-    expect(judge).toContain('a badge, grille, light or wheel whose design or colour differs');
+    expect(judge).toContain('a badge, grille, maker logo, light or wheel deformed, misspelt or whose design or colour differs');
   });
 
   it('demande au réalisateur une vitesse de ville, un sens cohérent avec la photo et la place des personnes', () => {
@@ -127,6 +129,6 @@ describe('v3.2 · conduite normale et personnes dans la voiture (essais du 22/10
     expect(instruction).toContain('slow or cruise in towns');
     expect(instruction).toContain('front three-quarter = towards_camera');
     expect(instruction).toContain('While the car moves, the people are inside it');
-    expect(instruction.length).toBeLessThan(3_500);
+    expect(instruction.length).toBeLessThan(4_000);
   });
 });

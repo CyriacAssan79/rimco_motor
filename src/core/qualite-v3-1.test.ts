@@ -55,7 +55,9 @@ describe('A · le texte n’empêche plus la génération', () => {
 
 describe('F · juge du lieu recalibré', () => {
   it('accepte un autre point de vue du même lieu', () => {
-    expect(SAME_PLACE_CHECK).toContain('different camera viewpoint');
+    expect(SAME_PLACE_CHECK).toContain('another angle or another part of the same setting is normal');
+    // 26/10: about the place only, so that it never excuses a badly framed car.
+    expect(SAME_PLACE_CHECK).not.toMatch(/framing|crop/);
     expect(buildKeyframeQualityPrompt({ vehicleReferenceCount: 1, hasLocationReference: true })).toContain(SAME_PLACE_CHECK);
     expect(buildKeyframeQualityPrompt({ vehicleReferenceCount: 1, hasLocationReference: false })).not.toContain(SAME_PLACE_CHECK);
   });
@@ -83,7 +85,7 @@ describe('C · juge vidéo daté, avec gros plans des roues', () => {
     const prompt = buildVideoQualityPrompt({ vehicleReferenceCount: 1, hasLocationReference: true, excludePeople: true, shotType: 'rolling', durationS: 5 });
     expect(prompt).toContain('t=0.5s, 1.5s, 2.5s, 3.5s, 4.5s');
     expect(prompt).toContain('wheel and road zone');
-    expect(prompt).toContain('"t=2.5s blocking: tyre floats above the road"');
+    expect(prompt).toContain('"t=2.5s blocking: tyre floats"');
     expect(prompt).toContain('image 8 = approved base photo');
     expect(prompt).toContain('image 9 = selected location');
   });

@@ -23,6 +23,7 @@ Un seul essai réel fal.ai depuis l’application a été autorisé, dans le sol
 - Supabase : projet `Rimco studio`, schéma et seed appliqués, buckets privés.
 - Vercel : projet `rimcostudio`; Preview est en mode live; Production reste en simulation.
 - fal.ai : clé stockée comme secret Vercel, jamais dans le navigateur ni dans Git.
+- Signature des storyboards : dans Vercel, Settings → Environment Variables, ajouter `STORYBOARD_SIGNING_KEY` (64 caractères aléatoires tirés d’un générateur de mots de passe) pour Preview et Production, puis redéployer. Obligatoire en mode live : sans elle, la préparation du storyboard affiche un message clair et aucune vidéo n’est lancée.
 - L’accès est privé, les inscriptions publiques sont désactivées et les médias nécessitent une authentification.
 - Avant tout pilote commercial, vérifier que le plan Vercel utilisé autorise cet usage.
 

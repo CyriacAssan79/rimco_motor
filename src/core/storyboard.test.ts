@@ -40,7 +40,10 @@ describe('storyboard', () => {
     expect(validateStoryboard([{ ...shots[0], durationSeconds: 5 }, { ...shots[1], durationSeconds: 5 }, { ...shots[0], durationSeconds: 5 }], 15, 'wan')).toBe(true);
     expect(() => validateStoryboard(shots, 20, 'wan')).toThrow(/durée/i);
     expect(() => validateStoryboard([{ ...shots[0], durationSeconds: 11 }, { ...shots[1], durationSeconds: 9 }], 20, 'wan')).toThrow(/maximum/i);
-    expect(validateStoryboard([{ ...shots[0], durationSeconds: 12 }, { ...shots[1], durationSeconds: 8 }], 20, 'kling')).toBe(true);
+    // 26/10 · architecture: Pro shots last 3 to 5 s (Kling itself accepts up to 15 s).
+    expect(() => validateStoryboard([{ ...shots[0], durationSeconds: 12 }, { ...shots[1], durationSeconds: 8 }], 20, 'kling')).toThrow(/entre 3 et 5/);
+    expect(validateStoryboard([5, 5, 5, 5].map((durationSeconds, index) => ({ ...shots[index % 2], durationSeconds })), 20, 'kling')).toBe(true);
+    expect(validateStoryboard([3, 4, 3, 5, 5].map((durationSeconds, index) => ({ ...shots[index % 2], durationSeconds })), 20, 'kling')).toBe(true);
   });
 
   it('builds a director brief for the selected runtime, aspect ratio and user story', () => {
@@ -51,31 +54,33 @@ describe('storyboard', () => {
       vehiclePhotos: [{ id: 'vehicle-front', role: 'exterior', title: 'Avant trois-quarts' }],
       places: [{ id: 'place-plateau', title: 'Abidjan, Plateau' }],
       format: '9:16',
-      lighting: 'Fin de journée',
+      lighting: 'Lumière douce de fin de journée',
     });
 
     expect(instruction).toContain('9:16');
     expect(instruction).not.toContain('Une famille traverse Abidjan au coucher du soleil.');
     expect(buildDirectorUserPrompt('Une famille traverse Abidjan au coucher du soleil.')).toContain('<user_brief>Une famille traverse Abidjan au coucher du soleil.</user_brief>');
     expect(instruction).toContain('You direct a premium live-action car commercial');
-    expect(instruction).toContain('Fin de journée');
+    expect(instruction).toContain('Lighting: Soft late-afternoon light.');
     expect(instruction).toContain('scene (120)');
     expect(instruction).toContain('action (160)');
     expect(instruction).toContain('Exactly 2 shots of 5 seconds (10 s).');
   });
 
-  it('asks the Pro director for shots of 3 to 15 seconds totalling the runtime', () => {
+  it('asks the Pro director for shots of 3 to 5 seconds totalling the runtime (architecture, 26/10)', () => {
     const instruction = buildStoryboardInstruction({
       durationSeconds: 10, mode: 'pro', vehicle: 'GWM Tank 300 gris', vehiclePhotos: [{ id: 'front', role: 'exterior', title: 'Avant' }],
       places: [{ id: 'hkb', title: 'Pont HKB' }], format: '16:9',
     });
-    expect(instruction).toContain('2 to 3 shots of 3 to 15 whole seconds each, totalling exactly 10 s.');
+    expect(instruction).toContain('2 to 3 shots of 3 to 5 whole seconds each, totalling exactly 10 s.');
+    expect(buildStoryboardInstruction({ durationSeconds: 20, mode: 'pro', vehicle: 'GWM Tank 300 gris', vehiclePhotos: [{ id: 'front', role: 'exterior', title: 'Avant' }], places: [{ id: 'hkb', title: 'Pont HKB' }], format: '16:9' })).toContain('4 to 6 shots of 3 to 5 whole seconds each, totalling exactly 20 s.');
   });
 
   it('checks durations instead of silently rewriting them (patch v3.2)', () => {
     expect(storyboardDurationIssue([{ ...shots[0], durationSeconds: 5 }, { ...shots[1], durationSeconds: 5 }], 10, 'kling')).toBeNull();
     expect(storyboardDurationIssue([{ ...shots[0], durationSeconds: 4 }, { ...shots[1], durationSeconds: 4 }], 10, 'kling')).toMatch(/totaliser exactement 10/);
-    expect(storyboardDurationIssue([{ ...shots[0], durationSeconds: 2 }, { ...shots[1], durationSeconds: 8 }], 10, 'kling')).toMatch(/entre 3 et 15/);
+    expect(storyboardDurationIssue([{ ...shots[0], durationSeconds: 2 }, { ...shots[1], durationSeconds: 8 }], 10, 'kling')).toMatch(/entre 3 et 5/);
+    expect(storyboardDurationIssue([{ ...shots[0], durationSeconds: 4 }, { ...shots[1], durationSeconds: 6 }], 10, 'kling')).toMatch(/entre 3 et 5/);
   });
 
   it('keeps verbose model storyboard fields within the validated limits without cutting a word', () => {
@@ -93,7 +98,8 @@ describe('storyboard', () => {
     expect(getSingleShotClipDurations(10, 'wan')).toEqual([5, 5]);
     expect(getSingleShotClipDurations(15, 'wan')).toEqual([5, 5, 5]);
     expect(getSingleShotClipDurations(20, 'wan')).toEqual([5, 5, 5, 5]);
-    expect(getSingleShotClipDurations(20, 'kling')).toEqual([10, 10]);
+    expect(getSingleShotClipDurations(20, 'kling')).toEqual([5, 5, 5, 5]);
+    expect(getSingleShotClipDurations(15, 'kling')).toEqual([5, 5, 5]);
     expect(getSingleShotClipDurations(20, 'seedance')).toEqual([20]);
     expect(finalVideoSeconds(20)).toBe(22);
     expect(finalVideoSeconds(5)).toBe(7);

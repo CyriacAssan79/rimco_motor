@@ -25,8 +25,8 @@ describe('cadre · ville de la marque', () => {
 });
 
 describe('cadre · description des lieux', () => {
-  it('décrit un lieu intégré par sa ville et son décor, un lieu importé par son titre', () => {
-    expect(placeDescription(bridge)).toBe('Abidjan, pont Henri-Konan-Bédié. Pont à haubans blanc, lagune Ébrié et skyline d’Abidjan en plein jour');
+  it('décrit un lieu intégré par sa ville et la description anglaise de sa fiche, un lieu importé par son titre', () => {
+    expect(placeDescription(bridge)).toBe('HKB bridge (Henri-Konan-Bédié), Abidjan. Aerial view of the white single-pylon cable-stayed HKB bridge over the Ebrie lagoon, Plateau towers behind');
     expect(placeDescription({ id: 'x', title: 'Marché de Treichville', category: 'Abidjan · marché' })).toBe('Marché de Treichville · Abidjan · marché');
   });
 
@@ -49,8 +49,8 @@ describe('cadre · réalisateur', () => {
   it('impose un lieu listé à chaque plan et décrit chaque lieu', () => {
     const instruction = buildStoryboardInstruction({ durationSeconds: 10, mode: 'pro', vehicle: 'GWM Tank 300', vehiclePhotos, places, format: '16:9', marketLocation: market });
     expect(instruction).toContain('locationPhotoId from the listed places (never null)');
-    expect(instruction).toContain('"description":"Abidjan, pont Henri-Konan-Bédié.');
-    expect(instruction.length).toBeLessThan(3_500);
+    expect(instruction).toContain('"description":"HKB bridge (Henri-Konan-Bédié), Abidjan.');
+    expect(instruction.length).toBeLessThan(4_000); // 26/10: + the priority rule and briefConflicts (readability budget, no engine limit).
   });
 });
 
@@ -63,16 +63,16 @@ describe('cadre · prompts et juges', () => {
     expect(animation).toContain('Everything the camera reveals belongs to this same place');
     expect(animation.length).toBeLessThanOrEqual(VIDEO_PROMPT_MAX_CHARS);
     const keyframe = buildKeyframePrompt({ shot, vehicle: 'GWM Tank 300 gris', lighting: 'day', format: '16:9', retryReason: null, hasLocationReference: true, excludePeople: true, place, market });
-    expect(keyframe).toContain('Place: Abidjan, pont Henri-Konan-Bédié');
+    expect(keyframe).toContain('Place: HKB bridge (Henri-Konan-Bédié), Abidjan');
     expect(keyframe.length).toBeLessThanOrEqual(IMAGE_PROMPT_MAX_CHARS);
-    expect(buildEndKeyframePrompt({ shot, durationS: 5, format: '16:9', excludePeople: true, place, market })).toContain('Place: Abidjan');
+    expect(buildEndKeyframePrompt({ shot, durationS: 5, format: '16:9', excludePeople: true, place, market })).toContain('Place: HKB bridge');
   });
 
   it('tient sous la limite Kling même avec un plan très long, des personnes et une reprise', () => {
     const long = shotDraftSchema.parse({ ...shot, action: 'A'.repeat(400), camera: 'B'.repeat(400), scene: 'C'.repeat(400) });
     const prompt = buildKeyframeAnimationPrompt({ shot: long, vehicle: 'GWM Tank 300 gris', durationS: 5, mood: 'premium and confident', lighting: 'golden hour', castDescription: 'D'.repeat(400), place, market, retryReason: 'E'.repeat(300), maxLength: 2_500 });
     expect(prompt.length).toBeLessThanOrEqual(VIDEO_PROMPT_MAX_CHARS);
-    expect(prompt).toContain('Place: Abidjan');
+    expect(prompt).toContain('Place: HKB bridge');
     const image = buildKeyframePrompt({ shot: long, vehicle: 'GWM Tank 300 gris', lighting: 'golden hour', format: '16:9', retryReason: 'E'.repeat(300), vehicleReferenceCount: 4, hasLocationReference: true, castDescription: 'D'.repeat(400), place, market });
     expect(image.length).toBeLessThanOrEqual(IMAGE_PROMPT_MAX_CHARS);
   });

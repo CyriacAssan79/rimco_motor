@@ -17,17 +17,18 @@ describe('conducteur · présence, volant et regard (essais du 24/10)', () => {
     expect(peopleDirection({ castDescription: driver, stage: 'keyframe', moving: true, steeringSide: 'left' })).toContain('facing forward, eyes on the road ahead');
   });
 
-  it('place le volant du bon côté dès qu’une personne est visible, jamais dans une voiture vide', () => {
+  it('versions d’avant le 26/10 : volant du bon côté dès qu’une personne est visible, jamais dans une voiture vide', () => {
     expect(peopleDirection({ castDescription: driver, stage: 'animation', moving: true, steeringSide: 'left' })).toContain('Left-hand drive');
-    expect(peopleDirection({ excludePeople: true, stage: 'keyframe', moving: true, steeringSide: 'left' })).not.toContain('hand drive');
+    expect(peopleDirection({ excludePeople: true, stage: 'keyframe', moving: true, steeringSide: 'left', steeringWithPeopleOnly: true })).not.toContain('hand drive');
     expect(peopleDirection({ castDescription: driver, stage: 'keyframe', moving: true })).not.toContain('hand drive');
   });
 
   it('fait juger bloquant un volant du mauvais côté ou un conducteur qui ne regarde pas la route', () => {
-    expect(buildKeyframeQualityPrompt({ vehicleReferenceCount: 1, hasLocationReference: true, steeringSide: 'left' })).toContain('a driver turned away from the road while driving, is a defect');
+    expect(buildKeyframeQualityPrompt({ vehicleReferenceCount: 1, hasLocationReference: true, steeringSide: 'left', steeringWithPeopleOnly: true })).toContain('a driver turned away from the road while driving, is a defect');
+    expect(buildKeyframeQualityPrompt({ vehicleReferenceCount: 1, hasLocationReference: true, steeringSide: 'left' })).toContain('A steering wheel or driver on the other side, or a driver turned away from the road while driving, is blocking.');
     const video = buildVideoQualityPrompt({ vehicleReferenceCount: 1, hasLocationReference: true, excludePeople: false, steeringSide: 'left', durationS: 5 });
     expect(video).toContain('a steering wheel or driver on the wrong side; a driver turned away from the road while driving');
-    expect(buildVideoQualityPrompt({ vehicleReferenceCount: 1, hasLocationReference: true, excludePeople: true, steeringSide: 'left', durationS: 5 })).not.toContain('wrong side');
+    expect(buildVideoQualityPrompt({ vehicleReferenceCount: 1, hasLocationReference: true, excludePeople: true, steeringSide: 'left', steeringWithPeopleOnly: true, durationS: 5 })).not.toContain('wrong side');
   });
 
   it('tient sous les limites de longueur avec conducteur, lieu et reprise', () => {

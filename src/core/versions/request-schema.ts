@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { vehicleCategories } from '@/core/scenes/catalog';
+import { onlyCatalogLighting, onlyCatalogMood } from '@/core/scenes/prompt-values';
 import { MAX_STORYBOARD_DIRECTION_LENGTH } from '@/core/storyboard-direction';
 export const requestSchema = z.object({
   description: z.string().trim().max(MAX_STORYBOARD_DIRECTION_LENGTH).default(''),
@@ -14,10 +15,11 @@ export const requestSchema = z.object({
   location: z.string().max(160).default(''),
   setting: z.string().max(160).default(''),
   character: z.string().max(160).default(''),
-  lighting: z.string().max(160).default('golden hour'),
+  // 26/10: only the Studio catalogue values; anything else is ignored without error (cached pages keep working).
+  lighting: z.string().max(160).default('').transform(onlyCatalogLighting),
   cameraMovement: z.string().trim().max(160).default('Travelling trois-quarts avant, stable et sans coupe'),
   vehicleAction: z.string().trim().max(160).default('Le véhicule avance lentement et régulièrement'),
-  mood: z.string().trim().max(160).default('Moderne, naturel et rassurant'),
+  mood: z.string().trim().max(160).default('').transform(onlyCatalogMood),
   vehicleCategory: z.enum(vehicleCategories).default('autre'),
   scenePresetId: z.string().trim().max(100).default(''),
   conceptId: z.enum(['signature', 'mouvement', 'ambiance']).default('signature'),

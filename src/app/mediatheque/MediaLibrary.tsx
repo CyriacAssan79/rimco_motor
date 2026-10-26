@@ -3,6 +3,8 @@
 import { Fragment, useCallback, useEffect, useState } from 'react';
 import Image from 'next/image';
 import { createSupabaseBrowserClient } from '@/core/supabase/browser';
+import { vehicleViewOptions } from '@/core/assets/vehicle-views';
+import type { PlaceProfile } from '@/core/motion/place-motion';
 
 type Asset = {
   id: string;
@@ -21,6 +23,11 @@ type Asset = {
   vehicle_dossier_id?: string | null;
   photo_role?: string | null;
   isCurated?: boolean;
+  placeProfile?: PlaceProfile;
+  placeProfileDescribed?: boolean;
+  /** Admin only: sheet proposed by the vision model when the place was uploaded. */
+  placeProfileProposal?: PlaceProfile | null;
+  placeProposalStatus?: 'pending' | 'ready' | 'failed' | null;
 };
 type VehicleFolder = { id: string; make: string; model: string; color?: string | null };
 
@@ -50,7 +57,7 @@ export function MediaLibrary() {
   const [make, setMake] = useState('');
   const [model, setModel] = useState('');
   const [color, setColor] = useState('');
-  const [angle, setAngle] = useState('3/4 avant');
+  const [angle, setAngle] = useState<string>(vehicleViewOptions[0]);
   const [rejecting, setRejecting] = useState('');
   const [reason, setReason] = useState('');
   const [isAdmin, setIsAdmin] = useState(false);
@@ -62,8 +69,8 @@ export function MediaLibrary() {
   const [photoRole, setPhotoRole] = useState<'exterior' | 'interior' | 'detail'>('exterior');
   const [placeTitle, setPlaceTitle] = useState('');
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const response = await fetch(`/api/assets${filter !== 'all' ? `?kind=${encodeURIComponent(filter)}` : ''}`);
       const data = await response.json();
@@ -75,6 +82,17 @@ export function MediaLibrary() {
       setLoading(false);
     }
   }, [filter]);
+
+  // 26/10: while a proposed place sheet is pending, follow it every 10 s (same rhythm as the video follow-up).
+  const pendingProposals = isAdmin ? assets.filter((asset) => asset.placeProposalStatus === 'pending').map((asset) => asset.id) : [];
+  const pendingKey = pendingProposals.join(',');
+  useEffect(() => {
+    if (!pendingKey) return;
+    const timer = setTimeout(() => {
+      void Promise.all(pendingKey.split(',').map((id) => fetch(`/api/admin/assets/${id}/place-proposal`, { method: 'POST' }).catch(() => null))).then(() => load(true));
+    }, 10_000);
+    return () => clearTimeout(timer);
+  }, [pendingKey, load]);
 
   useEffect(() => {
     void fetch('/api/me').then((response) => response.ok ? response.json() : null).then((data) => setIsAdmin(data?.actor?.role === 'admin')).catch(() => setIsAdmin(false));
@@ -215,7 +233,7 @@ export function MediaLibrary() {
               <label className="grid gap-1 text-xs font-semibold text-[#253b4e]">Marque<input value={make} onChange={(event) => setMake(event.target.value)} className="rounded-md border border-[#d2cec6] bg-[#fbfbfa] px-3 py-2" /></label>
               <label className="grid gap-1 text-xs font-semibold text-[#253b4e]">Modèle<input value={model} onChange={(event) => setModel(event.target.value)} className="rounded-md border border-[#d2cec6] bg-[#fbfbfa] px-3 py-2" /></label>
               <label className="grid gap-1 text-xs font-semibold text-[#253b4e]">Couleur<input value={color} onChange={(event) => setColor(event.target.value)} className="rounded-md border border-[#d2cec6] bg-[#fbfbfa] px-3 py-2" /></label>
-              <label className="grid gap-1 text-xs font-semibold text-[#253b4e]">Vue de la photo<select value={angle} onChange={(event) => setAngle(event.target.value)} className="rounded-md border border-[#d2cec6] bg-[#fbfbfa] px-3 py-2"><option>3/4 avant</option><option>Habitacle</option><option>Détail extérieur</option><option>Profil</option><option>Arrière</option></select></label>
+              <label className="grid gap-1 text-xs font-semibold text-[#253b4e]">Vue de la photo<select value={angle} onChange={(event) => setAngle(event.target.value)} className="rounded-md border border-[#d2cec6] bg-[#fbfbfa] px-3 py-2">{vehicleViewOptions.map((option) => <option key={option}>{option}</option>)}</select></label>
             </>
           )}
           {kind === 'vehicle' && isAdmin && <div className="w-full rounded-xl border border-[#e7e2da] bg-[#fbfaf8] p-4">
@@ -275,8 +293,10 @@ export function MediaLibrary() {
                 <p className="mt-1 text-xs text-[#918c85]">{asset.kind === 'vehicle' ? [asset.angle, asset.color].filter(Boolean).join(' · ') || 'RIMCO Motors' : asset.category ?? asset.color ?? asset.variant ?? 'RIMCO Motors'}</p>
                 {asset.isCurated && <p className="mt-2 text-[10px] text-[#4e7656]">Lieu intégré · référence disponible dans les storyboards</p>}
                 {asset.status === 'rejetée' && asset.review_reason && <p className="mt-2 text-xs text-[#831810]">Motif : {asset.review_reason}</p>}
+                {isAdmin && asset.kind === 'place' && !asset.isCurated && asset.placeProfile && <PlaceProfileEditor asset={asset} profile={asset.status === 'en_attente' ? asset.placeProfileProposal ?? asset.placeProfile : asset.placeProfile} review={asset.status === 'en_attente'} onSaved={(message) => { setError(''); setNotice(message); void load(); }} onError={setError} />}
                 {isAdmin && asset.status === 'en_attente' && (
                   <ReviewControls
+                    canApprove={asset.kind !== 'place'}
                     asset={asset}
                     rejecting={rejecting}
                     reason={reason}
@@ -334,8 +354,10 @@ function ReviewControls(props: {
   setRejecting: (id: string) => void;
   setReason: (value: string) => void;
   approve: (asset: Asset, status: Asset['status']) => Promise<void>;
+  /** A place is validated with its sheet, from the sheet form. */
+  canApprove?: boolean;
 }) {
-  const { asset, rejecting, reason, setRejecting, setReason, approve } = props;
+  const { asset, rejecting, reason, setRejecting, setReason, approve, canApprove = true } = props;
   if (rejecting === asset.id) {
     return (
       <div className="mt-4 space-y-2">
@@ -352,8 +374,84 @@ function ReviewControls(props: {
   }
   return (
     <div className="mt-4 flex gap-2">
-      <button onClick={() => void approve(asset, 'validée')} className="flex-1 rounded-lg bg-[#253b4e] px-3 py-2 text-xs font-semibold text-white hover:bg-[#304b61]">Valider</button>
+      {canApprove && <button onClick={() => void approve(asset, 'validée')} className="flex-1 rounded-lg bg-[#253b4e] px-3 py-2 text-xs font-semibold text-white hover:bg-[#304b61]">Valider</button>}
       <button onClick={() => { setRejecting(asset.id); setReason(''); }} className="rounded-lg border border-[#e8e5df] px-3 py-2 text-xs font-semibold text-[#756f67] hover:bg-[#f7f5f1]">Refuser</button>
+    </div>
+  );
+}
+
+const shotTypeLabels: Array<[PlaceProfile['shotTypes'][number], string]> = [['establishing', 'Plan d’ensemble'], ['rolling', 'Voiture qui roule'], ['hero', 'Plan héros'], ['detail', 'Détail']];
+const timeOfDayLabels: Array<[PlaceProfile['timeOfDay'], string]> = [['day', 'Journée'], ['golden', 'Lever ou coucher du soleil'], ['night', 'Nuit'], ['interior', 'Intérieur (showroom) : voiture immobile']];
+const proposalLabels = { pending: 'Proposition automatique en cours…', ready: 'Fiche proposée automatiquement : vérifiez chaque champ.', failed: 'Proposition automatique indisponible : fiche prudente pré-remplie, à compléter.' } as const;
+
+/**
+ * 26/10 place sheet: what an uploaded place allows, in closed fields only. `review`: the place is pending and is
+ * validated together with its sheet; otherwise the sheet of a validated place is edited.
+ */
+function PlaceProfileEditor({ asset, profile, review, onSaved, onError }: { asset: Asset; profile: PlaceProfile; review: boolean; onSaved: (message: string) => void; onError: (message: string) => void }) {
+  const [draft, setDraft] = useState<PlaceProfile>(profile);
+  const [open, setOpen] = useState(review);
+  const [saving, setSaving] = useState(false);
+  const proposalKey = JSON.stringify(profile);
+  // A proposal arriving while the form is open replaces the prudent pre-fill.
+  useEffect(() => { setDraft(JSON.parse(proposalKey) as PlaceProfile); }, [proposalKey]);
+  const interior = draft.timeOfDay === 'interior';
+  const toggle = <T,>(values: T[], value: T) => values.includes(value) ? values.filter((entry) => entry !== value) : [...values, value];
+  function setTimeOfDay(timeOfDay: PlaceProfile['timeOfDay']) {
+    setDraft(timeOfDay === 'interior'
+      ? { ...draft, timeOfDay, view: 'road', roadAxes: [], shotTypes: ['hero', 'detail'], dust: false, maxSpeed: 'slow' }
+      : { ...draft, timeOfDay, roadAxes: draft.roadAxes.length ? draft.roadAxes : ['along'] });
+  }
+  async function save() {
+    setSaving(true);
+    try {
+      const body = review ? { status: 'validée', placeProfile: draft } : { placeProfile: draft };
+      const response = await fetch(`/api/admin/assets/${asset.id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error ?? 'Impossible d’enregistrer ce lieu.');
+      setOpen(false);
+      onSaved(review ? 'Lieu et fiche validés.' : 'Fiche du lieu enregistrée.');
+    } catch (cause) { onError(cause instanceof Error ? cause.message : 'Impossible d’enregistrer ce lieu.'); }
+    finally { setSaving(false); }
+  }
+  if (!open) {
+    return (
+      <div className="mt-3 flex items-center justify-between gap-2">
+        <p className="text-[10px] text-[#88847d]">{asset.placeProfileDescribed ? 'Fiche du lieu validée.' : 'Fiche du lieu absente : réglage prudent appliqué (plans héros et détails, vitesse lente).'}</p>
+        <button type="button" onClick={() => { setDraft(profile); setOpen(true); }} className="rounded-md border border-[#d2cec6] px-2.5 py-1.5 text-[10px] font-semibold text-[#253b4e]">{asset.placeProfileDescribed ? 'Modifier la fiche' : 'Décrire'}</button>
+      </div>
+    );
+  }
+  return (
+    <div className="mt-3 grid gap-2 rounded-lg border border-[#e7e2da] bg-[#fbfaf8] p-3 text-xs">
+      {review && asset.placeProposalStatus && <p className="text-[10px] text-[#675432]">{proposalLabels[asset.placeProposalStatus]}</p>}
+      <label className="grid gap-1 font-semibold">Moment de la journée<select value={draft.timeOfDay} onChange={(event) => setTimeOfDay(event.target.value as PlaceProfile['timeOfDay'])} className="rounded-md border border-[#d2cec6] bg-white px-2 py-1.5 font-normal">{timeOfDayLabels.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+      {!interior && <>
+        <label className="grid gap-1 font-semibold">Point de vue de la photo<select value={draft.view} onChange={(event) => setDraft({ ...draft, view: event.target.value as PlaceProfile['view'] })} className="rounded-md border border-[#d2cec6] bg-white px-2 py-1.5 font-normal"><option value="road">Au niveau de la route</option><option value="elevated">En hauteur (balcon, toit)</option><option value="aerial">Vue aérienne</option></select></label>
+        <fieldset className="grid gap-1"><legend className="font-semibold">Axes de la route</legend>
+          <label className="flex items-center gap-2"><input type="checkbox" checked={draft.roadAxes.includes('along')} onChange={() => setDraft({ ...draft, roadAxes: toggle(draft.roadAxes, 'along') })} />La voiture suit la route (vers la caméra ou en s’éloignant)</label>
+          <label className="flex items-center gap-2"><input type="checkbox" checked={draft.roadAxes.includes('across')} onChange={() => setDraft({ ...draft, roadAxes: toggle(draft.roadAxes, 'across') })} />Passage latéral, caméra au bord de la route</label>
+        </fieldset>
+      </>}
+      <fieldset className="grid gap-1"><legend className="font-semibold">Plans possibles</legend>
+        {shotTypeLabels.filter(([type]) => !interior || type === 'hero' || type === 'detail').map(([type, label]) => <label key={type} className="flex items-center gap-2"><input type="checkbox" checked={draft.shotTypes.includes(type)} onChange={() => setDraft({ ...draft, shotTypes: toggle(draft.shotTypes, type) })} />{label}</label>)}
+      </fieldset>
+      {!interior && <>
+        <label className="flex items-center gap-2 font-semibold"><input type="checkbox" checked={draft.dust} onChange={(event) => setDraft({ ...draft, dust: event.target.checked })} />Poussière possible (piste non goudronnée)</label>
+        <label className="grid gap-1 font-semibold">Vitesse maximale<select value={draft.maxSpeed} onChange={(event) => setDraft({ ...draft, maxSpeed: event.target.value as PlaceProfile['maxSpeed'] })} className="rounded-md border border-[#d2cec6] bg-white px-2 py-1.5 font-normal"><option value="slow">Lente</option><option value="cruise">Normale</option><option value="dynamic">Soutenue (route dégagée)</option></select></label>
+      </>}
+      <label className="flex items-center gap-2 font-semibold"><input type="checkbox" checked={draft.hasReadableText} onChange={(event) => setDraft({ ...draft, hasReadableText: event.target.checked })} />Texte lisible sur la photo (enseignes, panneaux, affiches)</label>
+      {draft.hasReadableText && <p role="alert" className="rounded-md bg-[#fbf1dd] px-2 py-1.5 text-[10px] text-[#926b2a]">Ce lieu montre du texte lisible : c’est la première cause de texte recopié dans les images. Préférez une photo sans enseigne lisible.</p>}
+      <div className="grid gap-1">
+        <p className="font-semibold">Description envoyée aux modèles</p>
+        <p className="text-[11px] text-[#5d5a55]">{draft.promptEn || 'Aucune : le nom et la catégorie du lieu sont utilisés.'}</p>
+        {draft.promptEn && <button type="button" onClick={() => setDraft({ ...draft, promptEn: '' })} className="justify-self-start rounded-md border border-[#d2cec6] px-2 py-1 text-[10px]">Vider la description</button>}
+      </div>
+      <p className="text-[10px] text-[#88847d]">Une vue aérienne ne permet que le plan d’ensemble ; une vue en hauteur, ni plan héros ni détail.</p>
+      <div className="flex gap-2">
+        <button type="button" disabled={saving || (review && asset.placeProposalStatus === 'pending')} onClick={() => void save()} className="rounded-md bg-[#253b4e] px-3 py-1.5 font-semibold text-white disabled:opacity-50">{saving ? 'Enregistrement…' : review ? 'Valider le lieu et sa fiche' : 'Enregistrer'}</button>
+        {!review && <button type="button" onClick={() => setOpen(false)} className="rounded-md border border-[#d2cec6] px-3 py-1.5">Annuler</button>}
+      </div>
     </div>
   );
 }

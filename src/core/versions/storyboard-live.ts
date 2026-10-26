@@ -3,7 +3,7 @@ import { HttpError } from '@/core/auth/guards';
 import { buildBrief } from '@/core/brief';
 import { getStoryboardModeRoute } from '@/core/providers/storyboard-routing';
 import { wanReferenceVideoProvider, klingReferenceVideoProvider, seedanceReferenceVideoProvider, safeProviderError, type ReferenceVideoProvider } from '@/core/providers/fal-reference-video';
-import { ANIMATION_PROMPT_MAX_LENGTH, buildEndKeyframePrompt, buildEndKeyframeQualityPrompt, buildKeyframeAnimationPrompt, buildKeyframePrompt, buildKeyframeQualityPrompt, buildVideoQualityPrompt, canAnimateKeyframes, needsEndKeyframe, resolveShotType, KEYFRAME_MAX_REFERENCES, KEYFRAME_QUALITY_RESERVE_USD, KEYFRAME_VIDEO_ENDPOINTS, KEYFRAME_IMAGE_ENDPOINT, KEYFRAME_VISION_ENDPOINT, keyframeVideoProviders, readKeyframe, readKeyframeQuality, selectKeyframeReferenceIds, shouldGenerateKeyframes, submitKeyframe, submitKeyframeQuality } from '@/core/providers/fal-keyframes';
+import { ANIMATION_PROMPT_MAX_LENGTH, buildEndKeyframePrompt, buildEndKeyframeQualityPrompt, buildKeyframeAnimationPrompt, buildKeyframePrompt, buildKeyframeQualityPrompt, buildVideoQualityPrompt, framingCriterionOf, isMoving, canAnimateKeyframes, needsEndKeyframe, resolveShotType, KEYFRAME_MAX_REFERENCES, KEYFRAME_QUALITY_RESERVE_USD, KEYFRAME_VIDEO_ENDPOINTS, KEYFRAME_IMAGE_ENDPOINT, KEYFRAME_VISION_ENDPOINT, keyframeVideoProviders, readKeyframe, readKeyframeQuality, selectKeyframeReferenceIds, shouldGenerateKeyframes, submitKeyframe, submitKeyframeQuality } from '@/core/providers/fal-keyframes';
 import { logFalStatusFailure } from '@/core/providers/fal-observability';
 import { klingVideoProvider, KLING_ENDPOINT } from '@/core/providers/fal-kling';
 import { createStorageAdminClient } from '@/core/storage/supabase';
@@ -24,9 +24,11 @@ import { readShotRevision, SHOT_REVISION_RESERVE_USD, submitShotRevision } from 
 import type { CreateVersionInput } from './live';
 import { animationSubmitStateAfterFailure, canSubmitAnimation } from './animation-submit-state';
 import { reserveGenerationCost, reserveKeyframeCost, reserveLlmCost, settleUsageCost } from '@/core/billing/ledger';
-import { checkVideoCostCap, nominalVideoCostUsd } from '@/core/billing/video-cap';
-import { findCuratedLocation, locationCatalog, placeDescription, placeTimeOfDay, resolveShotLighting } from '@/core/assets/location-catalog';
-import { BRAND_SETTINGS_COLUMNS, loadBrandSettings, storedBrandMarket, storedSteeringSide } from '@/core/brand-market';
+import { costPlanForBrief, nominalVideoCostUsd, videoCostCapCheck, worstCaseVideoCostUsd, type CostPlanUsd } from '@/core/billing/video-cap';
+import { findCuratedLocation, findSelectableLocation, locationCatalog, placeDescription, placeProfileFor, placeTimeOfDay, resolveShotLighting } from '@/core/assets/location-catalog';
+import { forbiddenShotText } from '@/core/brief/conflicts';
+import { buildMotionMatrix, fitShotToMatrix, keepWithinMatrix, loadPlaceProfiles, PLACE_PROFILE_COLUMNS, shotMotionAllowance, storedMotionMatrix } from '@/core/motion/place-motion';
+import { BRAND_SETTINGS_COLUMNS, loadBrandSettings, storedBrandMarket, storedDrivingRules } from '@/core/brand-market';
 import { createFalClient } from '@fal-ai/client';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -152,15 +154,19 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
   try { validateStoryboardCast(input.storyboard, castAssetIds); } catch (cause) { throw new HttpError(422, cause instanceof Error ? cause.message : 'Casting invalide.'); }
   const castMode = castAssets.length > 0;
 
-  const curatedPlaces = input.placeIds.map(findCuratedLocation).filter((place) => place !== undefined);
+  const curatedPlaces = input.placeIds.map(findSelectableLocation).filter((place) => place !== undefined);
   const curatedIds = new Set<string>(curatedPlaces.map((place) => place.id));
   const uploadedPlaceIds = input.placeIds.filter((id) => !curatedIds.has(id));
   const locationsQuery = uploadedPlaceIds.length ? await authenticated.from('assets').select('id,path,title,category,kind,status,brand_id').in('id', uploadedPlaceIds).eq('kind', 'place').eq('status', 'validée').eq('brand_id', actor.brandId) : { data: [], error: null };
   if (locationsQuery.error || (locationsQuery.data ?? []).length !== uploadedPlaceIds.length) throw new HttpError(422, 'Un lieu sélectionné n’est plus disponible.');
   const placeAssets = [...curatedPlaces.map((place) => ({ id: place.id, path: place.path, title: place.title, category: place.category, kind: 'place' as const, status: 'validée' as const, brand_id: actor.brandId })), ...(locationsQuery.data ?? [])];
+  // 26/10 motion matrix, frozen in brief_json: what each place and photo allow (interior places stored explicitly).
+  const uploadedProfiles = await loadPlaceProfiles(uploadedPlaceIds.length ? authenticated.from('assets').select(PLACE_PROFILE_COLUMNS).in('id', uploadedPlaceIds) : Promise.resolve({ data: [], error: null }));
+  const motionMatrix = buildMotionMatrix(placeAssets.map((place) => ({ id: place.id, ...placeProfileFor({ ...place, place_profile: uploadedProfiles[place.id] }) })), vehiclePhotos);
   // Showroom (interior place): the car never moves, whatever the storyboard says (24/10: it drove in and floated).
-  const interiorPlaceIds = placeAssets.filter((place) => placeTimeOfDay({ title: place.title, path: place.path, category: place.category }) === 'interior').map((place) => place.id);
-  const generationShots = expandedShots.map((shot) => holdStillInInterior(shot, interiorPlaceIds));
+  const interiorPlaceIds = Object.entries(motionMatrix.places).filter(([, profile]) => profile.timeOfDay === 'interior').map(([id]) => id);
+  // A storyboard edited in the Studio is brought back into the matrix, like the showroom guard.
+  const generationShots = expandedShots.map((shot) => holdStillInInterior(fitShotToMatrix(shot, motionMatrix), interiorPlaceIds));
   const requestedVehicleIds = new Set(input.vehiclePhotoIds);
   const selectedVehiclePhotos = input.vehiclePhotoIds.length
     ? vehiclePhotos.filter((photo) => requestedVehicleIds.has(photo.id))
@@ -173,8 +179,9 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
   }
   // Aucun plan 100 % IA : chaque plan est rattaché à un lieu sélectionné.
   if (generationShots.some((shot) => !shot.locationPhotoId)) throw new HttpError(422, 'Chaque plan doit être rattaché à un lieu sélectionné. Relancez la préparation du storyboard.');
-  const placeDescriptions: Record<string, string> = Object.fromEntries(placeAssets.map((place) => [place.id, placeDescription(place)]));
-  const { marketLocation, steeringSide } = await loadBrandSettings(admin.from('brands').select(BRAND_SETTINGS_COLUMNS).eq('id', actor.brandId).maybeSingle());
+  // 26/10: description and time of day come from the place sheet, frozen with the matrix (editing a place changes no launched video).
+  const placeDescriptions: Record<string, string> = Object.fromEntries(placeAssets.map((place) => [place.id, placeDescription({ ...place, profile: motionMatrix.places[place.id] })]));
+  const { marketLocation, steeringSide, trafficSide } = await loadBrandSettings(admin.from('brands').select(BRAND_SETTINGS_COLUMNS).eq('id', actor.brandId).maybeSingle());
 
   const vehicleDescription = vehicleDescriptionForPrompt(dossier);
   const keyframeReferencesByShot = keyframeMode ? generationShots.map((shot, index) => {
@@ -216,7 +223,7 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
   const endFrameCount = endFrameShots.filter(Boolean).length;
   const shotLighting = generationShots.map((shot) => {
     const place = placeAssets.find((photo) => photo.id === shot.locationPhotoId);
-    return resolveShotLighting(String(brief.lighting ?? ''), place ? placeTimeOfDay({ title: place.title, path: place.path, category: findCuratedLocation(place.id)?.category }) : null);
+    return resolveShotLighting(String(brief.lighting ?? ''), place ? motionMatrix.places[place.id]?.timeOfDay ?? placeTimeOfDay({ id: place.id, title: place.title, path: place.path, category: place.category }) : null);
   });
   // The keyframe prompt is the one actually sent first in keyframe mode: build it once, store it, display it and submit it.
   const keyframePrompts = keyframeMode ? generationShots.map((shot, index) => {
@@ -224,7 +231,7 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
     const hasLocationReference = Boolean(shot.locationPhotoId && placeAssets.some((photo) => photo.id === shot.locationPhotoId));
     const people = peopleForShot(peopleBrief, shot);
     const vehicleReferenceCount = Math.max(1, referenceIds.filter((id) => id !== shot.locationPhotoId && !people.castMembers.some((member) => member.id === id)).length);
-    return buildKeyframePrompt({ shot, vehicle: vehicleDescription, lighting: shotLighting[index], format: input.format, retryReason: null, vehicleReferenceCount, hasLocationReference, excludePeople: people.excludePeople, castTitles: people.castTitles, castDescription: people.castDescription, place: shot.locationPhotoId ? placeDescriptions[shot.locationPhotoId] : undefined, market: marketLocation, steeringSide, interior: Boolean(shot.locationPhotoId && interiorPlaceIds.includes(shot.locationPhotoId)) });
+    return buildKeyframePrompt({ shot, vehicle: vehicleDescription, lighting: shotLighting[index], format: input.format, retryReason: null, vehicleReferenceCount, hasLocationReference, excludePeople: people.excludePeople, castTitles: people.castTitles, castDescription: people.castDescription, place: shot.locationPhotoId ? placeDescriptions[shot.locationPhotoId] : undefined, market: marketLocation, steeringSide, trafficSide, interior: Boolean(shot.locationPhotoId && interiorPlaceIds.includes(shot.locationPhotoId)), onRoad: !(shot.locationPhotoId && interiorPlaceIds.includes(shot.locationPhotoId)), framed: true });
   }) : [];
   const displayPrompts = keyframeMode ? keyframePrompts : prompts;
   // Premium keyframes in 2K (0,12 USD instead of 0,08): frozen for every image, reservation and settlement of this version.
@@ -238,12 +245,12 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
     standard: Number(pricingSettings.grid_fcfa_per_second_standard), premium: Number(pricingSettings.grid_fcfa_per_second_premium),
   });
 
-  // Garde-fou de coût nominal, vérifié avant toute écriture et tout appel payant.
+  // Garde-fou de coût (nominal, ou pire cas selon VIDEO_COST_CAP_MODE), vérifié avant toute écriture et tout appel payant.
   const plannedStoryboardLedgerIds = input.storyboardLedgerIds ?? [];
   const { data: plannedStoryboardCosts } = plannedStoryboardLedgerIds.length
     ? await admin.from('usage_ledger').select('cost_usd').in('id', plannedStoryboardLedgerIds).eq('user_id', actor.id)
     : { data: [] as Array<{ cost_usd: number }> };
-  const nominalCost = nominalVideoCostUsd({
+  const costInput = {
     generatedSeconds,
     videoPriceUsdPerSecond: Number(videoModel.price_usd_per_second),
     shotCount: generationShots.length,
@@ -253,8 +260,10 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
     storyboardCostUsd: (plannedStoryboardCosts ?? []).reduce((sum, row) => sum + Number(row.cost_usd ?? 0), 0),
     endFrameCount,
     endFrameCostUsd: render.keyframeImageCostUsd + KEYFRAME_QUALITY_RESERVE_USD,
-  });
-  const capCheck = env.VIDEO_COST_CAP_USD === undefined ? { ok: true as const } : checkVideoCostCap(nominalCost, env.VIDEO_COST_CAP_USD);
+  };
+  // 26/10: both estimates are frozen in brief_json and shown to the admin; the cap reads the one chosen by the team.
+  const costPlan: CostPlanUsd = { nominal: nominalVideoCostUsd(costInput), worstCase: worstCaseVideoCostUsd(costInput), capMode: env.VIDEO_COST_CAP_MODE, capUsd: env.VIDEO_COST_CAP_USD ?? null };
+  const capCheck = videoCostCapCheck(costPlan, env.VIDEO_COST_CAP_USD, env.VIDEO_COST_CAP_MODE);
   if (!capCheck.ok) throw new HttpError(422, capCheck.message);
 
   const falCredential = await getActiveFalCredential(admin);
@@ -264,7 +273,7 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
     department: actor.department, status: 'generating',
   }).select('id').single();
   if (videoError || !video) throw new HttpError(500, 'Impossible de créer la vidéo. Réessayez.');
-  const storedBrief = { ...brief, storyboard: generationShots, approvedStoryboard: input.storyboard, generationTier: input.storyMode, overlayLogo: input.overlayLogo, audioAssetId: input.audioAssetId ?? null, multiClipMode: !isSingleShot, singleStoryboardMode: isSingleShot, storyMode: input.storyMode, clipDurationSeconds: input.clipDurationSeconds, finalDurationSeconds: finalVideoSeconds(input.clipDurationSeconds), purpose: input.purpose, vehicleDossierId: input.vehicleDossierId, vehiclePhotoIds: selectedVehiclePhotos.map((photo) => photo.id), keyframeReferencesByShot, placeIds: input.placeIds,  castAssets, castDescription, placeDescriptions, interiorPlaceIds, renderSettings: render, ...(marketLocation ? { marketLocation } : {}), ...(steeringSide ? { steeringSide } : {}), endFrameMode: endFrameCount > 0, promptRules: 'v3.2', ...(pricingWarning ? { pricingWarning } : {}), ...(premiumQualityMode ? { videoQualityMode: true } : {}), costPlanUsd: { ...nominalCost, capUsd: env.VIDEO_COST_CAP_USD ?? null }, shotLighting, processingMetrics: { requestedAt: new Date().toISOString() }, shotProcessingMetrics: {}, ...(input.comparisonCampaignId ? { comparisonCampaignId: input.comparisonCampaignId } : {}) };
+  const storedBrief = { ...brief, storyboard: generationShots, approvedStoryboard: input.storyboard, generationTier: input.storyMode, overlayLogo: input.overlayLogo, audioAssetId: input.audioAssetId ?? null, multiClipMode: !isSingleShot, singleStoryboardMode: isSingleShot, storyMode: input.storyMode, clipDurationSeconds: input.clipDurationSeconds, finalDurationSeconds: finalVideoSeconds(input.clipDurationSeconds), purpose: input.purpose, vehicleDossierId: input.vehicleDossierId, vehiclePhotoIds: selectedVehiclePhotos.map((photo) => photo.id), keyframeReferencesByShot, placeIds: input.placeIds,  castAssets, castDescription, placeDescriptions, interiorPlaceIds, renderSettings: render, ...(marketLocation ? { marketLocation } : {}), ...(steeringSide ? { steeringSide } : {}), ...(trafficSide ? { trafficSide } : {}), motionMatrix, framingRules: true, endFrameMode: endFrameCount > 0, promptRules: 'v3.2', ...(pricingWarning ? { pricingWarning } : {}), ...(premiumQualityMode ? { videoQualityMode: true } : {}), costPlanUsd: costPlanForBrief(costPlan), shotLighting, processingMetrics: { requestedAt: new Date().toISOString() }, shotProcessingMetrics: {}, ...(input.comparisonCampaignId ? { comparisonCampaignId: input.comparisonCampaignId } : {}) };
   const { data: version, error: versionError } = await admin.from('video_versions').insert({
     video_id: video.id, number: 1, brief_json: storedBrief, generated_prompt: displayPrompts.join('\n\n--- Plan suivant ---\n\n'),
     ai_model_id: videoModel.id, fal_credential_id: falCredential.id, status: 'queued', generation_seconds: finalVideoSeconds(input.clipDurationSeconds),
@@ -589,7 +598,7 @@ async function refreshEndKeyframe(input: {
       if (uploadError) throw new Error(uploadError.message);
       const endUrl = await createSignedStorageObjectUrl((path, expiresIn) => admin.storage.from(target.bucket).createSignedUrl(path, expiresIn), target.bucket, target.path);
       if (!endUrl) throw new Error('lien signé indisponible');
-      const job = await submitKeyframeQuality({ prompt: `${buildEndKeyframeQualityPrompt({ excludePeople: people.excludePeople, castTitles: people.castTitles, steeringSide: storedSteeringSide(brief) })} Shot: ${draft.title}; camera: ${draft.camera}.`, imageUrls: [endUrl, startUrl, input.vehicleUrl] }, apiKey);
+      const job = await submitKeyframeQuality({ prompt: `${buildEndKeyframeQualityPrompt({ excludePeople: people.excludePeople, castTitles: people.castTitles, castDescription: people.castDescription, ...storedDrivingRules(brief), onRoad: placeForShot(brief, draft).onRoad })} Shot: ${draft.title}; camera: ${draft.camera}.`, imageUrls: [endUrl, startUrl, input.vehicleUrl] }, apiKey);
       const { error } = await update({ end_keyframe_status: 'checking', end_keyframe_path: target.path, end_keyframe_quality_request_id: job.requestId });
       if (error) await giveUp(`Contrôle de l’image de fin non enregistré (request_id=${job.requestId}).`, [charge(qualityLedgerId, KEYFRAME_QUALITY_RESERVE_USD)]);
     } catch (cause) {
@@ -736,7 +745,7 @@ async function refreshKeyframes(input: {
         // Without a reservation or a director, the image is still retried with the defects (previous behaviour).
         if (reservation.error || !reservation.data) { await resubmitKeyframe(draft, retryReason, {}); return; }
         try {
-          const job = await submitShotRevision({ prompt: buildShotRevisionPrompt(draft, lastVerdict), systemPrompt: buildShotRevisionInstruction({ vehicle: String(brief.vehicle_description ?? 'the exact vehicle of the photo'), ...placeForShot(brief, draft) }) }, apiKey);
+          const job = await submitShotRevision({ prompt: buildShotRevisionPrompt(draft, lastVerdict), systemPrompt: buildShotRevisionInstruction({ vehicle: String(brief.vehicle_description ?? 'the exact vehicle of the photo'), ...placeForShot(brief, draft), allowedMotion: motionAllowanceOf(brief, draft) }) }, apiKey);
           const { error } = await updateShot({ revision_request_id: job.requestId, revision_ledger_id: reservation.data });
           if (error) {
             await settleUsageCost(admin, { entryId: reservation.data, outcome: 'charged', actualCostUsd: SHOT_REVISION_RESERVE_USD, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA, billable: false });
@@ -760,7 +769,9 @@ async function refreshKeyframes(input: {
       const ledgerId = typeof shot.revision_ledger_id === 'string' ? shot.revision_ledger_id : undefined;
       // fal failure = not billed; no answer after the delay = billed at most the reservation.
       if (ledgerId) await settleUsageCost(admin, { entryId: ledgerId, outcome: state.status === 'failed' ? 'released' : 'charged', actualCostUsd: state.status === 'ready' ? state.costUsd ?? SHOT_REVISION_RESERVE_USD : state.status === 'failed' ? 0 : SHOT_REVISION_RESERVE_USD, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA, billable: false });
-      const revised = state.status === 'ready' && state.revision ? holdStillInInterior(applyShotRevision(draft, state.revision), interiorPlaceIdsOf(brief)) : null;
+      const corrected = state.status === 'ready' && state.revision ? holdStillInInterior(keepWithinMatrix(draft, applyShotRevision(draft, state.revision), storedMotionMatrix(brief)), interiorPlaceIdsOf(brief)) : null;
+      // 26/10: same filter as the director's storyboard: a correction that writes a forbidden manoeuvre is not applied.
+      const revised = corrected && !forbiddenShotText(corrected) ? corrected : null;
       if (!revised) console.warn('shot_revision_unused', JSON.stringify({ versionId: version.id, shotNumber, status: state.status }));
       await resubmitKeyframe(revised ?? draft, retryReason, revised ? { revised_draft: revised } : {});
       return;
@@ -806,7 +817,7 @@ async function refreshKeyframes(input: {
       }
       const signedUrl = await createSignedStorageObjectUrl((storagePath, expiresIn) => admin.storage.from(target.bucket).createSignedUrl(storagePath, expiresIn), target.bucket, target.path);
       if (!signedUrl) throw new HttpError(503, 'Impossible de créer le lien de contrôle temporaire.');
-      const visionPrompt = `${buildKeyframeQualityPrompt({ vehicleReferenceCount, hasLocationReference: Boolean(draft.locationPhotoId), excludePeople: people.excludePeople, castTitles: people.castTitles, steeringSide: storedSteeringSide(brief), interior: placeForShot(brief, draft).interior })} Plan: ${draft.title}; scène: ${draft.scene}; cadrage: ${draft.framing}; lieu: ${draft.location}.`;
+      const visionPrompt = `${buildKeyframeQualityPrompt({ vehicleReferenceCount, hasLocationReference: Boolean(draft.locationPhotoId), excludePeople: people.excludePeople, castTitles: people.castTitles, castDescription: people.castDescription, ...storedDrivingRules(brief), interior: placeForShot(brief, draft).interior, onRoad: placeForShot(brief, draft).onRoad, moving: isMoving(draft), framing: framingCriterionOf(brief, draft), plan: draft })}`;
       let qualityJob: { requestId: string };
       try {
         qualityJob = await submitKeyframeQuality({ prompt: visionPrompt, imageUrls: [signedUrl, ...referenceUrls] }, apiKey);
@@ -1174,10 +1185,14 @@ export async function refreshLiveStoryboard(versionId: string, actor: Actor) {
       const assets = new Map((refAssets ?? []).map((asset) => [asset.id, asset]));
       const referencePaths = [...vehicleIds.map((id) => assets.get(id)?.path), ...clipPeople.castMembers.map((member) => member.path), ...(placeId ? [curatedPlace?.path ?? placeAsset?.path] : [])];
       const referenceUrls = await Promise.all(referencePaths.map((path) => path ? resolveFalAssetUrl(path, admin, falStorage, new Map()) : Promise.reject(new HttpError(422, 'Une référence qualité est introuvable.'))));
-      const visionPrompt = `${buildVideoQualityPrompt({ vehicleReferenceCount: vehicleIds.length, hasLocationReference: Boolean(placeId), excludePeople: clipPeople.excludePeople, castTitles: clipPeople.castTitles, shotType: resolveShotType(draft), durationS: Number(shot.duration_seconds), steeringSide: storedSteeringSide(briefData), interior: placeForShot(briefData, draft).interior })} Shot: ${draft.title}; scene: ${draft.scene}; framing: ${draft.framing}; location: ${draft.location}.`;
+      // 26/10: the validated start keyframe comes first among the references (the clip must continue it).
+      const startKeyframeUrl = typeof shot.keyframe_path === 'string' && shot.keyframe_path
+        ? await createSignedStorageObjectUrl((path, expiresIn) => admin.storage.from('videos').createSignedUrl(path, expiresIn), 'videos', shot.keyframe_path)
+        : null;
+      const visionPrompt = `${buildVideoQualityPrompt({ vehicleReferenceCount: vehicleIds.length, hasLocationReference: Boolean(placeId), excludePeople: clipPeople.excludePeople, castTitles: clipPeople.castTitles, castDescription: clipPeople.castDescription, shotType: resolveShotType(draft), durationS: Number(shot.duration_seconds), ...storedDrivingRules(briefData), interior: placeForShot(briefData, draft).interior, onRoad: placeForShot(briefData, draft).onRoad, moving: isMoving(draft), framing: framingCriterionOf(briefData, draft), plan: draft, startKeyframe: Boolean(startKeyframeUrl) })}`;
       let qualityJob: { requestId: string };
       try {
-        qualityJob = await submitKeyframeQuality({ prompt: visionPrompt, imageUrls: [...frameUrls, ...referenceUrls] }, falCredential.apiKey);
+        qualityJob = await submitKeyframeQuality({ prompt: visionPrompt, imageUrls: [...frameUrls, ...(startKeyframeUrl ? [startKeyframeUrl] : []), ...referenceUrls] }, falCredential.apiKey);
       } catch (cause) {
         const statusCode = falErrorStatusCode(cause);
         const uncertain = statusCode === null || statusCode >= 500;
@@ -1391,11 +1406,26 @@ function lightingForShot(brief: Record<string, unknown>, shotNumber: number): st
   return typeof value === 'string' && value.trim() ? value : String(brief.lighting ?? '');
 }
 
-/** Place of a shot, brand market and steering side, frozen in brief_json at creation (absent on videos created before 25/10). */
-function placeForShot(brief: Record<string, unknown>, draft: StoryboardShot): { place?: string; market?: string; steeringSide?: 'left' | 'right'; interior: boolean } {
+/**
+ * Place of a shot, brand market and driving rules, frozen in brief_json at creation (no place before 25/10,
+ * no traffic side nor motion matrix before 26/10). `onRoad`: outdoor shot of a version with a matrix.
+ */
+function placeForShot(brief: Record<string, unknown>, draft: StoryboardShot): { place?: string; market?: string; interior: boolean; onRoad: boolean; framed: boolean } & ReturnType<typeof storedDrivingRules> {
   const descriptions = brief.placeDescriptions && typeof brief.placeDescriptions === 'object' ? brief.placeDescriptions as Record<string, unknown> : {};
   const place = draft.locationPhotoId ? descriptions[draft.locationPhotoId] : undefined;
-  return { place: typeof place === 'string' && place.trim() ? place : undefined, market: storedBrandMarket(brief), steeringSide: storedSteeringSide(brief), interior: Boolean(draft.locationPhotoId && interiorPlaceIdsOf(brief).includes(draft.locationPhotoId)) };
+  return { place: typeof place === 'string' && place.trim() ? place : undefined, market: storedBrandMarket(brief), ...storedDrivingRules(brief), ...shotSetting(brief, draft), framed: brief.framingRules === true };
+}
+
+
+function shotSetting(brief: Record<string, unknown>, draft: StoryboardShot): { interior: boolean; onRoad: boolean } {
+  const interior = Boolean(draft.locationPhotoId && interiorPlaceIdsOf(brief).includes(draft.locationPhotoId));
+  return { interior, onRoad: !interior && Boolean(storedMotionMatrix(brief)) };
+}
+
+/** What a director correction may still choose for this shot; undefined on versions without a matrix. */
+function motionAllowanceOf(brief: Record<string, unknown>, draft: StoryboardShot): string | undefined {
+  const matrix = storedMotionMatrix(brief);
+  return matrix ? shotMotionAllowance(draft, matrix) : undefined;
 }
 
 /** Interior places (showroom) frozen at creation; videos created before keep none. */

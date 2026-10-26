@@ -23,8 +23,9 @@ export function peopleForShot(brief: Record<string, unknown>, shot: StoryboardSh
   // Patch v3.2 (F9): people appear only through the casting or the director's sheet, written when the brief asks for
   // people. Versions created before keep the historical keyword detection.
   const excludePeople = brief.promptRules === 'v3.2' ? !sheet : shouldExcludePeople(String(brief.character ?? ''), String(brief.user_direction ?? ''));
-  const description = excludePeople ? null : sheet;
-  return { excludePeople, castMembers: [] as StoredCastMember[], castTitles: [] as string[], castDescription: description };
+  // 26/10: the director says shot by shot where the described people appear; versions before keep them everywhere.
+  const shown = !excludePeople && shot?.withPeople !== false;
+  return { excludePeople: !shown, castMembers: [] as StoredCastMember[], castTitles: [] as string[], castDescription: shown ? sheet : null };
 }
 
 /** Reference order sent to the image model and the judge: vehicle views, casting photos, place last. */
