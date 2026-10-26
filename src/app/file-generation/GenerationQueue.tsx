@@ -1,80 +1,46 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { formatElapsed, formatStageDurations, type StageDurations } from './processing-display';
-import { isGenerationActive, nextGenerationPollDelayMs, shouldPollGenerationQueue } from '@/core/versions/client-polling';
-import type { ReviewRequest } from '@/core/verification/loop';
+import { useEffect, useRef, useState } from 'react';
+import type { TrackedVersion } from '@/core/versions/generation-tracker';
 import { ShotReviewPanel } from '@/components/shot-review-panel';
+import { GenerationProgress } from '@/components/generation-progress';
+import { KEEP_TAB_OPEN_MESSAGE, useGenerationTracker, useNow } from '@/components/generation-tracker';
 
-type Item = { id: string; title?: string; status: string; versionStatus?: string | null; processingStage?: string; stageElapsedSeconds?: number | null; processingDurations?: StageDurations; durationSeconds?: number; checkedQualityShots?: number; totalQualityShots?: number; createdAt?: string; errorMessage?: string | null; pollError?: string | null; canRetryTracking?: boolean; reconciliationRequired?: boolean };
-const steps = ['queued', 'keyframing', 'generating', 'quality_checking', 'transferring', 'postprocessing', 'ready'];
-const labels = ['En file', 'Images-clés', 'Génération', 'Contrôle qualité', 'Transfert', 'Habillage', 'Prête'];
-const stageLabels: Record<string, string> = { queued: 'En file d’attente', keyframing: 'Création des images-clés', generating: 'Génération vidéo', quality_checking: 'Contrôle qualité des clips', transferring: 'Transfert du fichier', postprocessing: 'Logo et finalisation', awaiting_review: 'Décision requise sur un plan', failed: 'Échec de génération' };
+type Item = TrackedVersion & { durationSeconds?: number };
+/** Reads the application-wide follow-up (AppShell): this page never calls /refresh itself. */
 export function GenerationQueue() {
-  const [items, setItems] = useState<Item[]>([]);
-  const [error, setError] = useState('');
-  const [reviews, setReviews] = useState<Record<string, ReviewRequest[]>>({});
-  const loading = useRef(false);
-  const itemsRef = useRef<Item[]>([]);
-  const nextPollAt = useRef(0);
-  const load = useCallback(async () => {
-    if (loading.current) return;
-    loading.current = true;
-    try {
-      const response = await fetch('/api/versions?includePreviews=false', { cache: 'no-store' });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error ?? 'Impossible de charger la file.');
-      let versions = (data.versions ?? []) as Item[];
-      const pending = versions.filter(isGenerationActive);
-      let refreshFailed = false;
-      if (pending.length > 0) {
-        const results = await Promise.all(pending.map(async (item) => {
-          try {
-            const response = await fetch(`/api/versions/${item.id}/refresh`, { cache: 'no-store', signal: AbortSignal.timeout(25_000) });
-            const data = await response.json().catch(() => ({})) as { nextPollInSeconds?: unknown; reviewRequired?: ReviewRequest[] };
-            return { id: item.id, ok: response.ok, nextPollInSeconds: data.nextPollInSeconds, reviewRequired: response.ok && Array.isArray(data.reviewRequired) ? data.reviewRequired : [] };
-          } catch { return { id: item.id, ok: false, nextPollInSeconds: undefined, reviewRequired: [] as ReviewRequest[] }; }
-        }));
-        refreshFailed = results.some((result) => !result.ok);
-        setReviews(Object.fromEntries(results.map((result) => [result.id, result.reviewRequired])));
-        nextPollAt.current = Date.now() + nextGenerationPollDelayMs(results.map((result) => result.nextPollInSeconds));
-        const refreshedResponse = await fetch('/api/versions?includePreviews=false', { cache: 'no-store' });
-        const refreshedData = await refreshedResponse.json();
-        if (refreshedResponse.ok) versions = refreshedData.versions ?? [];
-      }
-      const nextItems = versions.filter((item) => ['generating', 'queued'].includes(item.status) || ['queued', 'generating', 'postprocessing', 'failed'].includes(item.versionStatus ?? ''));
-      itemsRef.current = nextItems;
-      setItems(nextItems);
-      setError(refreshFailed ? 'Certaines mises à jour n’ont pas abouti. Les autres tâches restent suivies automatiquement.' : '');
-    } finally { loading.current = false; }
-  }, []);
+  const tracker = useGenerationTracker();
+  const [actionError, setActionError] = useState('');
+  const items: Item[] = tracker.snapshot.versions.filter((item) => ['generating', 'queued'].includes(item.status) || ['queued', 'generating', 'postprocessing', 'failed'].includes(item.versionStatus ?? ''));
+  const running = items.some((item) => item.versionStatus !== 'failed' && item.status !== 'failed');
+  const now = useNow(running);
+  const refreshFailed = tracker.snapshot.versions.some((item) => item.refreshFailed);
+  // « Voir le plan » (banner, bell, browser notification): scroll to the decision panel once it is rendered.
+  const decisionHash = useRef<string | null>(null);
+  const hasDecisionPanel = tracker.snapshot.versions.some((version) => version.reviewRequired?.length);
   useEffect(() => {
-    void load().catch((cause) => setError(cause instanceof Error ? cause.message : 'Une erreur est survenue.'));
-    const refreshIfNeeded = () => {
-      if (!shouldPollGenerationQueue(itemsRef.current, document.visibilityState === 'visible')) return;
-      if (Date.now() < nextPollAt.current) return;
-      nextPollAt.current = Date.now() + nextGenerationPollDelayMs([]);
-      void load().catch((cause) => setError(cause instanceof Error ? cause.message : 'Le suivi de génération est momentanément indisponible.'));
-    };
-    const timer = window.setInterval(refreshIfNeeded, 5_000);
-    document.addEventListener('visibilitychange', refreshIfNeeded);
-    return () => {
-      window.clearInterval(timer);
-      document.removeEventListener('visibilitychange', refreshIfNeeded);
-    };
-  }, [load]);
+    if (decisionHash.current === null) decisionHash.current = window.location.hash.startsWith('#decision-') ? window.location.hash.slice(1) : '';
+    if (!decisionHash.current) return;
+    const panel = document.getElementById(decisionHash.current);
+    if (!panel) return;
+    panel.scrollIntoView({ block: 'start' });
+    panel.querySelector<HTMLButtonElement>('button')?.focus({ preventScroll: true });
+    decisionHash.current = '';
+  }, [hasDecisionPanel]);
+  const error = actionError || tracker.snapshot.listError || (refreshFailed ? 'Certaines mises à jour n’ont pas abouti. Les autres tâches restent suivies automatiquement.' : '');
   async function cancel(item: Item) {
     const response = await fetch(`/api/versions/${item.id}/cancel`, { method: 'POST' });
     const data = await response.json();
-    if (!response.ok) { setError(data.error ?? 'La génération ne peut pas être annulée.'); return; }
-    await load();
+    if (!response.ok) { setActionError(data.error ?? 'La génération ne peut pas être annulée.'); return; }
+    setActionError('');
+    await tracker.reload();
   }
   async function retryTracking(item: Item) {
-    setError('');
+    setActionError('');
     const response = await fetch(`/api/versions/${item.id}/refresh`, { method: 'POST' });
     const data = await response.json();
-    if (!response.ok) { setError(data.error ?? 'Le suivi ne peut pas reprendre.'); return; }
-    await load();
+    if (!response.ok) { setActionError(data.error ?? 'Le suivi ne peut pas reprendre.'); return; }
+    await tracker.reload();
   }
-  return <section className="space-y-4">{error && <p role="alert" className="border border-[#f0c9c6] bg-[#fae9e7] p-4 text-sm text-[#9d352e]">{error}</p>}{items.length === 0 ? <div className="border border-dashed border-[#d2d2d6] bg-white px-6 py-16 text-center"><h2 className="text-sm font-semibold">La file est vide</h2><p className="mt-2 text-xs text-[#626269]">Les nouvelles générations apparaîtront ici.</p></div> : items.map((item) => { const failed = item.versionStatus === 'failed'; const itemReviews = reviews[item.id] ?? []; const activeStep = failed ? 'failed' : itemReviews.length ? 'awaiting_review' : item.processingStage ?? item.versionStatus ?? (item.status === 'generating' ? 'generating' : item.status); const current = Math.max(0, steps.indexOf(activeStep)); return <article key={item.id} className="border border-[#e2e2e5] bg-white p-5"><div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-sm font-semibold">{item.title ?? 'Vidéo sans titre'}</h2><p className="mt-1 text-xs text-[#626269]">{item.durationSeconds ?? 5} s · {item.createdAt ? new Date(item.createdAt).toLocaleDateString('fr-FR') : 'Aujourd’hui'}</p><p className="mt-1 text-xs text-[#626269]">{item.reconciliationRequired ? 'Réconciliation fournisseur requise' : stageLabels[activeStep] ?? 'Génération en cours'}{item.stageElapsedSeconds != null && !failed ? ` · ${formatElapsed(item.stageElapsedSeconds)}` : ''}{!failed && item.totalQualityShots ? ` · ${item.checkedQualityShots ?? 0}/${item.totalQualityShots} plans contrôlés` : ''}{!failed && (item.stageElapsedSeconds ?? 0) >= 600 ? ' · Le délai est inhabituel.' : ''}</p>{!failed && <p className="mt-2 text-[11px] leading-5 text-[#77777d]">{formatStageDurations({ ...item, processingStage: activeStep })}</p>}{(item.errorMessage || item.pollError || item.reconciliationRequired) && <p role="status" className="mt-3 max-w-2xl text-xs text-[#9d352e]">{item.errorMessage ?? item.pollError}{item.reconciliationRequired ? ' Coût à réconcilier avant toute nouvelle soumission.' : ''}</p>}</div><div className="flex gap-2">{item.canRetryTracking && <button type="button" onClick={() => void retryTracking(item)} className="min-h-10 rounded-full bg-[#c51e1c] px-4 text-xs font-semibold text-white">Réessayer le suivi</button>}{!failed && <button type="button" onClick={() => void cancel(item)} className="min-h-10 rounded-full border border-[#e2e2e5] px-4 text-xs font-semibold">Annuler</button>}</div></div>{!failed && <ShotReviewPanel versionId={item.id} items={itemReviews} onChanged={() => { setReviews((current) => ({ ...current, [item.id]: [] })); nextPollAt.current = 0; void load(); }} />}{!failed && <ol className="mt-5 grid gap-2 md:grid-cols-7">{labels.map((label, index) => <li key={label} className="flex items-center gap-2 text-xs"><span className={`grid size-5 place-items-center rounded-full border-2 ${index < current ? 'border-[#c51e1c] bg-[#c51e1c]' : index === current ? 'border-[#c51e1c] bg-white' : 'border-[#dfe1e4] bg-white'}`} aria-hidden="true">{index < current ? '✓' : ''}</span><span className={index <= current ? 'font-semibold text-[#242428]' : 'text-[#77777d]'}>{label}</span></li>)}</ol>}</article>; })}</section>;
+  return <section className="space-y-4">{error && <p role="alert" className="border border-[#f0c9c6] bg-[#fae9e7] p-4 text-sm text-[#9d352e]">{error}</p>}{running && <p role="status" className="border border-[#e7d7b9] bg-[#fbf6ed] p-4 text-sm leading-6 text-[#765d39]">{KEEP_TAB_OPEN_MESSAGE}</p>}{!tracker.snapshot.loaded ? <div aria-label="Chargement de la file" className="h-40 animate-pulse bg-[#e9e7e2]" /> : items.length === 0 ? <div className="border border-dashed border-[#d2d2d6] bg-white px-6 py-16 text-center"><h2 className="text-sm font-semibold">La file est vide</h2><p className="mt-2 text-xs text-[#626269]">Les nouvelles générations apparaîtront ici.</p></div> : items.map((item) => { const failed = item.versionStatus === 'failed'; const itemReviews = tracker.snapshot.versions.find((version) => version.id === item.id)?.reviewRequired ?? []; return <article key={item.id} className="border border-[#e2e2e5] bg-white p-5"><div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-sm font-semibold">{item.title ?? 'Vidéo sans titre'}</h2><p className="mt-1 text-xs text-[#626269]">{item.durationSeconds ?? 5} s · {item.createdAt ? new Date(item.createdAt).toLocaleDateString('fr-FR') : 'Aujourd’hui'}</p>{failed ? <p className="mt-1 text-xs font-semibold text-[#9d352e]">Échec de génération</p> : item.reconciliationRequired ? <p className="mt-1 text-xs font-semibold text-[#9d352e]">Vérification du coût requise</p> : null}{(item.errorMessage || item.pollError || item.reconciliationRequired) && <p role="status" className="mt-3 max-w-2xl text-xs text-[#9d352e]">{item.errorMessage ?? item.pollError}{item.reconciliationRequired ? ' Coût à réconcilier avant toute nouvelle soumission.' : ''}</p>}</div><div className="flex gap-2">{item.canRetryTracking && <button type="button" onClick={() => void retryTracking(item)} className="min-h-10 rounded-full bg-[#c51e1c] px-4 text-xs font-semibold text-white">Réessayer le suivi</button>}{!failed && <button type="button" onClick={() => void cancel(item)} className="min-h-10 rounded-full border border-[#e2e2e5] px-4 text-xs font-semibold">Annuler</button>}</div></div>{!failed && !item.reconciliationRequired && <GenerationProgress version={item} now={now} />}{!failed && <ShotReviewPanel versionId={item.id} items={itemReviews} onChanged={() => tracker.resolveReview(item.id)} />}</article>; })}</section>;
 }

@@ -1,3 +1,4 @@
+import { createStorageAdminClient } from '@/core/storage/supabase';
 import { NextResponse } from 'next/server';
 import { errorResponse, getActor, HttpError } from '@/core/auth/guards';
 import { reviewShot, shotReviewSchema } from '@/core/versions/shot-review';
@@ -13,6 +14,10 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     if (!Number.isInteger(shotNumber) || shotNumber < 1 || shotNumber > 6) throw new HttpError(400, 'Numéro de plan invalide.');
     const parsed = shotReviewSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) throw new HttpError(400, 'Décision invalide : choisissez « accepter » ou « relancer ».');
-    return NextResponse.json(await reviewShot(actor, id, shotNumber, parsed.data.decision));
+    const result = await reviewShot(actor, id, shotNumber, parsed.data.decision);
+    // This shot no longer waits: its « action requise » leaves the banner; other shots keep theirs.
+    await createStorageAdminClient().from('notifications').update({ read_at: new Date().toISOString() })
+      .eq('version_id', id).eq('type', 'action_required').like('dedupe_key', `action_required:${shotNumber}:%`).is('read_at', null);
+    return NextResponse.json(result);
   } catch (error) { return errorResponse(error); }
 }

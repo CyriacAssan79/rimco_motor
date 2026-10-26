@@ -7,6 +7,10 @@ import { refreshLiveVersion } from '@/core/versions/live';
 import { refreshPersistedMockVersion } from '@/core/versions/mock-persistence';
 import { createStorageAdminClient } from '@/core/storage/supabase';
 import { elapsedSeconds, processingDurations, processingStage, type ProcessingMetrics } from '@/core/versions/processing-metrics';
+import { versionProgress } from '@/core/versions/progress-estimate';
+import { decorateReviewRequests } from '@/core/versions/review-details';
+import { billingSummary } from '@/core/versions/outcome';
+import type { ProgressShotRow } from '@/core/versions/progress';
 export const runtime = 'nodejs';
 export const maxDuration = 60;
 
@@ -22,7 +26,16 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
       const metrics = brief.processingMetrics && typeof brief.processingMetrics === 'object' ? brief.processingMetrics as ProcessingMetrics : {};
       const processingStageName = 'processingStage' in result && (result.processingStage === 'quality_checking' || result.processingStage === 'awaiting_review') ? result.processingStage : processingStage(version?.status ?? result.status, metrics);
       const stageStartedAt = processingStageName === 'queued' ? metrics.providerSubmittedAt : processingStageName === 'keyframing' ? metrics.keyframingStartedAt : processingStageName === 'generating' ? metrics.generationStartedAt ?? metrics.providerSubmittedAt : processingStageName === 'transferring' ? metrics.providerCompletedAt : processingStageName === 'postprocessing' ? metrics.postproductionStartedAt : undefined;
-      return NextResponse.json({ ...result, processingStage: processingStageName, stageElapsedSeconds: elapsedSeconds(stageStartedAt), processingDurations: processingDurations(metrics, version?.status ?? result.status) });
+      const { data: shots } = await admin.from('video_shots').select('shot_number,title,status,keyframe_status,video_quality_status,verification_history').eq('version_id', id);
+      const progress = await versionProgress(admin, { status: version?.status ?? result.status, brief, shots: (shots ?? []) as ProgressShotRow[] });
+      const reviewRequired = 'reviewRequired' in result && Array.isArray(result.reviewRequired)
+        ? await decorateReviewRequests(admin, { items: result.reviewRequired, brief, role: actor.role, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA })
+        : undefined;
+      // A finished video: what was billed, read from the cost journal (FCFA client price only).
+      const billing = result.status === 'failed' || result.status === 'ready' || result.status === 'cancelled'
+        ? billingSummary((await admin.from('usage_ledger').select('kind,status,price_fcfa').eq('version_id', id)).data ?? [])
+        : undefined;
+      return NextResponse.json({ ...result, ...(reviewRequired ? { reviewRequired } : {}), ...(billing ? { billing } : {}), processingStage: processingStageName, stageElapsedSeconds: elapsedSeconds(stageStartedAt), processingDurations: processingDurations(metrics, version?.status ?? result.status), progress });
     }
     if (env.NEXT_PUBLIC_SUPABASE_URL) return NextResponse.json(await refreshPersistedMockVersion(id, actor));
     const current = getVersion(id);

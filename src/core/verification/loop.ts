@@ -18,7 +18,8 @@ export const MAX_KEYFRAME_CORRECTIONS = 2;
 export const MAX_KEYFRAME_ATTEMPTS = 6;
 export const MAX_CLIP_RETRIES = 1;
 
-export type Verdict = { approved: boolean; issues: string[]; reason: string; readableText?: boolean };
+/** `codes`: closed-list code of each issue (verification/defects.ts), for the French labels shown to the user. */
+export type Verdict = { approved: boolean; issues: string[]; reason: string; readableText?: boolean; codes?: string[] };
 
 export type KeyframeLoopDecision = 'accept' | 'accept_with_warning' | 'retry_image' | 'revise' | 'review';
 
@@ -48,7 +49,8 @@ export function storedVerdict(value: unknown): Verdict | null {
   const record = value as Record<string, unknown>;
   if (typeof record.approved !== 'boolean') return null;
   const issues = Array.isArray(record.issues) ? record.issues.filter((issue): issue is string => typeof issue === 'string') : [];
-  return { approved: record.approved, issues, reason: typeof record.reason === 'string' ? record.reason : '', readableText: record.readableText === true };
+  const codes = Array.isArray(record.codes) ? record.codes.filter((code): code is string => typeof code === 'string') : undefined;
+  return { approved: record.approved, issues, reason: typeof record.reason === 'string' ? record.reason : '', readableText: record.readableText === true, ...(codes ? { codes } : {}) };
 }
 
 /** Recorded when the judge answered (and was paid) but its verdict cannot be read: a human looks at the shot. */
@@ -133,5 +135,14 @@ export function appendVerification(history: unknown, entry: VerificationEntry): 
   return [...previous, { ...entry, issues: entry.issues.slice(0, 5), reason: entry.reason.slice(0, 240) }].slice(-20);
 }
 
-/** Shots that wait for a human decision, as returned to the Studio and the generation queue. */
-export type ReviewRequest = { shotNumber: number; title: string; stage: 'keyframe' | 'video'; issues: string[]; url: string | null; canRetry: boolean };
+/**
+ * Shots that wait for a human decision, as returned to the Studio and the generation queue. `codes` gives the French
+ * label of each issue; `cost` (the relaunch) is in FCFA for everyone, in USD for an administrator only; `references`
+ * are the vehicle and place photos of the shot, to compare.
+ */
+export type ReviewRequest = {
+  shotNumber: number; title: string; stage: 'keyframe' | 'video'; issues: string[]; url: string | null; canRetry: boolean;
+  codes?: string[];
+  cost?: { fcfa: number; usd?: number; minutes: number };
+  references?: { vehicleUrl: string | null; placeUrl: string | null };
+};

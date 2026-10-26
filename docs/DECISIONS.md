@@ -1,5 +1,120 @@
 # Décisions
 
+## Corrections légères de l'audit UX (U6, 2026-10-26)
+
+Seulement des corrections d'affichage, sans changement de logique métier, de données ni de coût. Captures avant/après dans `docs/audit-ux/u6/`. Le détail est en fin de `docs/AUDIT-UX-2026-10-26.md`.
+
+- **Bibliothèque** :
+  - statuts justes : « Prête » (générée, pas encore approuvée), « En validation », « Validée » (seulement après l'approbation), « Refusée », « En cours », « Échec » ;
+  - nouvel onglet « Validées » ;
+  - une vidéo en échec affiche « Non facturée » et sa cause en français, au lieu de « Montant indisponible ».
+- **Studio** :
+  - le panneau d'options n'est plus collant, il ne recouvre donc plus le bouton « Générer » ;
+  - pendant un conflit du brief, le grand bouton est désactivé et la page défile jusqu'à l'encadré, qui devient le seul moyen de lancer ;
+  - la pastille « Prête à lancer » dépend de la description ;
+  - « Images clés produites » remplace « Images-clés retenues » ;
+  - « Voir le prompt généré » est réservé à l'admin.
+- **À valider** : le refus passe par une fenêtre avec un motif obligatoire (3 caractères au moins), et un message confirme chaque décision.
+- **Coûts** :
+  - la marge d'une ligne annulée affiche « — » au lieu de 2 300 FCFA ;
+  - euros au format français (« 2,30 € ») ;
+  - la description ne parle plus de « plafonds », qui ne sont pas affichés.
+- **Médiathèque** :
+  - « Médiathèque » et « Médias de marque » remplacent « Médiathèque assets » et « Assets de marque » ;
+  - une catégorie technique (« place ») s'affiche avec son nom français ;
+  - le compteur « Tout » garde le total pendant un filtre.
+- **Lisibilité et accessibilité** sur les écrans audités (Studio, menu, Bibliothèque, À valider, Médiathèque, Coûts) :
+  - plus aucun texte sous 12 px ;
+  - le gris d'aide devient le gris `muted` de la charte (`#626269`, contraste d'environ 6:1 sur blanc) ;
+  - puces, champs, boutons, cloche et indicateur d'en-tête font 44 px au moins.
+- **Non fait** : griser les options pendant une génération (audit #11). Cela contredirait la décision du même jour qui permet de préparer une nouvelle vidéo pendant qu'une autre tourne.
+
+## Fin de vidéo dans le Studio : la regarder, l'envoyer, recommencer (2026-10-26)
+
+- **Constat** : une vidéo prête affichait seulement « Votre vidéo est prête à consulter » et un lien vers la Bibliothèque générale. L'envoi au valideur n'était pas proposé à cet endroit. En cas d'échec, le message du fournisseur pouvait s'afficher tel quel, en anglais.
+- **Décision** :
+  - **Vidéo prête** :
+    - le lecteur de la vidéo finale est intégré, avec l'URL signée renvoyée par `/refresh`, redemandée une fois si le Studio retrouve une vidéo déjà prête ;
+    - la durée, le niveau, le format et le nombre de points signalés par le contrôle automatique sont affichés ;
+    - trois boutons : « Envoyer au valideur » (route existante `POST /api/validations`), « Créer une variante » (mêmes réglages dans le formulaire, titre suffixé « · variante ») et « Ouvrir dans la Bibliothèque » ;
+    - un rappel : « Le téléchargement est possible après l'approbation du valideur. »
+    - L'état de la validation suit la vidéo : envoyée et en attente, approuvée, ou refusée.
+    - Dans le parcours du Studio (storyboard), aucune vidéo n'est approuvée automatiquement, même pour un administrateur : l'envoi au valideur vaut pour tous.
+  - **Lien direct** : `/bibliotheque?video=<identifiant>` ouvre le détail de la vidéo, y fait défiler la page et l'encadre. Les notifications « prête », « approuvée » et « refusée » utilisent ce lien.
+  - **Échec** :
+    - la cause en français (filtre de sécurité, limite du compte du fournisseur, délai dépassé, image clé refusée, animation refusée), avec ce qu'il faut faire ; le message d'origine reste dans « Détail technique » ;
+    - ce qui a été facturé, lu dans le journal des coûts : « Rien ne vous est facturé pour cette vidéo », le montant facturé, ou « un coût est en cours de vérification » ;
+    - deux boutons : « Relancer avec les mêmes réglages », qui remplit le formulaire et relance aussitôt (le réalisateur repasse, donc un nouveau storyboard), et « Modifier les réglages ».
+  - **Réglages repris** : description, véhicule et ses photos, lieux, casting, niveau, durée, format, lumière, musique et titre. Ils sont enregistrés dans `brief_json` (repris par `studioSettings`), ou gardés au lancement. Le choix « personnage » sans casting n'est pas enregistré aujourd'hui et n'est donc pas repris. Un véhicule, un lieu ou une piste qui n'existe plus est ignoré, avec un message pour le véhicule.
+
+## Panneau « Décision requise » compréhensible (2026-10-26)
+
+- **Constat** : les défauts du contrôle automatique s'affichaient en anglais (« t=2.5s blocking: tyre floats »). Le coût d'une relance était donné en dollars à tous, et de plus faux : 0,15 $ affichés pour 0,23 $ réservés. L'image refusée était petite, sans les photos de référence pour comparer.
+- **Décision** :
+  - **Défauts en français, sans appel payant de plus** : le juge ajoute à chaque défaut un code d'une liste fermée (`identity`, `framing`, `cut_off`, `wrong_direction`, `floating`, `sliding`, `treadmill`, `place`, `foreign_setting`, `pasted_on`, `extra_vehicle`, `people`, `steering`, `traffic_side`, `text`, `other`). L'interface affiche la phrase française de ce code (`src/core/verification/defects.ts`), avec sa gravité (« bloquant », « mineur ») et son instant (« vers 2,5 s »). Le texte anglais reste pour le réalisateur et dans « Détail technique ».
+  - **Budget du juge** : les codes ajoutent au plus environ 35 jetons à la réponse, soit moins de 1 % de la limite (`VISION_MAX_OUTPUT_TOKENS` = 4 000).
+  - **Robustesse** : un code inconnu, une liste mal formée ou un verdict d'avant ce changement (sans code) ne perdent jamais le verdict. Le défaut s'affiche alors « Autre défaut signalé par le contrôle automatique ».
+  - **Coûts** : en FCFA pour tous, avec la même conversion et la même majoration de 30 % que le reste de l'application ; en dollars aussi, mais pour l'administrateur seulement. Le serveur n'envoie jamais les dollars à un autre rôle. Une relance réserve la correction du réalisateur, une image clé et son contrôle : 0,23 $ ≈ 181 FCFA (Standard, Pro) et 0,27 $ ≈ 212 FCFA (Premium, image 2K). Durée annoncée : environ 2 min.
+  - **Conséquence affichée sous chaque bouton** :
+    - « Accepter : le plan est gardé tel quel ; le valideur verra l'avertissement » ;
+    - « Relancer avec le réalisateur : nouvelle image clé et nouveau contrôle, puis la vidéo du plan ; environ N FCFA, environ 2 min » ;
+    - « Annuler la vidéo : la vidéo s'arrête ; rien d'autre n'est facturé ».
+  - **Comparaison** : grand aperçu de l'image ou du clip refusé, ouvrable en plein écran, avec la photo du véhicule et celle du lieu du plan à côté.
+  - **Plusieurs plans en attente** : ils sont présentés dans l'ordre du film, avec « 2 décisions requises » en tête.
+- **À venir** : le bouton « Modifier ce plan » (commentaire de l'utilisateur, options pour un clip refusé) attend les arbitrages du plan présenté le 26/10. Le bouton actuel « Relancer avec le réalisateur » reste la relance sans commentaire.
+
+## Notifications : action requise, vidéo prête, échec, validation (2026-10-26)
+
+- **Constat** : le parcours du Studio (storyboard) ne créait aucune notification. La validation n'en créait pas non plus. La cloche et le badge « À valider » ne se rechargeaient qu'au changement de page. Il y avait aussi un défaut caché : l'index d'unicité des notifications était **partiel** (`where version_id is not null`). Or un `ON CONFLICT (user_id, version_id, type)` sans prédicat ne peut pas s'appuyer sur un index partiel : l'écriture échouait, et l'erreur était seulement journalisée.
+- **Décision** :
+  - **Module partagé** `src/core/notifications/notify.ts`, utilisé par l'ancien parcours (`live.ts`), l'annulation, le parcours storyboard et la validation.
+  - **Parcours storyboard** (`src/core/notifications/storyboard.ts`) : après chaque rafraîchissement, y compris par le cron, il notifie la vidéo prête, l'échec définitif avec sa cause, et une « action requise » par plan arrêté. Exemple : « Plan 2 · décision requise : l'image clé a été refusée par le contrôle automatique ». Une vidéo terminée ou annulée ferme les décisions restantes. Une décision sur un plan ferme celle de ce plan uniquement.
+  - **Validation** : la soumission notifie les valideurs de la marque et du département, ou les administrateurs s'il n'y a aucun valideur. Le collaborateur est prévenu de l'approbation ou du refus, avec le motif.
+  - **Déduplication** (migration `0036`, ajoutée à `setup.sql`) : nouvelle colonne `dedupe_key`, avec un index d'unicité complet sur `(user_id, version_id, dedupe_key)`. Pour une action requise, la clé contient le plan, l'étape et l'heure du refus : le même état revu ne notifie pas deux fois, mais un autre plan, ou le même plan refusé plus tard, notifie de nouveau. Un déclencheur remplit la clé avec le type pour les écritures d'un déploiement plus ancien. **La migration doit être appliquée** : sans elle, les notifications ne sont pas écrites, mais les vidéos avancent normalement.
+  - **Interface** :
+    - la cloche, le badge « À valider » et un bandeau « Action requise · … » avec le bouton « Voir le plan » se mettent à jour toutes les 60 s quand l'onglet est visible, et aussitôt qu'une vidéo suivie change d'état ;
+    - « Voir le plan » mène au panneau de décision du plan dans la file ;
+    - le titre de l'onglet devient « (1) Action requise · RIMCO Studio », puis « Vidéo prête · RIMCO Studio ».
+  - **Notifications du navigateur** (API Notification, sans service externe) : uniquement si l'utilisateur les active depuis la cloche, jamais par une demande automatique. Elles concernent les actions requises et les vidéos prêtes, et ne s'affichent qu'une fois, même avec plusieurs onglets ouverts. Elles ne fonctionnent que si un onglet RIMCO Studio est ouvert, puisque le suivi en dépend.
+- **E-mail : non fait** (hors périmètre de la bêta). Pour l'ajouter, il faudrait :
+  - un fournisseur d'envoi (Resend, Postmark, Brevo, SendGrid…) et sa clé dans Vercel ;
+  - un domaine d'envoi vérifié (enregistrements SPF et DKIM, et DMARC conseillé) ;
+  - une colonne `emailed_at` et un envoi après l'écriture de la notification, idempotent sur la même clé ;
+  - une préférence par utilisateur (choix des types reçus) et un lien de désinscription ;
+  - des modèles en français, dans la charte RIMCO.
+
+  La file de jobs durable, encore à choisir, serait le bon endroit pour l'envoi et ses nouvelles tentatives.
+
+## Progression lisible : étapes, chronos et fin estimée (2026-10-26)
+
+- **Constat** : seule la durée de l'étape en cours s'affichait, en secondes brutes. Les étapes n'étaient pas les mêmes dans le Studio et dans la file, et certains libellés étaient techniques (« Transfert », « Clôture des coûts »). `processing-display.ts` ignorait le contrôle qualité et la décision : des durées s'affichaient à tort « À venir ».
+- **Décision** :
+  - **Un seul composant, `GenerationProgress`**, et une seule vue (`progressView`, dans `src/core/versions/progress.ts`), pour le Studio, la file et l'indicateur d'en-tête. La Bibliothèque reprend les mêmes libellés. `processing-display.ts` est supprimé.
+  - **Cinq étapes en langage simple** : Préparation (le storyboard), Images clés, Vidéo des plans, Contrôle qualité, Montage. « Votre décision » s'insère après l'étape concernée quand un plan attend une décision. Transfert, clôture des coûts et habillage font partie du Montage. Le Contrôle qualité n'apparaît que si la vidéo a un contrôle des clips (`videoQualityMode`, aujourd'hui sur tous les niveaux à images clés).
+  - **Progression par plan** : « image clé en cours », « image clé prête », « vidéo en cours », « vidéo prête », « contrôle en cours », « contrôlé », « à décider », « échec ».
+  - **Chronos** : un chrono total depuis le lancement (`requestedAt`), un chrono de l'étape en cours, mis à jour chaque seconde dans le navigateur. Les heures viennent du serveur et sont corrigées de l'écart d'horloge du poste. Pendant « Votre décision », le chrono total s'arrête et le suivi affiche « En attente de votre décision depuis … ».
+  - **Temps de décision** : il est déduit de l'historique de vérification déjà enregistré pour chaque plan (refus du vérificateur, puis décision humaine). Aucune nouvelle écriture en base. Ce temps n'est compté ni dans les chronos, ni dans les durées, ni dans l'estimation.
+  - **Estimation de fin** : médiane, étape par étape, des 20 dernières vidéos prêtes du même niveau, avec le même nombre de plans et le même contrôle qualité. Les simulations sont exclues et le calcul est gardé 10 min en mémoire. Avec moins de 3 vidéos, une valeur fixe tirée des essais du 22/10 prend le relais, pour 2 plans : Standard ≈ 6 min 20 s, Pro ≈ 5 min 30 s. Premium, jamais mesuré, est une hypothèse prudente (≈ 8 min). Images clés, vidéos et contrôle sont proportionnés au nombre de plans, comme demandé ; c'est pessimiste, car les plans tournent en parallèle, et l'historique remplacera ces valeurs dès 3 vidéos.
+  - **Affichage** : « Fin estimée vers 14 h 32 (≈ 3 min) », en minutes entières, avec 1 minute au minimum. Pendant une décision : « Fin estimée ≈ N min après votre décision ». Au-delà de l'estimation + 50 % : « Plus long que d'habitude », sans heure.
+- **Évolution prévue** : enregistrer la fin du contrôle qualité dans `processingMetrics`. Aujourd'hui, elle est déduite du début de la clôture des coûts.
+
+## Suivi unique des vidéos en cours, sur toutes les pages (2026-10-26)
+
+- **Constat (audit UX du 26/10)** : la vidéo en cours n'existait que dans la mémoire du Studio. Elle disparaissait dès qu'on changeait de page. Le Studio, la file de génération et la Bibliothèque avaient chacun leur propre boucle d'appels à `/api/versions/[id]/refresh`, à des rythmes différents (5 s, 30 s, 30 s). En dehors de ces pages, seul le cron quotidien faisait avancer une vidéo.
+- **Décision** :
+  - **Un seul suivi pour toute l'application** (`src/core/versions/generation-tracker.ts`, monté dans le menu par `src/components/generation-tracker.tsx`). Il charge les vidéos de l'utilisateur et appelle `/refresh` pour celles qui sont en cours. Le délai suit celui indiqué par le serveur, entre 10 s (rythme d'AGENTS.md) et 180 s ; il est de 15 s par défaut et de 5 s après une décision sur un plan. Le Studio, la file et la Bibliothèque lisent ce suivi : aucune page n'appelle plus `/refresh` elle-même.
+  - **Pas de doublon entre onglets** : l'heure du prochain appel de chaque vidéo est partagée par les onglets du navigateur, et l'appel est pris sous un verrou du navigateur (Web Locks). Ainsi, une vidéo est interrogée une fois par intervalle, quel que soit le nombre de pages ouvertes. Le résultat est diffusé aux autres onglets (BroadcastChannel).
+  - **Pause** quand l'onglet est caché ; reprise immédiate quand il redevient visible.
+  - **Le Studio retrouve la vidéo** à son ouverture : la dernière vidéo en cours de l'utilisateur, sinon une vidéo terminée depuis moins de 30 minutes qui n'a pas encore été ouverte (« Voir ma vidéo ») ni masquée (« Masquer ce suivi »).
+  - **Indicateur dans l'en-tête**, sur toutes les pages et sur mobile : « 1 vidéo en cours · Images-clés · 3 min 12 s ». La durée est comptée depuis le lancement. L'indicateur mène à la file de génération.
+  - **Message honnête** dans le suivi du Studio et dans la file : « La génération avance tant qu'une page RIMCO Studio est ouverte… ». Fermer le **dernier** onglet RIMCO Studio pendant une vidéo en cours déclenche l'avertissement standard du navigateur, qui ne bloque pas la fermeture.
+  - **Deux vidéos en cours au maximum par utilisateur, dans le Studio.** On peut préparer et lancer une nouvelle vidéo pendant qu'une autre tourne. L'API n'impose aujourd'hui **aucune limite** : cette limite n'existe que dans l'interface. **Évolution prévue** : la vérifier aussi côté serveur, dans `POST /api/versions`, avant toute réservation de coût.
+- **Option à décider par l'équipe : un cron Vercel toutes les minutes.** Aujourd'hui, `vercel.json` appelle `/api/cron/reconcile` une fois par jour, ce qui est la limite de l'offre Hobby. Sur l'offre Pro, un cron toutes les minutes ferait avancer les vidéos même sans aucun onglet ouvert. Rappel : l'offre Pro est de toute façon requise pour un usage client, car Hobby est réservé à un usage personnel et non commercial (voir plus bas).
+  - *Pour* : plus besoin de garder un onglet ouvert ; changement limité à `vercel.json` (planification `* * * * *`) une fois l'offre Pro souscrite.
+  - *Contre* : le cron traite 10 vidéos par passage, avec un délai maximal de 60 s par route. Il faudra mesurer la durée d'un passage avec FFmpeg avant de l'activer. Un appel par minute reste plus lent que le suivi des pages ouvertes (10 à 15 s).
+  - *En attendant* une file de jobs durable : le choix entre Trigger.dev, Inngest ou Cloud Run reste ouvert.
+  - `vercel.json` n'est **pas** modifié tant que l'équipe n'a pas tranché.
+
 ## Marche arrière et demi-tour interdits de nouveau (2026-10-26)
 
 - **Constat** : la règle « la voiture roule seulement en marche avant », ajoutée le 24/10 après l’essai B (un demi-tour puis une marche arrière), a disparu avec le retour à la version du 23/10 (commit du 25/10). Elle n’a pas été remise depuis. Un demi-tour n’était plus interdit en amont : seul le juge du clip pouvait le refuser après coup, indirectement (« va dans un autre sens »), et seulement en Premium.

@@ -20,6 +20,16 @@ type CostRow = {
   worst_case_cost_usd?: number | null;
 };
 
+/** Margin of a line: nothing for a released line (not billed, nothing spent), « En cours » while reserved. */
+export function marginText(row: Pick<CostRow, 'status' | 'margin_fcfa' | 'price_fcfa' | 'cost_real_fcfa'>) {
+  if (row.status === 'released') return '—';
+  if (row.status === 'reserved') return 'En cours';
+  return formatSignedFcfa(row.margin_fcfa ?? ((row.price_fcfa ?? 0) - (row.cost_real_fcfa ?? 0)));
+}
+
+/** « 2,30 € », French format. */
+export const eurText = (value: number) => new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR' }).format(value);
+
 const usd = (value: number | null | undefined) => typeof value === 'number' ? `${value.toFixed(2).replace('.', ',')} $` : '—';
 
 function csvCell(input: unknown): string {
@@ -79,22 +89,22 @@ export function CostDashboard() {
       <button onClick={exportCsv} className="rounded-lg border border-[#dedbd5] bg-[var(--surface)] px-4 py-2.5 text-xs font-semibold hover:bg-[#f4f2ee]">Exporter CSV</button>
     </div>
     <div className="mb-6 max-w-xl rounded-2xl border border-black/[.055] bg-[var(--surface)] p-5">
-      <p className="text-[10px] font-bold uppercase tracking-[.15em] text-[#716d66]">Total facturé</p>
+      <p className="text-xs font-bold uppercase tracking-[.15em] text-[#716d66]">Total facturé</p>
       <p className="mt-3 text-2xl font-semibold tracking-tight">{formatFcfa(billed)}</p>
       <p className="mt-1 text-xs text-[#716d66]">{selectedChargedRows.length} opération{selectedChargedRows.length === 1 ? '' : 's'} facturée{selectedChargedRows.length === 1 ? '' : 's'}{month ? ` · ${new Intl.DateTimeFormat('fr-FR', { month: 'long', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${month}-01T00:00:00Z`))}` : ' · période sélectionnée'}</p>
     </div>
-    {availableMonths.length > 0 && <section aria-label="Récapitulatif mensuel" className="mb-6"><h2 className="mb-3 text-xs font-semibold">Récapitulatif mensuel</h2><div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{availableMonths.map((key) => { const item = monthTotals.get(key)!; return <button type="button" key={key} onClick={() => setMonth(key)} aria-pressed={month === key} className={`rounded-xl border p-4 text-left ${month === key ? 'border-[#c51e1c] bg-[#fcf4f2]' : 'border-black/[.055] bg-white'}`}><span className="block text-[10px] font-semibold capitalize text-[#716d66]">{new Intl.DateTimeFormat('fr-FR', { month: 'long', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${key}-01T00:00:00Z`))}</span><b className="mt-2 block text-base">{formatFcfa(item.total)}</b><span className="mt-1 block text-[10px] text-[#716d66]">{item.count} opération{item.count === 1 ? '' : 's'}</span></button>; })}</div></section>}
+    {availableMonths.length > 0 && <section aria-label="Récapitulatif mensuel" className="mb-6"><h2 className="mb-3 text-xs font-semibold">Récapitulatif mensuel</h2><div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{availableMonths.map((key) => { const item = monthTotals.get(key)!; return <button type="button" key={key} onClick={() => setMonth(key)} aria-pressed={month === key} className={`rounded-xl border p-4 text-left ${month === key ? 'border-[#c51e1c] bg-[#fcf4f2]' : 'border-black/[.055] bg-white'}`}><span className="block text-xs font-semibold capitalize text-[#716d66]">{new Intl.DateTimeFormat('fr-FR', { month: 'long', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${key}-01T00:00:00Z`))}</span><b className="mt-2 block text-base">{formatFcfa(item.total)}</b><span className="mt-1 block text-xs text-[#716d66]">{item.count} opération{item.count === 1 ? '' : 's'}</span></button>; })}</div></section>}
     <div className="overflow-x-auto rounded-2xl border border-black/[.055] bg-[var(--surface)]">
       <table className="w-full min-w-[860px] border-collapse text-left text-xs">
-        <thead className="border-b border-black/[.055] bg-[#f8f7f4]"><tr>{['Vidéo', 'Date de génération', 'Type', 'Durée', 'Montant facturé', 'Coût réel', 'Marge', 'Coût prévu (nominal / maximum)', 'État'].map((item) => <th key={item} className="px-4 py-3 text-[9px] font-bold uppercase tracking-[.14em] text-[#716d66]">{item}</th>)}</tr></thead>
+        <thead className="border-b border-black/[.055] bg-[#f8f7f4]"><tr>{['Vidéo', 'Date de génération', 'Type', 'Durée', 'Montant facturé', 'Coût réel', 'Marge', 'Coût prévu (nominal / maximum)', 'État'].map((item) => <th key={item} className="px-4 py-3 text-xs font-bold uppercase tracking-[.14em] text-[#716d66]">{item}</th>)}</tr></thead>
         <tbody className="divide-y divide-black/[.04]">{selectedRows.map((row, index) => <tr key={`${row.version_id ?? row.video_id}-${index}`}>
           <td className="px-4 py-4 font-medium">{row.title ?? row.video_id ?? row.version_id ?? 'Vidéo'}</td>
           <td className="px-4 py-4 text-[#716d66]">{row.created_at ? new Intl.DateTimeFormat('fr-FR', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(row.created_at)) : '—'}</td>
           <td className="px-4 py-4 text-[#716d66]">{row.kind === 'generation' ? 'Génération' : row.kind === 'postprod' ? 'Post-production' : 'Vidéo'}</td>
           <td className="px-4 py-4 text-[#716d66]">{row.seconds ?? 5} s</td>
           <td className="px-4 py-4 font-semibold">{row.status === 'released' ? '—' : formatFcfa(row.price_fcfa ?? 0)}</td>
-          <td className="px-4 py-4 text-[#716d66]">{row.status === 'reserved' ? 'En cours' : formatFcfa(row.cost_real_fcfa ?? 0)}{typeof row.cost_eur === 'number' && row.status !== 'reserved' ? <small className="ml-1 text-[9px]">({row.cost_eur.toFixed(2)} €)</small> : null}</td>
-          <td className="px-4 py-4 text-[#716d66]">{row.status === 'reserved' ? 'En cours' : formatSignedFcfa(row.margin_fcfa ?? ((row.price_fcfa ?? 0) - (row.cost_real_fcfa ?? 0)))}</td>
+          <td className="px-4 py-4 text-[#716d66]">{row.status === 'reserved' ? 'En cours' : formatFcfa(row.cost_real_fcfa ?? 0)}{typeof row.cost_eur === 'number' && row.status !== 'reserved' ? <small className="ml-1 text-xs">({eurText(row.cost_eur)})</small> : null}</td>
+          <td className="px-4 py-4 text-[#716d66]">{marginText(row)}</td>
           <td className="px-4 py-4 text-[#716d66]" title="Nominal : une tentative de chaque étape. Maximum : toutes les relances automatiques utilisées.">{typeof row.nominal_cost_usd === 'number' ? `${usd(row.nominal_cost_usd)} / ${usd(row.worst_case_cost_usd)}` : '—'}</td>
           <td className="px-4 py-4 text-[#716d66]">{row.status === 'reserved' ? 'En cours' : row.status === 'released' ? 'Annulée' : row.status === 'charged' || row.status === 'ready' ? 'Facturée' : row.status ?? '—'}</td>
         </tr>)}</tbody>

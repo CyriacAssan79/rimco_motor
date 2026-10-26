@@ -13,31 +13,38 @@ import { MAX_STORYBOARD_DIRECTION_LENGTH } from "@/core/storyboard-direction";
 import { peoplePresetIds, peoplePresets, type PeoplePresetId } from "@/core/people-presets";
 import type { ReviewRequest } from "@/core/verification/loop";
 import { ShotReviewPanel } from "@/components/shot-review-panel";
+import {
+  KEEP_TAB_OPEN_MESSAGE,
+  useGenerationTracker,
+  useNow,
+} from "@/components/generation-tracker";
+import {
+  isVersionRunning,
+  pickStudioVersion,
+  type TrackedVersion,
+} from "@/core/versions/generation-tracker";
+import { GenerationProgress } from "@/components/generation-progress";
+import { FailedOutcome, ReadyOutcome } from "@/components/video-outcome";
+import type { BillingSummary, StudioSettings } from "@/core/versions/outcome";
+import { preparationProgress } from "@/core/versions/progress";
 
 type Format = "16:9" | "9:16" | "1:1";
-type Job = {
-  id: string;
-  status: string;
-  error?: string;
+type Job = TrackedVersion & {
   prompt?: string;
+  videoUrl?: string | null;
+  tier?: string | null;
+  format?: string;
+  validationStatus?: string | null;
+  settings?: StudioSettings | null;
+  billing?: BillingSummary | null;
   completedShots?: number;
   totalShots?: number;
   completedKeyframes?: number;
   totalKeyframes?: number;
   checkedQualityShots?: number;
   totalQualityShots?: number;
-  shotProgress?: Array<{
-    number: number;
-    title: string;
-    status: string;
-    qualityStatus: string;
-  }>;
   keyframes?: Array<{ number: number; title: string; url: string }>;
   estimatedPriceFcfa?: number;
-  processingStage?: string;
-  stageElapsedSeconds?: number | null;
-  nextPollInSeconds?: number;
-  reconciliationRequired?: boolean;
   reviewRequired?: ReviewRequest[];
   qualityWarnings?: Array<{
     shotNumber: number;
@@ -96,6 +103,8 @@ type StoryShot = {
   locationPhotoId?: string | null;
 };
 const durationOptions = [5, 10, 15, 20];
+/** No server limit exists yet: the Studio lets a user run at most two videos at a time (see docs/DECISIONS.md). */
+const MAX_ACTIVE_VIDEOS = 2;
 const premiumDurationOptions = [20];
 const lightOptions = ["Lumière naturelle claire du matin"];
 
@@ -110,19 +119,28 @@ function getLightingLabel(lighting: string): string {
   return lighting;
 }
 
-function shotProgressLabel(shot: NonNullable<Job["shotProgress"]>[number]) {
-  if (shot.qualityStatus === "checking") return "Contrôle qualité";
-  if (shot.qualityStatus === "passed") return "Validé";
-  if (shot.qualityStatus === "retrying") return "Reprise du plan";
-  if (shot.qualityStatus === "failed" || shot.status === "failed")
-    return "Échec qualité";
-  if (shot.status === "generating") return "Animation";
-  if (shot.status === "ready") return "Prêt au montage";
-  if (shot.status === "postprocessing") return "Contrôle qualité";
-  return "Image-clé";
+/** Settings of a launch, kept with the followed video for « Créer une variante » and « Relancer ». */
+function settingsFromPayload(payload: Record<string, unknown>): StudioSettings | null {
+  const ids = (value: unknown) => Array.isArray(value) ? value.filter((id): id is string => typeof id === "string") : [];
+  if (typeof payload.vehicleDossierId !== "string") return null;
+  const tier = payload.tier === "pro" || payload.tier === "premium" ? payload.tier : "standard";
+  const format = payload.format === "9:16" || payload.format === "1:1" ? payload.format : "16:9";
+  return {
+    title: typeof payload.title === "string" ? payload.title : "",
+    description: typeof payload.description === "string" ? payload.description : "",
+    vehicleDossierId: payload.vehicleDossierId,
+    vehiclePhotoIds: ids(payload.vehiclePhotoIds),
+    placeIds: ids(payload.placeIds),
+    castAssetIds: ids(payload.castAssetIds),
+    tier,
+    durationS: Number(payload.durationS) || 5,
+    format,
+    scenePresetId: typeof payload.scenePresetId === "string" ? payload.scenePresetId : "",
+    audioAssetId: typeof payload.audioAssetId === "string" ? payload.audioAssetId : null,
+  };
 }
 
-export function StudioComposer({ mode }: { mode: "mock" | "live" }) {
+export function StudioComposer({ mode, showPrompt = false }: { mode: "mock" | "live"; showPrompt?: boolean }) {
   const [availableModels, setAvailableModels] = useState<Model[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsError, setModelsError] = useState("");
@@ -140,9 +158,18 @@ export function StudioComposer({ mode }: { mode: "mock" | "live" }) {
   >([]);
   const [audioAssetId, setAudioAssetId] = useState("");
   const [format, setFormat] = useState<Format>("16:9");
-  const [job, setJob] = useState<Job | null>(null);
+  const tracker = useGenerationTracker();
+  /** Version launched or opened in this Studio; otherwise the running (or recently finished) one is shown again. */
+  const [focusId, setFocusId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  /** « Relancer avec les mêmes réglages »: the form is filled, then submitted once the new state is rendered. */
+  const [autoLaunch, setAutoLaunch] = useState(false);
+  const [settingsNotice, setSettingsNotice] = useState("");
+  const formRef = useRef<HTMLFormElement>(null);
+  const conflictRef = useRef<HTMLDivElement>(null);
+  /** The director writes the storyboard before the video exists: shown as the « Préparation » step. */
+  const [preparingSince, setPreparingSince] = useState<number | null>(null);
   /** 26/10: storyboard ready but adapted by the director: the user sees why before the video is paid. */
   const [pendingLaunch, setPendingLaunch] = useState<{ payload: Record<string, unknown>; conflicts: string[] } | null>(null);
   const purpose = "advertising" as const;
@@ -204,9 +231,34 @@ export function StudioComposer({ mode }: { mode: "mock" | "live" }) {
   );
   const estimatedPriceFcfa =
     storyboardModel?.estimatedPricesFcfa[String(durationS)];
-  const generationActive = Boolean(
-    job && !["ready", "failed", "cancelled"].includes(job.status),
-  );
+  const runningMine = tracker.mine.filter(isVersionRunning);
+  const now = useNow(runningMine.length > 0 || preparingSince !== null);
+  const shownId =
+    focusId ??
+    pickStudioVersion(tracker.mine, {
+      userId: tracker.userId,
+      seenIds: tracker.seenIds,
+      finishedAt: tracker.finishedAt,
+      now,
+    })?.id;
+  const job: Job | undefined = shownId
+    ? tracker.snapshot.versions.find((version) => version.id === shownId)
+    : undefined;
+  const jobStatus = job ? (job.versionStatus ?? job.status) : undefined;
+  const jobRunning = Boolean(job && isVersionRunning(job));
+  // A ready video opened again: its signed URL comes from /refresh (the list carries no preview).
+  const fetchedReady = useRef(new Set<string>());
+  useEffect(() => {
+    if (!job || jobStatus !== "ready" || job.videoUrl || fetchedReady.current.has(job.id)) return;
+    fetchedReady.current.add(job.id);
+    const id = job.id;
+    fetch(`/api/versions/${id}/refresh`, { cache: "no-store" })
+      .then(async (response) => (response.ok ? response.json() : null))
+      .then((data) => { if (data) tracker.receive(id, data); })
+      .catch(() => undefined);
+  }, [job, jobStatus, tracker]);
+  const otherRunning = runningMine.filter((version) => version.id !== job?.id).length;
+  const launchBlocked = runningMine.length >= MAX_ACTIVE_VIDEOS;
   const lightingChoices = Array.from(
     new Map(
       sceneChoices.map((scene) => [getLightingLabel(scene.lighting), scene]),
@@ -216,6 +268,49 @@ export function StudioComposer({ mode }: { mode: "mock" | "live" }) {
   function clearFormError() {
     setError("");
   }
+
+  /** Puts the settings of a finished video back in the form: a variant to adjust, or the same video again. */
+  function applySettings(settings: StudioSettings, launchNow: boolean) {
+    const vehicle = vehicleDossiers.find((entry) => entry.id === settings.vehicleDossierId || entry.dossierIds?.includes(settings.vehicleDossierId ?? ""));
+    if (!vehicle) {
+      setError("Le véhicule de cette vidéo n’est plus disponible dans la médiathèque : choisissez-en un autre.");
+      return;
+    }
+    const validPlaces = settings.placeIds.filter((id) => places.some((place) => place.id === id));
+    setTitle(launchNow || !settings.title ? settings.title : `${settings.title} · variante`);
+    setAdditionalDirection(settings.description);
+    setVehicleDossierId(vehicle.key);
+    setAssetId(settings.vehiclePhotoIds.find((id) => vehicle.photos.some((photo) => photo.id === id)) ?? vehicle.photos[0]?.id ?? "");
+    if (validPlaces.length) {
+      setPlaceIds(validPlaces);
+      setLocationAssetId(validPlaces[0]);
+    }
+    setCastIds(settings.castAssetIds.filter((id) => castAssets.some((member) => member.id === id)));
+    setTier(settings.tier);
+    setDurationS(settings.durationS);
+    setFormat(settings.format);
+    if (settings.scenePresetId) setScenePresetId(settings.scenePresetId);
+    setAudioAssetId(settings.audioAssetId && audioAssets.some((track) => track.id === settings.audioAssetId) ? settings.audioAssetId : "");
+    setError("");
+    setPendingLaunch(null);
+    if (launchNow) {
+      setSettingsNotice("");
+      setAutoLaunch(true);
+      return;
+    }
+    setSettingsNotice("Réglages repris : modifiez ce que vous voulez, puis lancez la variante.");
+    formRef.current?.scrollIntoView({ block: "start" });
+  }
+
+  useEffect(() => {
+    if (pendingLaunch) conflictRef.current?.scrollIntoView({ block: "center" });
+  }, [pendingLaunch]);
+
+  useEffect(() => {
+    if (!autoLaunch || busy || assetsLoading) return;
+    setAutoLaunch(false);
+    formRef.current?.requestSubmit();
+  }, [autoLaunch, busy, assetsLoading]);
 
   useEffect(() => {
     const allowed = availableDurationOptions;
@@ -335,80 +430,6 @@ export function StudioComposer({ mode }: { mode: "mock" | "live" }) {
     };
   }, [assetsRetry]);
 
-  const jobId = job?.id;
-  const jobStatus = job?.status;
-  const nextPollInSeconds = job?.nextPollInSeconds;
-  const reconciliationRequired = job?.reconciliationRequired;
-  const refreshingJob = useRef(false);
-  useEffect(() => {
-    if (
-      !jobId ||
-      !jobStatus ||
-      ["ready", "failed", "cancelled"].includes(jobStatus) ||
-      reconciliationRequired
-    )
-      return;
-    let timer: number;
-    let active = true;
-    const schedule = (delaySeconds: number) => {
-      timer = window.setTimeout(
-        async () => {
-          if (!active) return;
-          if (refreshingJob.current) {
-            schedule(5);
-            return;
-          }
-          refreshingJob.current = true;
-          try {
-            const response = await fetch(`/api/versions/${jobId}/refresh`, {
-              cache: "no-store",
-              signal: AbortSignal.timeout(25_000),
-            });
-            const data = await response.json();
-            setJob((previous) =>
-              previous
-                ? {
-                    ...previous,
-                    ...data,
-                    error: response.ok
-                      ? data.error
-                      : (data.error ??
-                        "Le suivi est momentanément indisponible. Nouvelle tentative automatique."),
-                  }
-                : previous,
-            );
-            if (
-              response.ok &&
-              !data.reconciliationRequired &&
-              !["ready", "failed", "cancelled"].includes(data.status)
-            )
-              schedule(data.nextPollInSeconds ?? 15);
-            else if (!response.ok) schedule(15);
-          } catch {
-            setJob((previous) =>
-              previous
-                ? {
-                    ...previous,
-                    error:
-                      "Le suivi est momentanément indisponible. Nouvelle tentative automatique.",
-                  }
-                : previous,
-            );
-            schedule(15);
-          } finally {
-            refreshingJob.current = false;
-          }
-        },
-        Math.max(5, Math.min(180, delaySeconds)) * 1000,
-      );
-    };
-    schedule(nextPollInSeconds ?? 15);
-    return () => {
-      active = false;
-      window.clearTimeout(timer);
-    };
-  }, [jobStatus, jobId, nextPollInSeconds, reconciliationRequired]);
-
   async function launch(payload: Record<string, unknown>) {
     const response = await fetch("/api/versions", {
       method: "POST",
@@ -418,9 +439,9 @@ export function StudioComposer({ mode }: { mode: "mock" | "live" }) {
     const data = await response.json();
     if (!response.ok)
       throw new Error(data.error ?? "La génération n’a pas pu démarrer.");
-    setJob({
-      id: data.id,
+    tracker.track(data.id, {
       status: data.status,
+      title: typeof payload.title === "string" && payload.title ? payload.title : undefined,
       prompt: data.prompt,
       completedShots: data.completedShots,
       totalShots: data.totalShots,
@@ -428,7 +449,13 @@ export function StudioComposer({ mode }: { mode: "mock" | "live" }) {
       totalKeyframes: data.totalKeyframes,
       keyframes: data.keyframes,
       estimatedPriceFcfa: data.estimatedPriceFcfa,
+      processingStage: data.processingStage,
+      nextPollInSeconds: data.nextPollInSeconds,
+      videoUrl: data.videoUrl,
+      settings: settingsFromPayload(payload),
     });
+    setFocusId(data.id);
+    setSettingsNotice("");
   }
 
   async function confirmLaunch() {
@@ -454,7 +481,12 @@ export function StudioComposer({ mode }: { mode: "mock" | "live" }) {
     setError("");
     setPendingLaunch(null);
     setBusy(true);
+    setPreparingSince(Math.round(performance.timeOrigin + event.timeStamp));
     try {
+      if (launchBlocked)
+        throw new Error(
+          "Deux vidéos sont déjà en cours. Attendez la fin de l’une d’elles pour en lancer une nouvelle.",
+        );
       if (!selectedDossier?.id || !selectedDossier.photos.length)
         throw new Error(
           "Choisissez un véhicule avec au moins une photo validée.",
@@ -565,11 +597,13 @@ export function StudioComposer({ mode }: { mode: "mock" | "live" }) {
       );
     } finally {
       setBusy(false);
+      setPreparingSince(null);
     }
   }
 
   return (
     <form
+      ref={formRef}
       onSubmit={submit}
       className="grid min-w-0 items-start gap-5 xl:grid-cols-[minmax(0,1fr)_300px]"
     >
@@ -602,75 +636,120 @@ export function StudioComposer({ mode }: { mode: "mock" | "live" }) {
                 );
                 clearFormError();
               }}
-              className="mt-3 text-xs font-semibold text-[#c51e1c] underline underline-offset-4"
+              className="mt-1 inline-flex min-h-11 items-center text-xs font-semibold text-[#c51e1c] underline underline-offset-4"
             >
               Insérer un exemple
             </button>
+            {settingsNotice && (
+              <p role="status" className="mt-3 rounded-md border border-[#d7e7da] bg-[#f2f8f3] p-3 text-xs text-[#315c39]">
+                {settingsNotice}
+              </p>
+            )}
           </div>
         </section>
 
+        {preparingSince !== null && (
+          <section
+            aria-label="Préparation de la nouvelle vidéo"
+            className="rounded-md border border-black/[.055] bg-white p-5"
+          >
+            <h2 className="text-sm font-semibold">Préparation de la nouvelle vidéo</h2>
+            <p className="mt-1 text-xs leading-5 text-[#55545a]">
+              Le réalisateur écrit le storyboard à partir de vos choix.
+            </p>
+            <GenerationProgress
+              version={{
+                status: "generating",
+                progress: preparationProgress(preparingSince),
+                observedAt: preparingSince,
+              }}
+              now={now}
+              showShots={false}
+            />
+          </section>
+        )}
         {job && (
-          <section className="rounded-md border border-black/[.055] bg-white p-5">
-            <div className="flex items-center justify-between">
-              <h2 className="text-sm font-semibold">État de la vidéo</h2>
-              <span className="text-[10px] font-semibold uppercase text-[#a47731]">
-                {job.status === "ready"
+          <section
+            aria-labelledby="studio-job-title"
+            className="rounded-md border border-black/[.055] bg-white p-5"
+          >
+            <div className="flex items-center justify-between gap-3">
+              <h2 id="studio-job-title" className="min-w-0 truncate text-sm font-semibold">
+                État de la vidéo{job.title ? ` · ${job.title}` : ""}
+              </h2>
+              <span className="shrink-0 text-xs font-semibold uppercase text-[#a47731]">
+                {jobStatus === "ready"
                   ? "Prête"
-                  : job.status === "failed"
+                  : jobStatus === "failed"
                     ? "Échec"
-                    : job.status === "cancelled"
+                    : jobStatus === "cancelled"
                       ? "Annulée"
                       : job.reconciliationRequired
                         ? "Vérification requise"
                         : "En cours"}
               </span>
             </div>
-            <p className="mt-2 text-xs leading-5 text-[#88847d]">
-              {job.reconciliationRequired
-                ? (job.error ??
-                  "La génération doit être vérifiée avant toute relance. Aucune nouvelle soumission ne sera envoyée automatiquement.")
-                : job.status === "ready"
-                  ? "Votre vidéo est prête à consulter."
-                  : job.status === "failed"
-                    ? (job.error ??
-                      "La génération a échoué. Vous pouvez relancer une nouvelle vidéo.")
-                    : job.status === "cancelled"
-                      ? "La génération a été annulée."
-                      : (job.error ??
-                        `${job.processingStage ? `${({ queued: "En file d’attente", keyframing: `Création des images-clés${job.completedKeyframes != null && job.totalKeyframes != null ? ` · ${job.completedKeyframes}/${job.totalKeyframes}` : ""}`, generating: "Génération vidéo", quality_checking: "Contrôle qualité", awaiting_review: "Décision requise sur un plan", transferring: "Transfert du fichier", postprocessing: "Logo et finalisation" } as Record<string, string>)[job.processingStage] ?? "Génération en cours"}${job.stageElapsedSeconds != null ? ` · ${job.stageElapsedSeconds} s` : ""}` : "Génération en cours"}${job.totalQualityShots ? ` · ${job.checkedQualityShots ?? 0}/${job.totalQualityShots} plans contrôlés` : ""}. Actualisation automatique selon le délai de suivi du fournisseur.`)}
-            </p>
-            {job.shotProgress && (
-              <div className="mt-3 grid gap-1.5 sm:grid-cols-2">
-                {job.shotProgress.map((shot) => (
-                  <p
-                    key={shot.number}
-                    className="flex items-center justify-between gap-3 rounded border border-[#eeeae4] px-2.5 py-2 text-[10px] text-[#716d66]"
-                  >
-                    <span className="truncate">
-                      Plan {shot.number} · {shot.title}
-                    </span>
-                    <span className="shrink-0 font-semibold">
-                      {shotProgressLabel(shot)}
-                    </span>
-                  </p>
-                ))}
-              </div>
+            {(job.reconciliationRequired || jobStatus === "cancelled" || (jobRunning && job.error)) && (
+              <p className="mt-2 text-xs leading-5 text-[#55545a]">
+                {job.reconciliationRequired
+                  ? (job.error ??
+                    "La génération doit être vérifiée avant toute relance. Aucune nouvelle soumission ne sera envoyée automatiquement.")
+                  : jobStatus === "ready"
+                    ? "Votre vidéo est prête à consulter."
+                    : jobStatus === "failed"
+                      ? (job.error ??
+                        job.errorMessage ??
+                        "La génération a échoué. Vous pouvez relancer une nouvelle vidéo.")
+                      : jobStatus === "cancelled"
+                        ? "La génération a été annulée."
+                        : job.error}
+              </p>
+            )}
+            {!job.reconciliationRequired && (
+              <GenerationProgress version={job} now={now} />
+            )}
+            {jobStatus === "ready" && (
+              <ReadyOutcome
+                outcome={job}
+                onVariant={job.settings ? () => applySettings(job.settings!, false) : undefined}
+                onSeen={() => tracker.markSeen(job.id)}
+                onSubmitted={() => void tracker.reload()}
+              />
+            )}
+            {jobStatus === "failed" && !job.reconciliationRequired && (
+              <FailedOutcome
+                outcome={job}
+                onRelaunch={job.settings && !launchBlocked ? () => { tracker.markSeen(job.id); applySettings(job.settings!, true); } : undefined}
+                onVariant={job.settings ? () => applySettings(job.settings!, false) : undefined}
+              />
+            )}
+            {jobRunning && (
+              <p className="mt-2 text-xs leading-5 text-[#716d66]">
+                {KEEP_TAB_OPEN_MESSAGE}
+              </p>
+            )}
+            {otherRunning > 0 && (
+              <p className="mt-1 text-xs leading-5 text-[#716d66]">
+                {otherRunning === 1
+                  ? "Une autre vidéo est en cours. "
+                  : `${otherRunning} autres vidéos sont en cours. `}
+                <Link
+                  href="/file-generation"
+                  className="font-semibold text-[#c51e1c] underline underline-offset-2"
+                >
+                  Voir la file de génération
+                </Link>
+              </p>
             )}
             <ShotReviewPanel
               versionId={job.id}
               items={job.reviewRequired ?? []}
-              onChanged={() =>
-                setJob((previous) =>
-                  previous
-                    ? { ...previous, reviewRequired: [], error: undefined, nextPollInSeconds: 5 }
-                    : previous,
-                )
-              }
+              onChanged={() => tracker.resolveReview(job.id)}
             />
             {job.keyframes && job.keyframes.length > 0 && (
               <div className="mt-4 border-t border-[#eeeae4] pt-4">
-                <p className="mb-3 text-[10px] font-semibold uppercase tracking-wide text-[#716d66]">
-                  Images-clés retenues
+                <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-[#716d66]">
+                  Images clés produites
                 </p>
                 <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
                   {job.keyframes.map((keyframe) => (
@@ -686,7 +765,7 @@ export function StudioComposer({ mode }: { mode: "mock" | "live" }) {
                         unoptimized
                         className="aspect-video w-full object-cover"
                       />
-                      <figcaption className="px-2 py-1.5 text-[10px] text-[#716d66]">
+                      <figcaption className="px-2 py-1.5 text-xs text-[#716d66]">
                         {keyframe.number}. {keyframe.title}
                       </figcaption>
                     </figure>
@@ -699,10 +778,10 @@ export function StudioComposer({ mode }: { mode: "mock" | "live" }) {
                 role="status"
                 className="mt-4 rounded-md border border-[#eadfc7] bg-[#fbf6ed] p-3"
               >
-                <p className="text-[10px] font-semibold uppercase tracking-wide text-[#675432]">
+                <p className="text-xs font-semibold uppercase tracking-wide text-[#675432]">
                   Points signalés par le contrôle automatique
                 </p>
-                <ul className="mt-2 space-y-1 text-[10px] leading-4 text-[#765d39]">
+                <ul className="mt-2 space-y-1 text-xs leading-4 text-[#765d39]">
                   {job.qualityWarnings.map((warning) => (
                     <li key={`${warning.shotNumber}-${warning.stage}`}>
                       ⚠ Plan {warning.shotNumber}
@@ -712,7 +791,7 @@ export function StudioComposer({ mode }: { mode: "mock" | "live" }) {
                     </li>
                   ))}
                 </ul>
-                <p className="mt-2 text-[9px] text-[#88847d]">
+                <p className="mt-2 text-xs text-[#626269]">
                   La vidéo a été générée malgré ces points ; à vérifier avant
                   validation.
                 </p>
@@ -721,7 +800,7 @@ export function StudioComposer({ mode }: { mode: "mock" | "live" }) {
             {typeof job.estimatedPriceFcfa === "number" && (
               <p className="mt-3 border-t border-[#eeeae4] pt-3 text-xs font-semibold text-[#716d66]">{`Montant total estimé · environ ${formatFcfa(job.estimatedPriceFcfa)}`}</p>
             )}
-            {job.prompt && (
+            {showPrompt && job.prompt && (
               <details className="mt-4 border-t border-[#eeeae4] pt-3">
                 <summary className="cursor-pointer text-xs font-semibold text-[#716d66]">
                   Voir le prompt généré
@@ -731,13 +810,17 @@ export function StudioComposer({ mode }: { mode: "mock" | "live" }) {
                 </p>
               </details>
             )}
-            {job.status === "ready" && (
-              <Link
-                href="/bibliotheque"
-                className="mt-4 block rounded-lg bg-[#c51e1c] px-3 py-2.5 text-center text-xs font-semibold text-white"
+            {!jobRunning && (
+              <button
+                type="button"
+                onClick={() => {
+                  tracker.markSeen(job.id);
+                  setFocusId(null);
+                }}
+                className="mt-3 min-h-10 text-xs font-semibold text-[#716d66] underline underline-offset-2"
               >
-                Voir ma vidéo →
-              </Link>
+                Masquer ce suivi
+              </button>
             )}
           </section>
         )}
@@ -745,7 +828,7 @@ export function StudioComposer({ mode }: { mode: "mock" | "live" }) {
 
       <aside
         id="generation-options"
-        className="min-w-0 space-y-3 xl:sticky xl:top-5"
+        className="min-w-0 space-y-3"
       >
         <section className="rounded-md border border-[#e2e2e5] bg-white p-4">
           <fieldset>
@@ -764,13 +847,13 @@ export function StudioComposer({ mode }: { mode: "mock" | "live" }) {
                       setPlaceIds((current) => current.slice(0, 1));
                   }}
                   aria-pressed={durationS === seconds}
-                  className={`rounded-full border px-2.5 py-1.5 text-[10px] ${durationS === seconds ? "border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]" : "border-[#e5e2dd] text-[#77736d]"}`}
+                  className={`inline-flex min-h-11 items-center justify-center rounded-full border px-3 text-xs ${durationS === seconds ? "border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]" : "border-[#e5e2dd] text-[#77736d]"}`}
                 >
                   {seconds} s
                 </button>
               ))}
             </div>
-            <p className="mt-2 text-[9px] text-[#88847d]">
+            <p className="mt-2 text-xs text-[#626269]">
               {tier === "premium"
                 ? "Premium : quatre plans de 5 s + 2 s de logo animé = 22 s au total."
                 : `${durationS} s de clips + 2 s de logo animé = ${durationS + 2} s au total.`}
@@ -783,8 +866,8 @@ export function StudioComposer({ mode }: { mode: "mock" | "live" }) {
             <h2 className="font-display text-sm font-semibold uppercase tracking-[.04em]">
               Votre vidéo
             </h2>
-            <span className="rounded-full bg-[#f2f1ef] px-2 py-1 text-[9px] text-[#88847d]">
-              {title.trim() ? "Prête à lancer" : "Description à saisir"}
+            <span className="rounded-full bg-[#f2f1ef] px-2 py-1 text-xs text-[#626269]">
+              {additionalDirection.trim() ? "Prête à lancer" : "Description à saisir"}
             </span>
           </div>
           <label className="mt-4 grid gap-1.5 text-[11px] font-semibold">
@@ -794,7 +877,7 @@ export function StudioComposer({ mode }: { mode: "mock" | "live" }) {
               onChange={(event) => setTitle(event.target.value)}
               maxLength={120}
               placeholder="Ex. Starlight EV · lancement Abidjan"
-              className="min-h-10 rounded-md border border-[#e9e7e2] bg-white px-3 py-2 text-xs font-normal outline-none focus:border-[#c51e1c]"
+              className="min-h-11 rounded-md border border-[#e9e7e2] bg-white px-3 py-2 text-xs font-normal outline-none focus:border-[#c51e1c]"
             />
           </label>
           <label className="mt-4 grid gap-1.5 text-[11px] font-semibold">
@@ -815,7 +898,7 @@ export function StudioComposer({ mode }: { mode: "mock" | "live" }) {
                 );
               }}
               disabled={assetsLoading || !vehicleDossiers.length}
-              className="min-h-10 rounded-md border border-[#e9e7e2] bg-white px-3 py-2 text-xs font-normal outline-none focus:border-[#c51e1c]"
+              className="min-h-11 rounded-md border border-[#e9e7e2] bg-white px-3 py-2 text-xs font-normal outline-none focus:border-[#c51e1c]"
             >
               <option value="">
                 {assetsLoading ? "Chargement…" : "Choisissez un véhicule"}
@@ -853,7 +936,7 @@ export function StudioComposer({ mode }: { mode: "mock" | "live" }) {
                   <b className="block truncate text-xs">
                     {selectedAsset.make} {selectedAsset.model}
                   </b>
-                  <small className="mt-1 block truncate text-[10px] text-[#99958e]">
+                  <small className="mt-1 block truncate text-xs text-[#626269]">
                     {selectedAsset.color ?? "Photos validées"} ·{" "}
                     {selectedDossier?.photos.length ?? 0} vue(s) rattachée(s)
                   </small>
@@ -878,7 +961,7 @@ export function StudioComposer({ mode }: { mode: "mock" | "live" }) {
                         className="object-cover"
                       />
                     )}
-                    <span className="absolute inset-x-0 bottom-0 truncate bg-black/55 px-1 py-0.5 text-left text-[8px] text-white">
+                    <span className="absolute inset-x-0 bottom-0 truncate bg-black/55 px-1 py-0.5 text-left text-xs text-white">
                       {photo.angle ?? photo.title ?? `Vue ${index + 1}`}
                     </span>
                   </button>
@@ -916,7 +999,7 @@ export function StudioComposer({ mode }: { mode: "mock" | "live" }) {
             <legend className="mb-1 text-[11px] font-semibold">
               Lieu réel · Côte d’Ivoire
             </legend>
-            <p className="mb-3 text-[9px] leading-4 text-[#88847d]">
+            <p className="mb-3 text-xs leading-4 text-[#626269]">
               {durationS >= 10
                 ? "À partir de 10 secondes, vous pouvez sélectionner plusieurs lieux."
                 : "Pour les clips de moins de 10 secondes, un seul lieu est utilisé."}
@@ -970,10 +1053,10 @@ export function StudioComposer({ mode }: { mode: "mock" | "live" }) {
                           />
                         )}
                       </span>
-                      <span className="block truncate px-2 pt-1.5 text-[9px] font-medium text-[#4d4a45]">
+                      <span className="block truncate px-2 pt-1.5 text-xs font-medium text-[#4d4a45]">
                         {place.title ?? "Lieu"}
                       </span>
-                      <span className="block truncate px-2 pb-1.5 text-[8px] text-[#99958e]">
+                      <span className="block truncate px-2 pb-1.5 text-xs text-[#626269]">
                         {place.category ?? "Côte d’Ivoire"}
                       </span>
                     </button>
@@ -981,7 +1064,7 @@ export function StudioComposer({ mode }: { mode: "mock" | "live" }) {
                 })}
               </div>
             ) : (
-              <p className="text-[10px] text-[#88847d]">
+              <p className="text-xs text-[#626269]">
                 Aucun lieu validé disponible.
               </p>
             )}
@@ -994,7 +1077,7 @@ export function StudioComposer({ mode }: { mode: "mock" | "live" }) {
               <legend className="mb-1 text-[11px] font-semibold">
                 Casting
               </legend>
-              <p className="mb-2 text-[9px] leading-4 text-[#88847d]">
+              <p className="mb-2 text-xs leading-4 text-[#626269]">
                 {castAssets.length
                   ? `Jusqu’à ${MAX_CAST} personnes validées. Les mêmes personnes apparaissent dans toute la vidéo, sauf demande contraire dans la description.`
                   : "Aucune photo de casting validée. Ajoutez-en dans la médiathèque (catégorie Casting) pour garder les mêmes personnes d’un plan à l’autre."}
@@ -1032,7 +1115,7 @@ export function StudioComposer({ mode }: { mode: "mock" | "live" }) {
                             />
                           )}
                         </span>
-                        <span className="block truncate px-1.5 py-1 text-[9px] text-[#4d4a45]">
+                        <span className="block truncate px-1.5 py-1 text-xs text-[#4d4a45]">
                           {member.title ?? "Personne"}
                         </span>
                       </button>
@@ -1056,13 +1139,13 @@ export function StudioComposer({ mode }: { mode: "mock" | "live" }) {
                         clearFormError();
                       }}
                       aria-pressed={peoplePreset === id}
-                      className={`rounded-full border px-2.5 py-1.5 text-[10px] transition ${peoplePreset === id ? "border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]" : "border-[#e5e2dd] text-[#77736d] hover:border-[#c51e1c]"}`}
+                      className={`inline-flex min-h-11 items-center justify-center rounded-full border px-3 text-xs transition ${peoplePreset === id ? "border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]" : "border-[#e5e2dd] text-[#77736d] hover:border-[#c51e1c]"}`}
                     >
                       {peoplePresets[id].label}
                     </button>
                   ))}
                 </div>
-                <p className="mt-2 text-[9px] leading-4 text-[#88847d]">
+                <p className="mt-2 text-xs leading-4 text-[#626269]">
                   Sans photo de casting, l’IA décrit la personne une fois et
                   la reprend dans chaque plan ; la ressemblance d’un plan à
                   l’autre reste approximative. Sans personnage, le véhicule
@@ -1076,7 +1159,7 @@ export function StudioComposer({ mode }: { mode: "mock" | "live" }) {
                 <select
                   value={audioAssetId}
                   onChange={(event) => setAudioAssetId(event.target.value)}
-                  className="min-h-9 rounded-md border border-[#e9e7e2] bg-white px-2 text-[10px] font-normal outline-none focus:border-[#c51e1c]"
+                  className="min-h-11 rounded-md border border-[#e9e7e2] bg-white px-2 text-xs font-normal outline-none focus:border-[#c51e1c]"
                 >
                   <option value="">Sans musique</option>
                   {audioAssets.map((track) => (
@@ -1100,7 +1183,7 @@ export function StudioComposer({ mode }: { mode: "mock" | "live" }) {
                     aria-pressed={
                       label === getLightingLabel(selectedScene?.lighting ?? "")
                     }
-                    className={`rounded-full border px-2.5 py-1.5 text-[10px] transition ${label === getLightingLabel(selectedScene?.lighting ?? "") ? "border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]" : "border-[#e5e2dd] text-[#77736d] hover:border-[#c51e1c]"}`}
+                    className={`inline-flex min-h-11 items-center justify-center rounded-full border px-3 text-xs transition ${label === getLightingLabel(selectedScene?.lighting ?? "") ? "border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]" : "border-[#e5e2dd] text-[#77736d] hover:border-[#c51e1c]"}`}
                   >
                     {label}
                   </button>
@@ -1123,7 +1206,7 @@ export function StudioComposer({ mode }: { mode: "mock" | "live" }) {
                     clearFormError();
                   }}
                   aria-pressed={format === value}
-                  className={`rounded-full border px-2.5 py-1.5 text-[10px] ${format === value ? "border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]" : "border-[#e5e2dd] text-[#77736d]"}`}
+                  className={`inline-flex min-h-11 items-center justify-center rounded-full border px-3 text-xs ${format === value ? "border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]" : "border-[#e5e2dd] text-[#77736d]"}`}
                 >
                   {value}
                 </button>
@@ -1151,13 +1234,13 @@ export function StudioComposer({ mode }: { mode: "mock" | "live" }) {
                     clearFormError();
                   }}
                   aria-pressed={tier === option.value}
-                  className={`rounded-full border px-2.5 py-1.5 text-[10px] ${tier === option.value ? "border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]" : "border-[#e5e2dd] text-[#77736d]"}`}
+                  className={`inline-flex min-h-11 items-center justify-center rounded-full border px-3 text-xs ${tier === option.value ? "border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]" : "border-[#e5e2dd] text-[#77736d]"}`}
                 >
                   {option.label}
                 </button>
               ))}
             </div>
-            <p className="mt-2 text-[9px] text-[#88847d]">
+            <p className="mt-2 text-xs text-[#626269]">
               Clips générés : {durationS} s · vidéo finale avec logo :{" "}
               {durationS + 2} s.
             </p>
@@ -1165,7 +1248,7 @@ export function StudioComposer({ mode }: { mode: "mock" | "live" }) {
           {mode === "live" && modelsError && (
             <p
               role="alert"
-              className="mt-4 rounded-md bg-red-50 p-3 text-[10px] text-red-700"
+              className="mt-4 rounded-md bg-red-50 p-3 text-xs text-red-700"
             >
               {modelsError}
             </p>
@@ -1176,28 +1259,28 @@ export function StudioComposer({ mode }: { mode: "mock" | "live" }) {
             !storyboardModel && (
               <p
                 role="alert"
-                className="mt-4 rounded-md bg-red-50 p-3 text-[10px] text-red-700"
+                className="mt-4 rounded-md bg-red-50 p-3 text-xs text-red-700"
               >
                 Aucune option disponible pour cette durée et ce format.
                 Choisissez un autre niveau ou format.
               </p>
             )}
           {mode === "mock" && (
-            <p className="mt-4 rounded-md bg-[#fbf6ed] p-3 text-[10px] leading-4 text-[#765d39]">
+            <p className="mt-4 rounded-md bg-[#fbf6ed] p-3 text-xs leading-4 text-[#765d39]">
               Simulation active : aucune vidéo payante ne sera générée.
             </p>
           )}
           {mode === "live" && estimatedPriceFcfa != null && (
-            <p className="mt-4 border-t border-[#eeeae4] pt-4 text-[10px] text-[#88847d]">
+            <p className="mt-4 border-t border-[#eeeae4] pt-4 text-xs text-[#626269]">
               Estimation vidéo · environ {formatFcfa(estimatedPriceFcfa)}
             </p>
           )}
-          <p className="mt-4 border-t border-[#eeeae4] pt-4 text-[10px] leading-4 text-[#88847d]">
+          <p className="mt-4 border-t border-[#eeeae4] pt-4 text-xs leading-4 text-[#626269]">
             La vidéo sera générée directement. Les plans et les lieux suivront
             automatiquement vos choix.
           </p>
         </section>
-        <p className="px-1 text-[10px] leading-4 text-[#88847d]">
+        <p className="px-1 text-xs leading-4 text-[#626269]">
           {multiClip
             ? "Les vues et lieux sélectionnés déterminent les plans, assemblés automatiquement."
             : "Un plan créatif. Si nécessaire, le modèle le répartit en plusieurs clips avant le montage final."}
@@ -1206,6 +1289,7 @@ export function StudioComposer({ mode }: { mode: "mock" | "live" }) {
       <div className="space-y-3 xl:col-span-2">
         {pendingLaunch && (
           <div
+            ref={conflictRef}
             role="status"
             className="rounded-md border border-[#e7d7b9] bg-[#fbf6ed] p-4 text-xs leading-5 text-[#765d39]"
           >
@@ -1259,23 +1343,38 @@ export function StudioComposer({ mode }: { mode: "mock" | "live" }) {
           type="submit"
           disabled={
             busy ||
-            generationActive ||
+            launchBlocked ||
+            pendingLaunch !== null ||
             !selectedDossier?.id ||
             !selectedDossier.photos.length ||
             (mode === "live" && (!storyboardModel || modelsLoading))
           }
           aria-describedby={
-            generationActive ? "generation-lock-message" : undefined
+            launchBlocked ? "generation-lock-message" : pendingLaunch ? "conflict-choice-message" : undefined
           }
           className="w-full rounded-md bg-[#c51e1c] px-4 py-4 text-sm font-semibold text-white transition hover:bg-[#a71715] disabled:cursor-not-allowed disabled:opacity-50"
         >
           {busy
             ? "Le réalisateur prépare la vidéo…"
-            : generationActive
-              ? "Génération en cours…"
+            : launchBlocked
+              ? `${MAX_ACTIVE_VIDEOS} vidéos déjà en cours`
               : `Générer la vidéo · ${durationS} s`}
         </button>
-        <p className="text-center text-[10px] text-[#88847d]">
+        {pendingLaunch && !launchBlocked && (
+          <p id="conflict-choice-message" className="text-center text-xs text-[#626269]">
+            Choisissez d’abord dans l’encadré ci-dessus : lancer la vidéo adaptée ou modifier votre demande.
+          </p>
+        )}
+        {launchBlocked && (
+          <p
+            id="generation-lock-message"
+            className="text-center text-xs text-[#716d66]"
+          >
+            Attendez la fin de l’une de vos vidéos en cours pour en lancer une
+            nouvelle.
+          </p>
+        )}
+        <p className="text-center text-xs text-[#626269]">
           Lancement direct : les vues et lieux sélectionnés déterminent
           automatiquement les plans.
         </p>

@@ -1,23 +1,24 @@
 import { describe, expect, it } from 'vitest';
-import { nextGenerationPollDelayMs, shouldPollGenerationQueue } from '@/core/versions/client-polling';
+import { isGenerationActive, refreshDelayMs } from '@/core/versions/client-polling';
 
-describe('shouldPollGenerationQueue', () => {
-  it('does not poll when the tab is hidden', () => {
-    expect(shouldPollGenerationQueue([{ status: 'generating' }], false)).toBe(false);
+describe('isGenerationActive', () => {
+  it('treats queued, generating and postprocessing as running', () => {
+    expect(isGenerationActive({ status: 'ready' })).toBe(false);
+    expect(isGenerationActive({ status: 'failed' })).toBe(false);
+    expect(isGenerationActive({ status: 'ready', versionStatus: 'queued' })).toBe(true);
+    expect(isGenerationActive({ status: 'generating' })).toBe(true);
+  });
+});
+
+describe('refreshDelayMs', () => {
+  it('follows the server delay within 10 s and 180 s', () => {
+    expect(refreshDelayMs(60)).toBe(60_000);
+    expect(refreshDelayMs(1)).toBe(10_000);
+    expect(refreshDelayMs(900)).toBe(180_000);
   });
 
-  it('does not poll when there are no active generations', () => {
-    expect(shouldPollGenerationQueue([{ status: 'ready' }, { status: 'failed' }], true)).toBe(false);
-  });
-
-  it('polls when a visible queue contains a queued or active version', () => {
-    expect(shouldPollGenerationQueue([{ status: 'ready' }, { status: 'queued' }], true)).toBe(true);
-    expect(shouldPollGenerationQueue([{ status: 'generating' }], true)).toBe(true);
-  });
-
-  it('uses the earliest server delay with a 30-second minimum', () => {
-    expect(nextGenerationPollDelayMs([180, 60])).toBe(60_000);
-    expect(nextGenerationPollDelayMs([5])).toBe(30_000);
-    expect(nextGenerationPollDelayMs([null, 'invalid'])).toBe(30_000);
+  it('uses 15 s without a valid server delay', () => {
+    expect(refreshDelayMs(null)).toBe(15_000);
+    expect(refreshDelayMs('invalid')).toBe(15_000);
   });
 });

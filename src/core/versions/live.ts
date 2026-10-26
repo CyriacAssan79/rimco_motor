@@ -31,6 +31,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { getActiveFalCredential, getFalCredentialById, pruneRetiredFalCredentials } from '@/core/providers/fal-credential-vault';
 import { firstObservedAt, type ProcessingMetrics } from './processing-metrics';
+import { notify } from '@/core/notifications/notify';
 
 export type CreateVersionInput = z.infer<typeof requestSchema>;
 
@@ -402,9 +403,8 @@ export async function refreshLiveVersion(versionId: string, actor: Actor) {
   return { id: versionId, status: status.status, error: status.error };
 }
 
-async function notifyVersion(admin: ReturnType<typeof createStorageAdminClient>, userId: string, versionId: string, type: 'ready' | 'failed' | 'cancelled', message: string) {
-  const { error } = await admin.from('notifications').upsert({ user_id: userId, version_id: versionId, type, message }, { onConflict: 'user_id,version_id,type', ignoreDuplicates: true });
-  if (error && !error.message.includes('notifications')) console.error('Notification vidéo non enregistrée:', error.message);
+function notifyVersion(admin: ReturnType<typeof createStorageAdminClient>, userId: string, versionId: string, type: 'ready' | 'failed' | 'cancelled', message: string) {
+  return notify(admin, { userId, versionId, type, message });
 }
 
 async function settleCompletedGenerationCost(admin: ReturnType<typeof createStorageAdminClient>, versionId: string) {

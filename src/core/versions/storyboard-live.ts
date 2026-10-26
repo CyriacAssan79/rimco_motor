@@ -12,6 +12,7 @@ import { keyframeImageUploadTarget } from '@/core/storage/keyframe-image';
 import { createSupabaseServerClient } from '@/core/supabase/server';
 import { env } from '@/env';
 import { estimateGridPriceFcfa } from '@/core/pricing';
+import { notifyStoryboardState } from '@/core/notifications/storyboard';
 import { firstObservedAt, type ProcessingMetrics } from './processing-metrics';
 import { renderSettingsFor, storedRenderSettings } from './render-settings';
 import { expandSingleShotStoryboard, holdStillInInterior, validateStoryboardCast, vehicleDescriptionForPrompt, finalVideoSeconds,  type ClipDurationSeconds, type StoryboardShot, validatePremiumTwentySecondStoryboard, validateSingleShotStoryboard, validateStoryboard, validateTierDuration } from '@/core/storyboard';
@@ -916,7 +917,7 @@ async function refreshKeyframes(input: {
   // Shots stopped by the verifier: the Studio shows the image and its defects, a human accepts, relaunches or cancels.
   const reviewRequired: ReviewRequest[] = refreshedShots.filter((shot) => shot.keyframe_status === 'awaiting_review').map((shot) => {
     const verdict = storedVerdict(shot.keyframe_quality);
-    return { shotNumber: shot.shot_number, title: shot.title, stage: 'keyframe' as const, issues: verdict ? (verdict.issues.length ? verdict.issues : [verdict.reason]) : [], url: keyframePreviews.find((preview) => preview.number === shot.shot_number)?.url ?? null, canRetry: Number(shot.keyframe_retry_count ?? 0) + 1 < MAX_KEYFRAME_ATTEMPTS };
+    return { shotNumber: shot.shot_number, title: shot.title, stage: 'keyframe' as const, issues: verdict ? (verdict.issues.length ? verdict.issues : [verdict.reason]) : [], codes: verdict?.issues.length ? verdict.codes : undefined, url: keyframePreviews.find((preview) => preview.number === shot.shot_number)?.url ?? null, canRetry: Number(shot.keyframe_retry_count ?? 0) + 1 < MAX_KEYFRAME_ATTEMPTS };
   });
   // A rolling shot waits for its optional end frame (ready or failed) before animation; failure only drops the end frame.
   const pendingKeyframes = refreshedShots.some((shot) => ['queued','generating','checking','revising'].includes(shot.keyframe_status)
@@ -992,7 +993,18 @@ async function refreshKeyframes(input: {
   return { id: version.id, status: 'generating' as const, processingStage: 'generating' as const, qualityWarnings: collectQualityWarnings(refreshedShots), completedKeyframes, totalKeyframes: refreshedShots.length, keyframes: keyframePreviews, completedShots: 0, totalShots: refreshedShots.length };
 }
 
+/**
+ * Refresh of a storyboard version, then its notifications: video ready, final failure, and one « action requise »
+ * for each shot stopped by a verifier. Every write is idempotent (dedupe key): refreshing the same state again,
+ * from a tab or from the daily cron, never notifies twice. A notification error never blocks the video.
+ */
 export async function refreshLiveStoryboard(versionId: string, actor: Actor) {
+  const result = await refreshStoryboardState(versionId, actor);
+  await notifyStoryboardState(createStorageAdminClient(), versionId, result).catch((cause) => console.error('Notifications du storyboard non enregistrées:', cause instanceof Error ? cause.message : cause));
+  return result;
+}
+
+async function refreshStoryboardState(versionId: string, actor: Actor) {
   const admin = createStorageAdminClient();
   const { data: version, error } = await admin.from('video_versions')
     .select('id,video_id,status,final_path,error_message,updated_at,ai_model_id,fal_credential_id,brief_json,model:ai_models!inner(adapter_family,fal_endpoint_id,price_usd_per_second),video:videos!inner(id,user_id,brand_id,department,status)')
@@ -1242,7 +1254,7 @@ export async function refreshLiveStoryboard(versionId: string, actor: Actor) {
   const reviewRequired: ReviewRequest[] = await Promise.all(awaitingClips.map(async (shot) => {
     const verdict = storedVerdict(shot.video_quality);
     const url = typeof shot.raw_path === 'string' ? await createSignedStorageObjectUrl((path, expiresIn) => admin.storage.from('videos').createSignedUrl(path, expiresIn), 'videos', shot.raw_path) : null;
-    return { shotNumber: shot.shot_number, title: shot.title, stage: 'video' as const, issues: verdict ? (verdict.issues.length ? verdict.issues : [verdict.reason]) : [], url, canRetry: false };
+    return { shotNumber: shot.shot_number, title: shot.title, stage: 'video' as const, issues: verdict ? (verdict.issues.length ? verdict.issues : [verdict.reason]) : [], codes: verdict?.issues.length ? verdict.codes : undefined, url, canRetry: false };
   }));
   const pendingShots = latestShots.some((shot) => shot.video_quality_status !== 'awaiting_review' && (['queued','generating','postprocessing'].includes(shot.status) || premiumQualityMode && shot.status !== 'failed' && ['queued','checking','retrying'].includes(shot.video_quality_status)));
   const shotProgress = latestShots.map((shot) => ({ number: shot.shot_number, title: shot.title, status: shot.status, qualityStatus: shot.video_quality_status }));

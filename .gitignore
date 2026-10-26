@@ -13,3 +13,4 @@ supabase/.temp
 
 # Patchs reçus et guides d’application, conservés en local seulement
 /patch V3/
+docs/audit-ux/

@@ -7,6 +7,9 @@ import { estimatePriceFcfa } from '@/core/pricing';
 import { env } from '@/env';
 import { requestSchema } from '@/core/versions/request-schema';
 import { createLiveVersion } from '@/core/versions/live';
+import { versionProgress } from '@/core/versions/progress-estimate';
+import { billingSummary, studioSettings } from '@/core/versions/outcome';
+import type { ProgressShotRow } from '@/core/versions/progress';
 import { createPersistedMockVersion } from '@/core/versions/mock-persistence';
 import { createStorageAdminClient } from '@/core/storage/supabase';
 import { collectVideoArtifactPaths } from '@/core/storage/intermediate-cleanup';
@@ -87,7 +90,7 @@ export async function GET(request: Request) {
     const admin = createStorageAdminClient();
     let query = limitRelationToLatest(
       admin.from('videos')
-        .select('id,user_id,title,status,department,brand_id,created_at,video_versions(id,number,status,generation_seconds,final_path,raw_path,provider_request_id,brief_json,error_message,created_at,validations(id,status),model:ai_models(tier),usage_ledger(kind,ai_model_id,seconds,cost_usd,billable_cost_usd,price_fcfa,status),video_shots(shot_number,title,provider_poll_failure_count,provider_reconciliation_required,provider_last_poll_error,video_quality_status,status))')
+        .select('id,user_id,title,status,department,brand_id,created_at,video_versions(id,number,status,generation_seconds,final_path,raw_path,provider_request_id,brief_json,error_message,created_at,validations(id,status),model:ai_models(tier),usage_ledger(kind,ai_model_id,seconds,cost_usd,billable_cost_usd,price_fcfa,status),video_shots(shot_number,title,provider_poll_failure_count,provider_reconciliation_required,provider_last_poll_error,video_quality_status,keyframe_status,status))')
         .order('created_at', { ascending: false }),
       'video_versions',
       'number',
@@ -107,6 +110,17 @@ export async function GET(request: Request) {
     const inputAssetIds = [...new Set((data ?? []).flatMap((video) => generationInputAssetIds(latestBrief(video))))];
     const { data: inputAssets } = inputAssetIds.length ? await admin.from('assets').select('id,title').in('id', inputAssetIds) : { data: [] };
     const assetTitles = new Map((inputAssets ?? []).filter((asset) => asset.title).map((asset) => [asset.id as string, asset.title as string]));
+    // Running versions only: their shots' verification history gives the human waits (progress and estimate).
+    const runningVersionIds = (data ?? []).flatMap((video) => {
+      const rows = Array.isArray(video.video_versions) ? video.video_versions : [];
+      const latest = [...rows].sort((a, b) => b.number - a.number)[0];
+      return latest && ['queued', 'generating', 'postprocessing'].includes(latest.status) ? [latest.id as string] : [];
+    });
+    const { data: runningShots } = runningVersionIds.length
+      ? await admin.from('video_shots').select('version_id,shot_number,title,status,keyframe_status,video_quality_status,verification_history').in('version_id', runningVersionIds)
+      : { data: [] };
+    const runningShotsByVersion = new Map<string, ProgressShotRow[]>();
+    for (const shot of (runningShots ?? []) as Array<ProgressShotRow & { version_id: string }>) runningShotsByVersion.set(shot.version_id, [...(runningShotsByVersion.get(shot.version_id) ?? []), shot]);
     const versions = await Promise.all((data ?? []).map(async (video) => {
       const rows = Array.isArray(video.video_versions) ? video.video_versions : [];
       const latest = [...rows].sort((a, b) => b.number - a.number)[0];
@@ -160,7 +174,8 @@ export async function GET(request: Request) {
       const metrics = briefData.processingMetrics && typeof briefData.processingMetrics === 'object' ? briefData.processingMetrics as ProcessingMetrics : {};
       const stage = qualityCheckActive ? 'quality_checking' : processingStage(latest?.status ?? status, metrics);
       const stageStartedAt = stage === 'queued' ? metrics.providerSubmittedAt : stage === 'keyframing' ? metrics.keyframingStartedAt : stage === 'generating' ? metrics.generationStartedAt ?? metrics.providerSubmittedAt : stage === 'transferring' ? metrics.providerCompletedAt : stage === 'postprocessing' ? metrics.postproductionStartedAt : undefined;
-      return { id: latest?.id ?? video.id, videoId: video.id, title: video.title, status, workflow: briefData.multiClipMode === true ? 'multi_clip' : 'single', tier: generationTier, photoFidelity: isPhotoFidelity, format: typeof briefData.format === 'string' ? briefData.format : '16:9', durationSeconds: Number(latest?.generation_seconds ?? generationCost?.seconds ?? 5), version: latest?.number ?? 1, versionStatus: latest?.status ?? null, errorMessage: latest?.error_message ?? null, qualityWarnings: storedQualityWarnings(briefData), inputs: extractGenerationInputs(briefData, assetTitles), pollError, canRetryTracking, reconciliationRequired, checkedQualityShots, totalQualityShots, shotProgress, processingStage: stage, stageElapsedSeconds: elapsedSeconds(stageStartedAt), processingDurations: processingDurations(metrics, latest?.status ?? status), processingMetrics: metrics, priceFcfa: generationCost?.priceFcfa ?? (typeof mockMetadata.priceFcfa === 'number' ? mockMetadata.priceFcfa : null), validationId: validationRows[0]?.id ?? null, validationStatus: validationRows[0]?.status ?? null, ...(includePreviews ? { videoUrl, previewUrl, previewSource } : {}), createdAt: video.created_at, department: video.department, userId: video.user_id };
+      const progress = latest ? await versionProgress(admin, { status: latest.status, brief: briefData, shots: runningShotsByVersion.get(latest.id) ?? shotRows as ProgressShotRow[] }) : null;
+      return { progress, settings: studioSettings(briefData, video.title), billing: billingSummary(ledgerRows), id: latest?.id ?? video.id, videoId: video.id, title: video.title, status, workflow: briefData.multiClipMode === true ? 'multi_clip' : 'single', tier: generationTier, photoFidelity: isPhotoFidelity, format: typeof briefData.format === 'string' ? briefData.format : '16:9', durationSeconds: Number(latest?.generation_seconds ?? generationCost?.seconds ?? 5), version: latest?.number ?? 1, versionStatus: latest?.status ?? null, errorMessage: latest?.error_message ?? null, qualityWarnings: storedQualityWarnings(briefData), inputs: extractGenerationInputs(briefData, assetTitles), pollError, canRetryTracking, reconciliationRequired, checkedQualityShots, totalQualityShots, shotProgress, processingStage: stage, stageElapsedSeconds: elapsedSeconds(stageStartedAt), processingDurations: processingDurations(metrics, latest?.status ?? status), processingMetrics: metrics, priceFcfa: generationCost?.priceFcfa ?? (typeof mockMetadata.priceFcfa === 'number' ? mockMetadata.priceFcfa : null), validationId: validationRows[0]?.id ?? null, validationStatus: validationRows[0]?.status ?? null, ...(includePreviews ? { videoUrl, previewUrl, previewSource } : {}), createdAt: video.created_at, department: video.department, userId: video.user_id };
     }));
     return NextResponse.json({ versions: requestedStatus ? versions.filter((version) => version.status === requestedStatus) : versions });
   } catch (error) { return errorResponse(error); }

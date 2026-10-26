@@ -1,8 +1,149 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 
 const mockWithoutSupabase = process.env.E2E_MOCK_NO_SUPABASE === '1';
 const adminEmail = process.env.E2E_ADMIN_EMAIL ?? 'admin@rimco.test';
 const adminPassword = process.env.E2E_ADMIN_PASSWORD;
+
+/** API answers injected: a version of the user is already running when the Studio opens. */
+async function expectStudioRestoresActiveVersion(page: Page) {
+  const running = { id: 'e2e-running', videoId: 'e2e-video', title: 'Vidéo E2E en cours', status: 'generating', versionStatus: 'generating', processingStage: 'keyframing', stageElapsedSeconds: 40, durationSeconds: 5, createdAt: new Date(Date.now() - 120_000).toISOString() };
+  const refreshCalls: string[] = [];
+  await page.route((url) => url.pathname === '/api/versions', (route) => {
+    const request = route.request();
+    if (request.method() !== 'GET' || new URL(request.url()).searchParams.get('status')) return route.continue();
+    return route.fulfill({ json: { versions: [running] } });
+  });
+  await page.route('**/api/versions/e2e-running/refresh', (route) => {
+    refreshCalls.push(route.request().url());
+    return route.fulfill({ json: { id: 'e2e-running', status: 'generating', processingStage: 'keyframing', stageElapsedSeconds: 45, nextPollInSeconds: 30 } });
+  });
+  await page.goto('/');
+  await expect(page.getByRole('heading', { name: 'État de la vidéo · Vidéo E2E en cours' })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText(/gardez un onglet ouvert/)).toBeVisible();
+  const indicator = page.getByRole('link', { name: /1 vidéo en cours · Images clés/ });
+  await expect(indicator).toBeVisible();
+  await expect.poll(() => refreshCalls.length, { timeout: 15_000 }).toBe(1);
+  // The Studio and then the queue: one follow-up for the whole application, no second /refresh within the interval.
+  await indicator.click();
+  await expect(page).toHaveURL(/\/file-generation$/, { timeout: 30_000 });
+  await expect(page.getByRole('heading', { name: 'Vidéo E2E en cours' })).toBeVisible({ timeout: 30_000 });
+  await page.waitForTimeout(5_000);
+  expect(refreshCalls).toHaveLength(1);
+}
+
+/** API answers injected: an unread « action requise » appears on any page, with the tab title. */
+async function expectActionRequiredBanner(page: Page) {
+  const actionRequired = { id: 'e2e-action', type: 'action_required', version_id: 'e2e-version', message: '« Vidéo E2E » · Plan 2 · décision requise : l’image clé a été refusée par le contrôle automatique.', read_at: null, created_at: new Date().toISOString() };
+  let marked: unknown = null;
+  await page.route('**/api/notifications', (route) => {
+    if (route.request().method() === 'PATCH') { marked = route.request().postDataJSON(); return route.fulfill({ json: { ok: true } }); }
+    return route.fulfill({ json: { notifications: [actionRequired], unread: 1 } });
+  });
+  await page.goto('/bibliotheque');
+  await expect(page.getByRole('status').filter({ hasText: 'Action requise' })).toContainText('Plan 2 · décision requise');
+  await expect(page).toHaveTitle('(1) Action requise · RIMCO Studio');
+  const link = page.getByRole('link', { name: 'Voir le plan' });
+  await expect(link).toHaveAttribute('href', '/file-generation?version=e2e-version#decision-e2e-version');
+  await link.click();
+  await expect(page).toHaveURL(/\/file-generation\?version=e2e-version#decision-e2e-version$/);
+  await expect.poll(() => marked).toEqual({ ids: ['e2e-action'] });
+}
+
+/** A video of the user, finished a few minutes ago (API answers injected); `null` userId = the signed-in user. */
+function finishedVersion(status: 'ready' | 'failed') {
+  return {
+    id: `e2e-${status}`, videoId: `e2e-video-${status}`, title: `Vidéo E2E ${status}`, status, versionStatus: status, durationSeconds: 7, tier: 'standard', format: '16:9',
+    createdAt: new Date(Date.now() - 5 * 60_000).toISOString(), validationStatus: null,
+    errorMessage: status === 'failed' ? 'Content policy violation: the request was flagged by the safety filter (fal error 422).' : null,
+    billing: { chargedFcfa: 0, pending: false },
+    settings: { title: 'Vidéo E2E', description: 'Une Haval H6 roule sur le pont HKB.', vehicleDossierId: 'e2e-unknown-dossier', vehiclePhotoIds: [], placeIds: [], castAssetIds: [], tier: 'standard', durationS: 5, format: '16:9', scenePresetId: '', audioAssetId: null },
+  };
+}
+
+async function routeFinishedVersion(page: Page, status: 'ready' | 'failed') {
+  const version = finishedVersion(status);
+  await page.route((url) => url.pathname === '/api/versions', (route) => {
+    const request = route.request();
+    if (request.method() !== 'GET' || new URL(request.url()).searchParams.get('status')) return route.continue();
+    return route.fulfill({ json: { versions: [version] } });
+  });
+  await page.route(`**/api/versions/${version.id}/refresh`, (route) => route.fulfill({ json: status === 'ready'
+    ? { id: version.id, status: 'ready', videoUrl: '/mock/mock-video.mp4', qualityWarnings: [] }
+    : { id: version.id, status: 'failed', error: version.errorMessage, billing: version.billing } }));
+  return version;
+}
+
+/** Ready video: player, send to the validator, direct link to the library, download reminder. */
+async function expectReadyVideoActions(page: Page) {
+  const version = await routeFinishedVersion(page, 'ready');
+  let submitted: unknown = null;
+  await page.route('**/api/validations', (route) => { submitted = route.request().postDataJSON(); return route.fulfill({ status: 201, json: { id: 'e2e-validation', status: 'pending' } }); });
+  await page.goto('/');
+  await expect(page.getByText('Votre vidéo est prête.')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByLabel('Vidéo finale')).toHaveAttribute('src', '/mock/mock-video.mp4');
+  await expect(page.getByText('Durée 7 s · Niveau Standard · Format 16:9')).toBeVisible();
+  await expect(page.getByText('Le téléchargement est possible après l’approbation du valideur.')).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Ouvrir dans la Bibliothèque' })).toHaveAttribute('href', `/bibliotheque?video=${version.videoId}`);
+  await page.getByRole('button', { name: 'Envoyer au valideur' }).click();
+  await expect(page.getByText('Envoyée au valideur : en attente de sa décision.')).toBeVisible();
+  expect(submitted).toEqual({ versionId: version.id });
+}
+
+/** Failed video: the cause in French, nothing billed, relaunch with the same settings. */
+async function expectFailedVideoMessage(page: Page) {
+  await routeFinishedVersion(page, 'failed');
+  await page.goto('/');
+  const failure = page.getByRole('alert').filter({ hasText: 'La vidéo n’a pas pu être produite.' });
+  await expect(failure).toBeVisible({ timeout: 30_000 });
+  await expect(failure).toContainText('Le fournisseur a refusé le contenu demandé (filtre de sécurité).');
+  await expect(failure).toContainText('Rien ne vous est facturé pour cette vidéo.');
+  await expect(failure.getByRole('button', { name: 'Relancer avec les mêmes réglages' })).toBeVisible();
+  await expect(failure).not.toContainText('Content policy violation', { useInnerText: true });
+}
+
+/** « /bibliotheque?video=<id> » opens and highlights the video. */
+async function expectLibraryDirectLink(page: Page) {
+  const version = finishedVersion('ready');
+  await page.route((url) => url.pathname === '/api/versions', (route) => route.request().method() === 'GET' && !new URL(route.request().url()).searchParams.get('status')
+    ? route.fulfill({ json: { versions: [{ ...version, title: 'Autre vidéo', id: 'other', videoId: 'other-video' }, { ...version, previewUrl: '/mock/mock-video.mp4' }] } })
+    : route.continue());
+  await page.goto(`/bibliotheque?video=${version.videoId}`);
+  await expect(page.locator(`#video-card-${version.videoId}`)).toHaveAttribute('aria-current', 'true', { timeout: 30_000 });
+  await expect(page.getByRole('complementary', { name: 'Détails de la vidéo sélectionnée' })).toContainText(version.title);
+}
+
+/** À valider: the refusal asks for a reason in a window (no browser prompt) and confirms the decision. */
+async function expectRefusalWindow(page: Page) {
+  let decision: unknown = null;
+  await page.route((url) => url.pathname === '/api/versions', (route) => new URL(route.request().url()).searchParams.get('status') === 'review'
+    ? route.fulfill({ json: { versions: decision ? [] : [{ id: 'e2e-review', validationId: 'e2e-validation', title: 'Vidéo E2E à valider', status: 'review', tier: 'standard', durationSeconds: 5, previewUrl: null, createdAt: new Date().toISOString() }] } })
+    : route.continue());
+  await page.route('**/api/validations/e2e-validation', (route) => { decision = route.request().postDataJSON(); return route.fulfill({ json: { id: 'e2e-validation', status: 'rejected' } }); });
+  await page.goto('/a-valider');
+  await page.getByRole('button', { name: 'Refuser' }).click();
+  const dialog = page.getByRole('dialog', { name: /Refuser « Vidéo E2E à valider »/ });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Confirmer le refus' })).toBeDisabled();
+  await dialog.getByLabel('Motif du refus (obligatoire)').fill('Logo déformé au plan 3.');
+  await dialog.getByRole('button', { name: 'Confirmer le refus' }).click();
+  await expect(page.getByRole('status').filter({ hasText: '« Vidéo E2E à valider » est refusée' })).toBeVisible();
+  expect(decision).toEqual({ status: 'rejected', reason: 'Logo déformé au plan 3.' });
+}
+
+/** Studio: while the adapted brief waits for a choice, the big button is off and the banner is the only way on. */
+async function expectConflictBlocksMainButton(page: Page) {
+  await page.route('**/api/storyboard/suggest', (route) => route.fulfill({ json: { storyboard: [{ title: 'Plan', scene: 's', framing: 'f', location: 'l', action: 'a', camera: 'c', durationSeconds: 5, vehiclePhotoId: 'v' }], storyboardSignature: 'x', briefConflicts: ['Scène de nuit demandée : les lieux choisis sont de jour, la lumière suit le lieu.'] } }));
+  await page.goto('/');
+  const generate = page.getByRole('button', { name: /Générer la vidéo/ });
+  await expect(generate).toBeEnabled({ timeout: 30_000 });
+  await page.getByLabel('Description de la vidéo').fill('Une Haval H6 de nuit.');
+  await generate.click();
+  await expect(page.getByText('Votre demande a été adaptée aux règles de la marque')).toBeVisible({ timeout: 30_000 });
+  await expect(generate).toBeDisabled();
+  await expect(page.getByText('Choisissez d’abord dans l’encadré ci-dessus')).toBeVisible();
+  await page.getByRole('button', { name: 'Modifier ma demande' }).click();
+  await expect(generate).toBeEnabled();
+}
 
 if (mockWithoutSupabase) {
   test('le studio de simulation est utilisable sans compte Supabase', async ({ page }) => {
@@ -31,6 +172,38 @@ if (mockWithoutSupabase) {
     expect((await createRequest).postDataJSON()).toMatchObject({ overlayLogo: true, title });
     await expect(page.getByText('Votre vidéo est prête à consulter.')).toBeVisible({ timeout: 65_000 });
     await expect(page.getByRole('link', { name: 'Voir ma vidéo' })).toBeVisible();
+  });
+  test('le Studio retrouve une vidéo en cours et un seul suivi tourne', async ({ page }) => {
+    test.setTimeout(90_000);
+    await expectStudioRestoresActiveVersion(page);
+  });
+
+  test('une décision requise est signalée sur toutes les pages', async ({ page }) => {
+    test.setTimeout(90_000);
+    await expectActionRequiredBanner(page);
+  });
+  test('une vidéo prête se regarde et s’envoie au valideur depuis le Studio', async ({ page }) => {
+    test.setTimeout(90_000);
+    await expectReadyVideoActions(page);
+  });
+
+  test('un échec explique la cause en français et ce qui est facturé', async ({ page }) => {
+    test.setTimeout(90_000);
+    await expectFailedVideoMessage(page);
+  });
+
+  test('le lien direct ouvre la vidéo dans la Bibliothèque', async ({ page }) => {
+    test.setTimeout(90_000);
+    await expectLibraryDirectLink(page);
+  });
+  test('le refus demande un motif dans une fenêtre et confirme la décision', async ({ page }) => {
+    test.setTimeout(90_000);
+    await expectRefusalWindow(page);
+  });
+
+  test('pendant un conflit du brief, seul l’encadré permet de lancer', async ({ page }) => {
+    test.setTimeout(90_000);
+    await expectConflictBlocksMainButton(page);
   });
 } else {
   if (!adminPassword) throw new Error('E2E_ADMIN_PASSWORD doit être préparé par le setup global Playwright.');
@@ -68,5 +241,47 @@ if (mockWithoutSupabase) {
     expect((await createRequest).postDataJSON()).toMatchObject({ overlayLogo: true, title: 'Essai E2E' });
     await expect(page.getByText('Votre vidéo est prête à consulter.')).toBeVisible({ timeout: 65_000 });
     await expect(page.getByRole('link', { name: 'Voir ma vidéo' })).toBeVisible();
+  });
+
+  test('le Studio retrouve une vidéo en cours et un seul suivi tourne', async ({ page }) => {
+    test.setTimeout(90_000);
+    await signIn(page, adminEmail, adminPassword);
+    await expectStudioRestoresActiveVersion(page);
+  });
+
+  test('une décision requise est signalée sur toutes les pages', async ({ page }) => {
+    test.setTimeout(90_000);
+    await signIn(page, adminEmail, adminPassword);
+    await expectActionRequiredBanner(page);
+  });
+
+  test('une vidéo prête se regarde et s’envoie au valideur depuis le Studio', async ({ page }) => {
+    test.setTimeout(90_000);
+    await signIn(page, adminEmail, adminPassword);
+    await expectReadyVideoActions(page);
+  });
+
+  test('un échec explique la cause en français et ce qui est facturé', async ({ page }) => {
+    test.setTimeout(90_000);
+    await signIn(page, adminEmail, adminPassword);
+    await expectFailedVideoMessage(page);
+  });
+
+  test('le lien direct ouvre la vidéo dans la Bibliothèque', async ({ page }) => {
+    test.setTimeout(90_000);
+    await signIn(page, adminEmail, adminPassword);
+    await expectLibraryDirectLink(page);
+  });
+
+  test('le refus demande un motif dans une fenêtre et confirme la décision', async ({ page }) => {
+    test.setTimeout(90_000);
+    await signIn(page, adminEmail, adminPassword);
+    await expectRefusalWindow(page);
+  });
+
+  test('pendant un conflit du brief, seul l’encadré permet de lancer', async ({ page }) => {
+    test.setTimeout(90_000);
+    await signIn(page, adminEmail, adminPassword);
+    await expectConflictBlocksMainButton(page);
   });
 }

@@ -7,7 +7,7 @@ type Item = { id: string; title?: string; status: string; durationSeconds?: numb
 
 /** Minor defects of accepted shots and shots accepted by a human against the automatic check: the validator is the final barrier. */
 function QualityWarnings({ warnings }: { warnings: QualityWarning[] }) {
-  return <div role="status" className="mt-4 rounded-md border border-[#eadfc7] bg-[#fbf6ed] p-3"><p className="text-[10px] font-semibold uppercase tracking-wide text-[#675432]">Points signalés par le contrôle automatique</p><ul className="mt-2 space-y-1 text-xs leading-5 text-[#765d39]">{warnings.map((warning) => <li key={`${warning.shotNumber}-${warning.stage}`}>⚠ Plan {warning.shotNumber}{warning.title ? ` · ${warning.title}` : ''} ({warning.stage === 'keyframe' ? 'image-clé' : 'clip'}) : {warning.issues.join(' ; ') || 'à vérifier'}</li>)}</ul><p className="mt-2 text-[10px] text-[#88847d]">Ces défauts n’ont pas bloqué la génération. Vérifiez-les dans la vidéo avant d’approuver.</p></div>;
+  return <div role="status" className="mt-4 rounded-md border border-[#eadfc7] bg-[#fbf6ed] p-3"><p className="text-xs font-semibold uppercase tracking-wide text-[#675432]">Points signalés par le contrôle automatique</p><ul className="mt-2 space-y-1 text-xs leading-5 text-[#765d39]">{warnings.map((warning) => <li key={`${warning.shotNumber}-${warning.stage}`}>⚠ Plan {warning.shotNumber}{warning.title ? ` · ${warning.title}` : ''} ({warning.stage === 'keyframe' ? 'image-clé' : 'clip'}) : {warning.issues.join(' ; ') || 'à vérifier'}</li>)}</ul><p className="mt-2 text-xs text-[#626269]">Ces défauts n’ont pas bloqué la génération. Vérifiez-les dans la vidéo avant d’approuver.</p></div>;
 }
 
 export function ValidationQueue() {
@@ -22,11 +22,22 @@ export function ValidationQueue() {
     setItems(data.versions ?? []);
   }, []);
   useEffect(() => { void load().catch((cause) => setError(cause instanceof Error ? cause.message : 'Une erreur est survenue.')); }, [load]);
-  async function review(item: Item, status: 'approved' | 'rejected') {
+  /** Refusal: a window with a required reason (the creator receives it), instead of the browser prompt. */
+  const [refusing, setRefusing] = useState<Item | null>(null);
+  const [reason, setReason] = useState('');
+  const [notice, setNotice] = useState('');
+  useEffect(() => {
+    if (!refusing) return;
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') setRefusing(null); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [refusing]);
+  async function review(item: Item, status: 'approved' | 'rejected', refusalReason?: string) {
     const validationId = item.validationId;
     if (!validationId) { setError('Cette demande ne contient pas de référence de validation.'); return; }
-    const reason = status === 'rejected' ? window.prompt('Motif du refus')?.trim() : undefined;
-    if (status === 'rejected' && !reason) return;
+    const reason = status === 'rejected' ? refusalReason?.trim() : undefined;
+    if (status === 'rejected' && (!reason || reason.length < 3)) return;
+    setNotice('');
     const warningCount = item.qualityWarnings?.length ?? 0;
     if (status === 'approved' && warningCount > 0 && !window.confirm(`Le contrôle automatique a signalé ${warningCount} point${warningCount > 1 ? 's' : ''} sur cette vidéo. Approuver quand même ?`)) return;
     setBusy(item.id);
@@ -34,16 +45,34 @@ export function ValidationQueue() {
       const response = await fetch(`/api/validations/${validationId}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ status, reason }) });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? 'La décision n’a pas pu être enregistrée.');
+      const name = item.title ? `« ${item.title} »` : 'La vidéo';
+      setNotice(status === 'approved' ? `${name} est approuvée : son créateur est prévenu et peut la télécharger.` : `${name} est refusée : son créateur est prévenu, avec le motif.`);
+      setRefusing(null);
+      setReason('');
       await load();
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Une erreur est survenue.'); } finally { setBusy(''); }
   }
   return <section className="space-y-3" aria-live="polite">
     {error && <p role="alert" className="border border-[#f0c9c6] bg-[#fae9e7] p-4 text-sm text-[#9d352e]">{error}</p>}
+    {notice && <p role="status" className="border border-[#d7e7da] bg-[#f2f8f3] p-4 text-sm text-[#315c39]">{notice}</p>}
     {items.length === 0 ? <div className="border border-dashed border-[#d2d2d6] bg-white px-6 py-16 text-center"><h2 className="text-sm font-semibold">Aucune vidéo à valider</h2><p className="mt-2 text-xs text-[#626269]">Les nouvelles demandes de votre périmètre apparaîtront ici.</p></div> : items.map((item) => <article key={item.id} className="flex flex-wrap items-center gap-4 border border-[#e2e2e5] bg-white p-4 md:flex-nowrap">
-      {item.previewUrl ? <video src={item.previewUrl} muted preload="metadata" className="h-20 w-32 rounded-sm object-cover" aria-label={`Aperçu de ${item.title ?? 'la vidéo'}`} /> : <div className="grid h-20 w-32 place-items-center bg-[#eeeeef] text-xs text-[#77777d]">Aperçu indisponible</div>}
-      <div className="min-w-0 flex-1"><h2 className="truncate text-sm font-semibold">{item.title ?? 'Vidéo sans titre'}</h2><p className="mt-1 text-xs text-[#626269]">{item.workflow === 'multi_clip' ? `Multi-plans · ${item.tier === 'pro' ? 'Pro' : item.tier === 'premium' ? 'Premium' : 'Standard'}` : item.tier ? `${item.tier === 'pro' ? 'Pro' : item.tier === 'premium' ? 'Premium' : item.tier === 'test' ? 'Test' : 'Standard'}` : 'Standard'} · {item.durationSeconds ?? 5} s · {item.createdAt ? new Date(item.createdAt).toLocaleDateString('fr-FR') : 'Date inconnue'}</p>{item.qualityWarnings && item.qualityWarnings.length > 0 && <p className="mt-1.5 inline-block rounded-full bg-[#fbf6ed] px-2 py-0.5 text-[10px] font-semibold text-[#765d39]">⚠ {item.qualityWarnings.length} point{item.qualityWarnings.length > 1 ? 's' : ''} signalé{item.qualityWarnings.length > 1 ? 's' : ''} · à vérifier dans l’aperçu</p>}</div>
-      <div className="flex items-center gap-2"><button type="button" onClick={() => setSelected(item)} className="min-h-10 rounded-full border border-[#e2e2e5] px-4 text-xs font-semibold">Voir</button><button type="button" disabled={Boolean(busy)} onClick={() => void review(item, 'approved')} className="min-h-10 rounded-full bg-[#247a4d] px-4 text-xs font-semibold text-white disabled:opacity-50">{busy === item.id ? '…' : 'Approuver'}</button><button type="button" disabled={Boolean(busy)} onClick={() => void review(item, 'rejected')} className="min-h-10 rounded-full border border-[#e2e2e5] px-4 text-xs font-semibold disabled:opacity-50">Refuser</button></div>
+      {item.previewUrl ? <video src={item.previewUrl} muted preload="metadata" className="h-20 w-32 rounded-sm object-cover" aria-label={`Aperçu de ${item.title ?? 'la vidéo'}`} /> : <div className="grid h-20 w-32 place-items-center bg-[#eeeeef] text-xs text-[#626269]">Aperçu indisponible</div>}
+      <div className="min-w-0 flex-1"><h2 className="truncate text-sm font-semibold">{item.title ?? 'Vidéo sans titre'}</h2><p className="mt-1 text-xs text-[#626269]">{item.workflow === 'multi_clip' ? `Multi-plans · ${item.tier === 'pro' ? 'Pro' : item.tier === 'premium' ? 'Premium' : 'Standard'}` : item.tier ? `${item.tier === 'pro' ? 'Pro' : item.tier === 'premium' ? 'Premium' : item.tier === 'test' ? 'Test' : 'Standard'}` : 'Standard'} · {item.durationSeconds ?? 5} s · {item.createdAt ? new Date(item.createdAt).toLocaleDateString('fr-FR') : 'Date inconnue'}</p>{item.qualityWarnings && item.qualityWarnings.length > 0 && <p className="mt-1.5 inline-block rounded-full bg-[#fbf6ed] px-2 py-0.5 text-xs font-semibold text-[#765d39]">⚠ {item.qualityWarnings.length} point{item.qualityWarnings.length > 1 ? 's' : ''} signalé{item.qualityWarnings.length > 1 ? 's' : ''} · à vérifier dans l’aperçu</p>}</div>
+      <div className="flex items-center gap-2"><button type="button" onClick={() => setSelected(item)} className="min-h-11 rounded-full border border-[#e2e2e5] px-4 text-xs font-semibold">Voir</button><button type="button" disabled={Boolean(busy)} onClick={() => void review(item, 'approved')} className="min-h-11 rounded-full bg-[#247a4d] px-4 text-xs font-semibold text-white disabled:opacity-50">{busy === item.id ? '…' : 'Approuver'}</button><button type="button" disabled={Boolean(busy)} onClick={() => { setError(''); setReason(''); setRefusing(item); }} className="min-h-11 rounded-full border border-[#e2e2e5] px-4 text-xs font-semibold disabled:opacity-50">Refuser</button></div>
     </article>)}
-    {selected && <div role="dialog" aria-modal="true" aria-labelledby="validation-preview-title" className="fixed inset-0 z-50 grid place-items-center bg-black/50 p-4" onClick={() => setSelected(null)}><section className="max-h-[90vh] w-full max-w-3xl overflow-auto rounded-2xl bg-white p-5 shadow-2xl" onClick={(event) => event.stopPropagation()}><div className="flex items-start justify-between gap-4"><div><p className="text-[10px] font-bold uppercase tracking-[.16em] text-[#c51e1c]">Aperçu de validation</p><h2 id="validation-preview-title" className="mt-1 text-lg font-semibold">{selected.title ?? 'Vidéo sans titre'}</h2><p className="mt-1 text-xs text-[#626269]">{selected.workflow === 'multi_clip' ? `Multi-plans · ${selected.tier === 'pro' ? 'Pro' : selected.tier === 'premium' ? 'Premium' : 'Standard'}` : selected.tier === 'pro' ? 'Pro' : selected.tier === 'premium' ? 'Premium' : selected.tier === 'test' ? 'Test' : 'Standard'} · V{selected.version ?? 1} · {selected.durationSeconds ?? 5} s · {selected.createdAt ? new Date(selected.createdAt).toLocaleDateString('fr-FR') : 'Date inconnue'}</p></div><button type="button" onClick={() => setSelected(null)} aria-label="Fermer l’aperçu" className="rounded-full border border-[#e2e2e5] px-3 py-1.5 text-xs font-semibold">Fermer</button></div>{selected.previewUrl ? <video src={selected.previewUrl} controls autoPlay className="mt-5 max-h-[60vh] w-full rounded-lg bg-[#232326]" /> : <p className="mt-5 rounded-lg bg-[#f5f5f3] p-8 text-center text-sm text-[#77777d]">Aperçu indisponible.</p>}{selected.qualityWarnings && selected.qualityWarnings.length > 0 && <QualityWarnings warnings={selected.qualityWarnings} />}</section></div>}
+    {selected && <div role="dialog" aria-modal="true" aria-labelledby="validation-preview-title" className="fixed inset-0 z-50 grid place-items-center bg-black/50 p-4" onClick={() => setSelected(null)}><section className="max-h-[90vh] w-full max-w-3xl overflow-auto rounded-2xl bg-white p-5 shadow-2xl" onClick={(event) => event.stopPropagation()}><div className="flex items-start justify-between gap-4"><div><p className="text-xs font-bold uppercase tracking-[.16em] text-[#c51e1c]">Aperçu de validation</p><h2 id="validation-preview-title" className="mt-1 text-lg font-semibold">{selected.title ?? 'Vidéo sans titre'}</h2><p className="mt-1 text-xs text-[#626269]">{selected.workflow === 'multi_clip' ? `Multi-plans · ${selected.tier === 'pro' ? 'Pro' : selected.tier === 'premium' ? 'Premium' : 'Standard'}` : selected.tier === 'pro' ? 'Pro' : selected.tier === 'premium' ? 'Premium' : selected.tier === 'test' ? 'Test' : 'Standard'} · V{selected.version ?? 1} · {selected.durationSeconds ?? 5} s · {selected.createdAt ? new Date(selected.createdAt).toLocaleDateString('fr-FR') : 'Date inconnue'}</p></div><button type="button" onClick={() => setSelected(null)} aria-label="Fermer l’aperçu" className="rounded-full border border-[#e2e2e5] px-3 py-1.5 text-xs font-semibold">Fermer</button></div>{selected.previewUrl ? <video src={selected.previewUrl} controls autoPlay className="mt-5 max-h-[60vh] w-full rounded-lg bg-[#232326]" /> : <p className="mt-5 rounded-lg bg-[#f5f5f3] p-8 text-center text-sm text-[#626269]">Aperçu indisponible.</p>}{selected.qualityWarnings && selected.qualityWarnings.length > 0 && <QualityWarnings warnings={selected.qualityWarnings} />}</section></div>}
+    {refusing && <div role="dialog" aria-modal="true" aria-labelledby="refusal-title" className="fixed inset-0 z-50 grid place-items-center bg-black/50 p-4" onClick={() => setRefusing(null)}>
+      <form className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-2xl" onClick={(event) => event.stopPropagation()} onSubmit={(event) => { event.preventDefault(); void review(refusing, 'rejected', reason); }}>
+        <h2 id="refusal-title" className="text-lg font-semibold">Refuser {refusing.title ? `« ${refusing.title} »` : 'cette vidéo'}</h2>
+        <label className="mt-4 grid gap-1.5 text-sm font-semibold">Motif du refus (obligatoire)
+          <textarea autoFocus required minLength={3} maxLength={1000} rows={4} value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Ex. Le logo de la calandre est déformé au plan 3 : refaire ce plan." className="rounded-md border border-[#d2cec6] p-3 text-sm font-normal outline-none focus:border-[#c51e1c]" />
+        </label>
+        <p className="mt-2 text-xs text-[#626269]">Le créateur reçoit ce motif dans ses notifications.</p>
+        <div className="mt-4 flex flex-wrap justify-end gap-2">
+          <button type="button" onClick={() => setRefusing(null)} className="min-h-11 rounded-full border border-[#e2e2e5] px-4 text-xs font-semibold">Annuler</button>
+          <button type="submit" disabled={reason.trim().length < 3 || Boolean(busy)} className="min-h-11 rounded-full bg-[#831810] px-4 text-xs font-semibold text-white disabled:opacity-50">{busy === refusing.id ? 'Enregistrement…' : 'Confirmer le refus'}</button>
+        </div>
+      </form>
+    </div>}
   </section>;
 }

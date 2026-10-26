@@ -48,6 +48,7 @@ function labelForKind(kind: Asset['kind']): string {
 
 export function MediaLibrary() {
   const [assets, setAssets] = useState<Asset[]>([]);
+  const [totalCount, setTotalCount] = useState<number | null>(null);
   const [filter, setFilter] = useState<'all' | Asset['kind']>('all');
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -76,6 +77,7 @@ export function MediaLibrary() {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? 'Impossible de charger la médiathèque.');
       setAssets(data.assets ?? []);
+      if (filter === 'all') setTotalCount((data.assets ?? []).length);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Une erreur est survenue.');
     } finally {
@@ -213,8 +215,8 @@ export function MediaLibrary() {
                   setError('');
                   setNotice('');
                 }
-              }} className={`rounded-md px-3 py-2 text-xs font-semibold transition ${filter === value ? 'bg-[#fbfbfa] text-[#253b4e]' : 'text-[#716d66] hover:text-[#253b4e]'}`}>
-                {label}{value === 'all' ? ` · ${assets.length}` : ''}
+              }} className={`rounded-md min-h-11 px-3 py-2 text-xs font-semibold transition ${filter === value ? 'bg-[#fbfbfa] text-[#253b4e]' : 'text-[#716d66] hover:text-[#253b4e]'}`}>
+                {label}{value === 'all' && totalCount !== null ? ` · ${totalCount}` : ''}
               </button>
             ))}
           </div>
@@ -224,34 +226,34 @@ export function MediaLibrary() {
               setKind(event.target.value as Asset['kind']);
               setError('');
               setNotice('');
-            }} className="rounded-md border border-[#d2cec6] bg-[#fbfbfa] px-3 py-2">
+            }} className="rounded-md border border-[#d2cec6] bg-[#fbfbfa] min-h-11 px-3 py-2">
               {availableKinds.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
             </select>
           </label>
           {kind === 'vehicle' && (
             <>
-              <label className="grid gap-1 text-xs font-semibold text-[#253b4e]">Marque<input value={make} onChange={(event) => setMake(event.target.value)} className="rounded-md border border-[#d2cec6] bg-[#fbfbfa] px-3 py-2" /></label>
-              <label className="grid gap-1 text-xs font-semibold text-[#253b4e]">Modèle<input value={model} onChange={(event) => setModel(event.target.value)} className="rounded-md border border-[#d2cec6] bg-[#fbfbfa] px-3 py-2" /></label>
-              <label className="grid gap-1 text-xs font-semibold text-[#253b4e]">Couleur<input value={color} onChange={(event) => setColor(event.target.value)} className="rounded-md border border-[#d2cec6] bg-[#fbfbfa] px-3 py-2" /></label>
-              <label className="grid gap-1 text-xs font-semibold text-[#253b4e]">Vue de la photo<select value={angle} onChange={(event) => setAngle(event.target.value)} className="rounded-md border border-[#d2cec6] bg-[#fbfbfa] px-3 py-2">{vehicleViewOptions.map((option) => <option key={option}>{option}</option>)}</select></label>
+              <label className="grid gap-1 text-xs font-semibold text-[#253b4e]">Marque<input value={make} onChange={(event) => setMake(event.target.value)} className="rounded-md border border-[#d2cec6] bg-[#fbfbfa] min-h-11 px-3 py-2" /></label>
+              <label className="grid gap-1 text-xs font-semibold text-[#253b4e]">Modèle<input value={model} onChange={(event) => setModel(event.target.value)} className="rounded-md border border-[#d2cec6] bg-[#fbfbfa] min-h-11 px-3 py-2" /></label>
+              <label className="grid gap-1 text-xs font-semibold text-[#253b4e]">Couleur<input value={color} onChange={(event) => setColor(event.target.value)} className="rounded-md border border-[#d2cec6] bg-[#fbfbfa] min-h-11 px-3 py-2" /></label>
+              <label className="grid gap-1 text-xs font-semibold text-[#253b4e]">Vue de la photo<select value={angle} onChange={(event) => setAngle(event.target.value)} className="rounded-md border border-[#d2cec6] bg-[#fbfbfa] min-h-11 px-3 py-2">{vehicleViewOptions.map((option) => <option key={option}>{option}</option>)}</select></label>
             </>
           )}
           {kind === 'vehicle' && isAdmin && <div className="w-full rounded-xl border border-[#e7e2da] bg-[#fbfaf8] p-4">
             <p className="text-xs font-semibold text-[#253b4e]">Dossier véhicule</p>
             <div className="mt-3 flex flex-wrap items-end gap-3">
-              <label className="grid gap-1 text-xs font-semibold">Associer à<select value={selectedDossierId} onChange={(event) => setSelectedDossierId(event.target.value)} className="min-w-48 rounded-md border border-[#d2cec6] bg-white px-3 py-2"><option value="">Créer ou ajouter sans dossier</option>{vehicleFolders.map((folder) => <option key={folder.id} value={folder.id}>{folder.make} {folder.model}{folder.color ? ` · ${folder.color}` : ''}</option>)}</select></label>
-              <label className="grid gap-1 text-xs font-semibold">Type de photo<select value={photoRole} onChange={(event) => setPhotoRole(event.target.value as typeof photoRole)} className="rounded-md border border-[#d2cec6] bg-white px-3 py-2"><option value="exterior">Extérieur</option><option value="interior">Intérieur</option><option value="detail">Détail</option></select></label>
-              <label className="grid gap-1 text-xs font-semibold">Marque<input value={dossierMake} onChange={(event) => setDossierMake(event.target.value)} placeholder="Ex. Haval" className="w-32 rounded-md border border-[#d2cec6] bg-white px-3 py-2" /></label>
-              <label className="grid gap-1 text-xs font-semibold">Modèle<input value={dossierModel} onChange={(event) => setDossierModel(event.target.value)} placeholder="Ex. H6" className="w-32 rounded-md border border-[#d2cec6] bg-white px-3 py-2" /></label>
-              <label className="grid gap-1 text-xs font-semibold">Couleur<input value={dossierColor} onChange={(event) => setDossierColor(event.target.value)} placeholder="Facultatif" className="w-32 rounded-md border border-[#d2cec6] bg-white px-3 py-2" /></label>
-              <button type="button" disabled={busy || !dossierMake.trim() || !dossierModel.trim()} onClick={() => void createVehicleFolder()} className="rounded-md border border-[#c51e1c] px-3 py-2 text-xs font-semibold text-[#b21c1a] disabled:opacity-50">Créer le dossier</button>
+              <label className="grid gap-1 text-xs font-semibold">Associer à<select value={selectedDossierId} onChange={(event) => setSelectedDossierId(event.target.value)} className="min-w-48 rounded-md border border-[#d2cec6] bg-white min-h-11 px-3 py-2"><option value="">Créer ou ajouter sans dossier</option>{vehicleFolders.map((folder) => <option key={folder.id} value={folder.id}>{folder.make} {folder.model}{folder.color ? ` · ${folder.color}` : ''}</option>)}</select></label>
+              <label className="grid gap-1 text-xs font-semibold">Type de photo<select value={photoRole} onChange={(event) => setPhotoRole(event.target.value as typeof photoRole)} className="rounded-md border border-[#d2cec6] bg-white min-h-11 px-3 py-2"><option value="exterior">Extérieur</option><option value="interior">Intérieur</option><option value="detail">Détail</option></select></label>
+              <label className="grid gap-1 text-xs font-semibold">Marque<input value={dossierMake} onChange={(event) => setDossierMake(event.target.value)} placeholder="Ex. Haval" className="w-32 rounded-md border border-[#d2cec6] bg-white min-h-11 px-3 py-2" /></label>
+              <label className="grid gap-1 text-xs font-semibold">Modèle<input value={dossierModel} onChange={(event) => setDossierModel(event.target.value)} placeholder="Ex. H6" className="w-32 rounded-md border border-[#d2cec6] bg-white min-h-11 px-3 py-2" /></label>
+              <label className="grid gap-1 text-xs font-semibold">Couleur<input value={dossierColor} onChange={(event) => setDossierColor(event.target.value)} placeholder="Facultatif" className="w-32 rounded-md border border-[#d2cec6] bg-white min-h-11 px-3 py-2" /></label>
+              <button type="button" disabled={busy || !dossierMake.trim() || !dossierModel.trim()} onClick={() => void createVehicleFolder()} className="rounded-md border border-[#c51e1c] min-h-11 px-3 py-2 text-xs font-semibold text-[#b21c1a] disabled:opacity-50">Créer le dossier</button>
             </div>
-            <p className="mt-2 text-[10px] text-[#88847d]">Créez une fiche une fois, puis rattachez-lui chaque photo validée de l’intérieur, de l’extérieur ou des détails.</p>
+            <p className="mt-2 text-xs text-[#626269]">Créez une fiche une fois, puis rattachez-lui chaque photo validée de l’intérieur, de l’extérieur ou des détails.</p>
           </div>}
-          {kind === 'place' && isAdmin && <label className="grid gap-1 text-xs font-semibold text-[#253b4e]">Nom du lieu<input value={placeTitle} onChange={(event) => setPlaceTitle(event.target.value)} maxLength={160} placeholder="Ex. Plateau, Abidjan" className="min-w-56 rounded-md border border-[#d2cec6] bg-[#fbfbfa] px-3 py-2" /></label>}
+          {kind === 'place' && isAdmin && <label className="grid gap-1 text-xs font-semibold text-[#253b4e]">Nom du lieu<input value={placeTitle} onChange={(event) => setPlaceTitle(event.target.value)} maxLength={160} placeholder="Ex. Plateau, Abidjan" className="min-w-56 rounded-md border border-[#d2cec6] bg-[#fbfbfa] min-h-11 px-3 py-2" /></label>}
           {kind === 'character' && <div className="grid gap-1">
-            <label className="grid gap-1 text-xs font-semibold text-[#253b4e]">Personne<input value={placeTitle} onChange={(event) => setPlaceTitle(event.target.value)} maxLength={160} placeholder="Ex. Awa, 30 ans, chemise blanche" className="min-w-64 rounded-md border border-[#d2cec6] bg-[#fbfbfa] px-3 py-2" /></label>
-            <p className="max-w-sm text-[10px] text-[#88847d]">Une personne par photo, en pied ou à mi-corps, sur fond simple. Validez uniquement avec une cession de droit à l’image signée.</p>
+            <label className="grid gap-1 text-xs font-semibold text-[#253b4e]">Personne<input value={placeTitle} onChange={(event) => setPlaceTitle(event.target.value)} maxLength={160} placeholder="Ex. Awa, 30 ans, chemise blanche" className="min-w-64 rounded-md border border-[#d2cec6] bg-[#fbfbfa] min-h-11 px-3 py-2" /></label>
+            <p className="max-w-sm text-xs text-[#626269]">Une personne par photo, en pied ou à mi-corps, sur fond simple. Validez uniquement avec une cession de droit à l’image signée.</p>
           </div>}
         </div>
         <label className="cursor-pointer rounded-md bg-[#c51e1c] px-4 py-3 text-xs font-semibold text-white hover:bg-[#a71715] focus-within:outline focus-within:outline-2 focus-within:outline-offset-2">
@@ -284,14 +286,14 @@ export function MediaLibrary() {
             const beginsVehicleGroup = filter === 'vehicle' && (!previous || `${previous.make ?? 'Véhicule'} ${previous.model ?? ''}`.trim() !== groupName);
             return (
             <Fragment key={asset.id}>
-            {beginsVehicleGroup && <h2 className="col-span-full mt-3 border-b border-[#e8e4de] pb-2 text-sm font-semibold text-[#253b4e]">{groupName}<span className="ml-2 text-xs font-normal text-[#918c85]">{visibleAssets.filter((item) => item.make === asset.make && item.model === asset.model).length} photo(s)</span></h2>}
+            {beginsVehicleGroup && <h2 className="col-span-full mt-3 border-b border-[#e8e4de] pb-2 text-sm font-semibold text-[#253b4e]">{groupName}<span className="ml-2 text-xs font-normal text-[#626269]">{visibleAssets.filter((item) => item.make === asset.make && item.model === asset.model).length} photo(s)</span></h2>}
             <article className="overflow-hidden rounded-2xl border border-black/[.055] bg-white">
               <AssetPreview asset={asset} />
               <div className="p-4">
-                <p className="text-[9px] font-bold uppercase tracking-[.18em] text-[#ad3d34]">{labelForKind(asset.kind)}</p>
+                <p className="text-xs font-bold uppercase tracking-[.18em] text-[#ad3d34]">{labelForKind(asset.kind)}</p>
                 <h3 className="mt-1.5 text-sm font-semibold">{asset.kind === 'vehicle' ? `${asset.make ?? 'Véhicule'} ${asset.model ?? ''}` : asset.title ?? labelForKind(asset.kind)}</h3>
-                <p className="mt-1 text-xs text-[#918c85]">{asset.kind === 'vehicle' ? [asset.angle, asset.color].filter(Boolean).join(' · ') || 'RIMCO Motors' : asset.category ?? asset.color ?? asset.variant ?? 'RIMCO Motors'}</p>
-                {asset.isCurated && <p className="mt-2 text-[10px] text-[#4e7656]">Lieu intégré · référence disponible dans les storyboards</p>}
+                <p className="mt-1 text-xs text-[#626269]">{asset.kind === 'vehicle' ? [asset.angle, asset.color].filter(Boolean).join(' · ') || 'RIMCO Motors' : (asset.category && kinds.some(([value]) => value === asset.category) ? labelForKind(asset.category as Asset['kind']) : asset.category) ?? asset.color ?? asset.variant ?? 'RIMCO Motors'}</p>
+                {asset.isCurated && <p className="mt-2 text-xs text-[#4e7656]">Lieu intégré · référence disponible dans les storyboards</p>}
                 {asset.status === 'rejetée' && asset.review_reason && <p className="mt-2 text-xs text-[#831810]">Motif : {asset.review_reason}</p>}
                 {isAdmin && asset.kind === 'place' && !asset.isCurated && asset.placeProfile && <PlaceProfileEditor asset={asset} profile={asset.status === 'en_attente' ? asset.placeProfileProposal ?? asset.placeProfile : asset.placeProfile} review={asset.status === 'en_attente'} onSaved={(message) => { setError(''); setNotice(message); void load(); }} onError={setError} />}
                 {isAdmin && asset.status === 'en_attente' && (
@@ -318,9 +320,9 @@ export function MediaLibrary() {
 function EmptyState({ onFile, kind }: { onFile: (file: File) => void; kind: Asset['kind'] }) {
   return (
     <div className="rounded-2xl border border-dashed border-[#d8d5cf] bg-white px-6 py-16 text-center">
-      <span className="text-2xl text-[#948f87]">▧</span>
+      <span className="text-2xl text-[#626269]">▧</span>
       <h2 className="mt-4 text-sm font-semibold">La médiathèque est prête pour vos médias</h2>
-      <p className="mx-auto mt-2 max-w-md text-xs leading-5 text-[#88847c]">Ajoutez une photo réelle du véhicule, un logo de marque ou une piste audio. Les médias restent privés et doivent être approuvés avant utilisation.</p>
+      <p className="mx-auto mt-2 max-w-md text-xs leading-5 text-[#626269]">Ajoutez une photo réelle du véhicule, un logo de marque ou une piste audio. Les médias restent privés et doivent être approuvés avant utilisation.</p>
       <label className="mt-5 inline-flex cursor-pointer rounded-lg border border-[#dedbd5] px-4 py-2.5 text-xs font-semibold hover:bg-[#f8f7f4]">
         Choisir un premier fichier
         <input type="file" className="sr-only" accept={kind === 'audio' ? '.mp3,.wav,.m4a,audio/mpeg,audio/wav,audio/mp4' : 'image/jpeg,image/png,image/webp'} onChange={(event) => { const file = event.currentTarget.files?.[0]; if (file) onFile(file); event.currentTarget.value = ''; }} />
@@ -342,7 +344,7 @@ function AssetPreview({ asset }: { asset: Asset }) {
           <span className="text-4xl text-[#667c87]">{asset.kind === 'audio' ? '♫' : asset.kind === 'logo' ? 'R' : '▱'}</span>
         </div>
       )}
-      <span className={`absolute right-3 top-3 rounded-full px-2.5 py-1 text-[10px] font-semibold ${statusClass}`}>{asset.status === 'validée' ? 'Validé' : asset.status === 'rejetée' ? 'Refusé' : 'À valider'}</span>
+      <span className={`absolute right-3 top-3 rounded-full px-2.5 py-1 text-xs font-semibold ${statusClass}`}>{asset.status === 'validée' ? 'Validé' : asset.status === 'rejetée' ? 'Refusé' : 'À valider'}</span>
     </div>
   );
 }
@@ -366,16 +368,16 @@ function ReviewControls(props: {
           <textarea value={reason} onChange={(event) => setReason(event.target.value)} rows={2} required className="rounded-md border border-[#d2cec6] p-2 font-normal" />
         </label>
         <div className="flex gap-2">
-          <button onClick={() => void approve(asset, 'rejetée')} disabled={reason.trim().length < 3} className="rounded-md bg-[#831810] px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">Confirmer</button>
-          <button onClick={() => { setRejecting(''); setReason(''); }} className="rounded-md border border-[#d2cec6] px-3 py-2 text-xs">Annuler</button>
+          <button onClick={() => void approve(asset, 'rejetée')} disabled={reason.trim().length < 3} className="rounded-md bg-[#831810] min-h-11 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">Confirmer</button>
+          <button onClick={() => { setRejecting(''); setReason(''); }} className="rounded-md border border-[#d2cec6] min-h-11 px-3 py-2 text-xs">Annuler</button>
         </div>
       </div>
     );
   }
   return (
     <div className="mt-4 flex gap-2">
-      {canApprove && <button onClick={() => void approve(asset, 'validée')} className="flex-1 rounded-lg bg-[#253b4e] px-3 py-2 text-xs font-semibold text-white hover:bg-[#304b61]">Valider</button>}
-      <button onClick={() => { setRejecting(asset.id); setReason(''); }} className="rounded-lg border border-[#e8e5df] px-3 py-2 text-xs font-semibold text-[#756f67] hover:bg-[#f7f5f1]">Refuser</button>
+      {canApprove && <button onClick={() => void approve(asset, 'validée')} className="flex-1 rounded-lg bg-[#253b4e] min-h-11 px-3 py-2 text-xs font-semibold text-white hover:bg-[#304b61]">Valider</button>}
+      <button onClick={() => { setRejecting(asset.id); setReason(''); }} className="rounded-lg border border-[#e8e5df] min-h-11 px-3 py-2 text-xs font-semibold text-[#756f67] hover:bg-[#f7f5f1]">Refuser</button>
     </div>
   );
 }
@@ -417,17 +419,17 @@ function PlaceProfileEditor({ asset, profile, review, onSaved, onError }: { asse
   if (!open) {
     return (
       <div className="mt-3 flex items-center justify-between gap-2">
-        <p className="text-[10px] text-[#88847d]">{asset.placeProfileDescribed ? 'Fiche du lieu validée.' : 'Fiche du lieu absente : réglage prudent appliqué (plans héros et détails, vitesse lente).'}</p>
-        <button type="button" onClick={() => { setDraft(profile); setOpen(true); }} className="rounded-md border border-[#d2cec6] px-2.5 py-1.5 text-[10px] font-semibold text-[#253b4e]">{asset.placeProfileDescribed ? 'Modifier la fiche' : 'Décrire'}</button>
+        <p className="text-xs text-[#626269]">{asset.placeProfileDescribed ? 'Fiche du lieu validée.' : 'Fiche du lieu absente : réglage prudent appliqué (plans héros et détails, vitesse lente).'}</p>
+        <button type="button" onClick={() => { setDraft(profile); setOpen(true); }} className="rounded-md border border-[#d2cec6] min-h-11 px-2.5 py-1.5 text-xs font-semibold text-[#253b4e]">{asset.placeProfileDescribed ? 'Modifier la fiche' : 'Décrire'}</button>
       </div>
     );
   }
   return (
     <div className="mt-3 grid gap-2 rounded-lg border border-[#e7e2da] bg-[#fbfaf8] p-3 text-xs">
-      {review && asset.placeProposalStatus && <p className="text-[10px] text-[#675432]">{proposalLabels[asset.placeProposalStatus]}</p>}
-      <label className="grid gap-1 font-semibold">Moment de la journée<select value={draft.timeOfDay} onChange={(event) => setTimeOfDay(event.target.value as PlaceProfile['timeOfDay'])} className="rounded-md border border-[#d2cec6] bg-white px-2 py-1.5 font-normal">{timeOfDayLabels.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+      {review && asset.placeProposalStatus && <p className="text-xs text-[#675432]">{proposalLabels[asset.placeProposalStatus]}</p>}
+      <label className="grid gap-1 font-semibold">Moment de la journée<select value={draft.timeOfDay} onChange={(event) => setTimeOfDay(event.target.value as PlaceProfile['timeOfDay'])} className="rounded-md border border-[#d2cec6] bg-white min-h-11 px-2 py-1.5 font-normal">{timeOfDayLabels.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
       {!interior && <>
-        <label className="grid gap-1 font-semibold">Point de vue de la photo<select value={draft.view} onChange={(event) => setDraft({ ...draft, view: event.target.value as PlaceProfile['view'] })} className="rounded-md border border-[#d2cec6] bg-white px-2 py-1.5 font-normal"><option value="road">Au niveau de la route</option><option value="elevated">En hauteur (balcon, toit)</option><option value="aerial">Vue aérienne</option></select></label>
+        <label className="grid gap-1 font-semibold">Point de vue de la photo<select value={draft.view} onChange={(event) => setDraft({ ...draft, view: event.target.value as PlaceProfile['view'] })} className="rounded-md border border-[#d2cec6] bg-white min-h-11 px-2 py-1.5 font-normal"><option value="road">Au niveau de la route</option><option value="elevated">En hauteur (balcon, toit)</option><option value="aerial">Vue aérienne</option></select></label>
         <fieldset className="grid gap-1"><legend className="font-semibold">Axes de la route</legend>
           <label className="flex items-center gap-2"><input type="checkbox" checked={draft.roadAxes.includes('along')} onChange={() => setDraft({ ...draft, roadAxes: toggle(draft.roadAxes, 'along') })} />La voiture suit la route (vers la caméra ou en s’éloignant)</label>
           <label className="flex items-center gap-2"><input type="checkbox" checked={draft.roadAxes.includes('across')} onChange={() => setDraft({ ...draft, roadAxes: toggle(draft.roadAxes, 'across') })} />Passage latéral, caméra au bord de la route</label>
@@ -438,19 +440,19 @@ function PlaceProfileEditor({ asset, profile, review, onSaved, onError }: { asse
       </fieldset>
       {!interior && <>
         <label className="flex items-center gap-2 font-semibold"><input type="checkbox" checked={draft.dust} onChange={(event) => setDraft({ ...draft, dust: event.target.checked })} />Poussière possible (piste non goudronnée)</label>
-        <label className="grid gap-1 font-semibold">Vitesse maximale<select value={draft.maxSpeed} onChange={(event) => setDraft({ ...draft, maxSpeed: event.target.value as PlaceProfile['maxSpeed'] })} className="rounded-md border border-[#d2cec6] bg-white px-2 py-1.5 font-normal"><option value="slow">Lente</option><option value="cruise">Normale</option><option value="dynamic">Soutenue (route dégagée)</option></select></label>
+        <label className="grid gap-1 font-semibold">Vitesse maximale<select value={draft.maxSpeed} onChange={(event) => setDraft({ ...draft, maxSpeed: event.target.value as PlaceProfile['maxSpeed'] })} className="rounded-md border border-[#d2cec6] bg-white min-h-11 px-2 py-1.5 font-normal"><option value="slow">Lente</option><option value="cruise">Normale</option><option value="dynamic">Soutenue (route dégagée)</option></select></label>
       </>}
       <label className="flex items-center gap-2 font-semibold"><input type="checkbox" checked={draft.hasReadableText} onChange={(event) => setDraft({ ...draft, hasReadableText: event.target.checked })} />Texte lisible sur la photo (enseignes, panneaux, affiches)</label>
-      {draft.hasReadableText && <p role="alert" className="rounded-md bg-[#fbf1dd] px-2 py-1.5 text-[10px] text-[#926b2a]">Ce lieu montre du texte lisible : c’est la première cause de texte recopié dans les images. Préférez une photo sans enseigne lisible.</p>}
+      {draft.hasReadableText && <p role="alert" className="rounded-md bg-[#fbf1dd] min-h-11 px-2 py-1.5 text-xs text-[#926b2a]">Ce lieu montre du texte lisible : c’est la première cause de texte recopié dans les images. Préférez une photo sans enseigne lisible.</p>}
       <div className="grid gap-1">
         <p className="font-semibold">Description envoyée aux modèles</p>
         <p className="text-[11px] text-[#5d5a55]">{draft.promptEn || 'Aucune : le nom et la catégorie du lieu sont utilisés.'}</p>
-        {draft.promptEn && <button type="button" onClick={() => setDraft({ ...draft, promptEn: '' })} className="justify-self-start rounded-md border border-[#d2cec6] px-2 py-1 text-[10px]">Vider la description</button>}
+        {draft.promptEn && <button type="button" onClick={() => setDraft({ ...draft, promptEn: '' })} className="justify-self-start rounded-md border border-[#d2cec6] min-h-11 px-2 py-1 text-xs">Vider la description</button>}
       </div>
-      <p className="text-[10px] text-[#88847d]">Une vue aérienne ne permet que le plan d’ensemble ; une vue en hauteur, ni plan héros ni détail.</p>
+      <p className="text-xs text-[#626269]">Une vue aérienne ne permet que le plan d’ensemble ; une vue en hauteur, ni plan héros ni détail.</p>
       <div className="flex gap-2">
-        <button type="button" disabled={saving || (review && asset.placeProposalStatus === 'pending')} onClick={() => void save()} className="rounded-md bg-[#253b4e] px-3 py-1.5 font-semibold text-white disabled:opacity-50">{saving ? 'Enregistrement…' : review ? 'Valider le lieu et sa fiche' : 'Enregistrer'}</button>
-        {!review && <button type="button" onClick={() => setOpen(false)} className="rounded-md border border-[#d2cec6] px-3 py-1.5">Annuler</button>}
+        <button type="button" disabled={saving || (review && asset.placeProposalStatus === 'pending')} onClick={() => void save()} className="rounded-md bg-[#253b4e] min-h-11 px-3 py-1.5 font-semibold text-white disabled:opacity-50">{saving ? 'Enregistrement…' : review ? 'Valider le lieu et sa fiche' : 'Enregistrer'}</button>
+        {!review && <button type="button" onClick={() => setOpen(false)} className="rounded-md border border-[#d2cec6] min-h-11 px-3 py-1.5">Annuler</button>}
       </div>
     </div>
   );

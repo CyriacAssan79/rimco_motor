@@ -1,3 +1,4 @@
+import { notify } from '@/core/notifications/notify';
 import { NextResponse } from 'next/server';
 import { errorResponse, getActor, HttpError } from '@/core/auth/guards';
 import { createStorageAdminClient } from '@/core/storage/supabase';
@@ -87,7 +88,9 @@ export async function POST(_request: Request, context: { params: Promise<{ id: s
         admin.from('usage_ledger').update({ status: 'released' }).eq('id', entry.id).eq('status', 'reserved'),
       ));
     }
-    await admin.from('notifications').upsert({ user_id: video.user_id, version_id: id, type: 'cancelled', message: 'La génération a été annulée.' }, { onConflict: 'user_id,version_id,type', ignoreDuplicates: true });
+    await notify(admin, { userId: video.user_id, versionId: id, type: 'cancelled', message: 'La génération a été annulée.' });
+    // A cancelled video needs no decision any more.
+    await admin.from('notifications').update({ read_at: new Date().toISOString() }).eq('version_id', id).eq('type', 'action_required').is('read_at', null);
     await pruneRetiredFalCredentials(admin);
     return NextResponse.json({ id, status: 'cancelled' });
   } catch (error) { return errorResponse(error); }
