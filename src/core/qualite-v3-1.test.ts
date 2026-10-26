@@ -1,22 +1,18 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { ANIMATION_PROMPT_MAX_LENGTH, buildKeyframeAnimationPrompt, buildKeyframePrompt, buildKeyframeQualityPrompt, buildVideoQualityPrompt, GROUND_CONTACT, NO_BODYWORK_CONTACT, parseKeyframeQuality, SAME_PLACE_CHECK, videoQualityTimestamps } from '@/core/providers/fal-keyframes';
 import { buildSingleShotStoryboardInstruction, type StoryboardShot } from '@/core/storyboard';
-import { collectQualityWarnings, qualityDecision, storedQualityWarnings, warningIssues } from '@/core/versions/quality-gate';
+import { collectQualityWarnings, storedQualityWarnings, warningIssues } from '@/core/versions/quality-gate';
+import { clipLoopDecision, keyframeLoopDecision } from '@/core/verification/loop';
 
 const rolling: StoryboardShot = { title: 'Suivi', shotType: 'rolling', travelDirection: 'left_to_right', travelSpeed: 'cruise', scene: 's', framing: 'f', location: 'l', action: 'a', camera: 'c', durationSeconds: 5, vehiclePhotoId: 'front', locationPhotoId: 'place' };
 const ok = { approved: true, issues: [], reason: 'OK' };
 const refused = { approved: false, issues: ['Roue de secours arrière absente'], reason: 'Détail manquant' };
 
-describe('E · mode avertissement', () => {
-  it('reprend une fois, puis garde le plan avec avertissement en mode warn', () => {
-    expect(qualityDecision(refused, 0, { stage: 'keyframe', mode: 'warn' })).toBe('retry');
-    expect(qualityDecision(refused, 1, { stage: 'keyframe', mode: 'warn' })).toBe('accept_with_warning');
-    expect(qualityDecision(refused, 1, { stage: 'video', mode: 'warn' })).toBe('accept_with_warning');
-  });
-
-  it('retrouve le contrôle bloquant en mode block', () => {
-    expect(qualityDecision(refused, 1, { stage: 'keyframe', mode: 'block' })).toBe('reject');
-    expect(qualityDecision(ok, 0, { stage: 'keyframe', mode: 'block' })).toBe('accept');
+describe('E · avertissements (la décision est dans la boucle de vérification depuis le 25/10)', () => {
+  it('un plan encore refusé attend une décision humaine au lieu de passer avec un avertissement', () => {
+    expect(keyframeLoopDecision(refused, 2, 2)).toBe('review');
+    expect(clipLoopDecision(refused, 1)).toBe('review');
+    expect(keyframeLoopDecision(ok, 0, 2)).toBe('accept');
   });
 
   it('relit les avertissements stockés sur les plans', () => {
@@ -44,12 +40,12 @@ describe('E · mode avertissement', () => {
 describe('A · le texte n’empêche plus la génération', () => {
   const text = { ...ok, readableText: true };
   it('image clé : une reprise « enseignes vierges », puis avertissement', () => {
-    expect(qualityDecision(text, 0, { stage: 'keyframe', mode: 'block' })).toBe('retry');
-    expect(qualityDecision(text, 1, { stage: 'keyframe', mode: 'block' })).toBe('accept_with_warning');
+    expect(keyframeLoopDecision(text, 0, 2)).toBe('retry_image');
+    expect(keyframeLoopDecision(text, 1, 2)).toBe('accept_with_warning');
     expect(warningIssues(text)).toEqual(['Texte visible dans le décor']);
   });
   it('clip : jamais de relance payante pour du texte seul', () => {
-    expect(qualityDecision(text, 0, { stage: 'video', mode: 'block' })).toBe('accept_with_warning');
+    expect(clipLoopDecision(text, 0)).toBe('accept_with_warning');
   });
   it('lit le champ readableText du juge', () => {
     expect(parseKeyframeQuality('{"approved":true,"issues":[],"reason":"OK","readableText":true}')?.readableText).toBe(true);
@@ -92,21 +88,7 @@ describe('C · juge vidéo daté, avec gros plans des roues', () => {
     expect(prompt).toContain('image 9 = selected location');
   });
   it('garde un clip approuvé avec des défauts mineurs, en avertissement', () => {
-    expect(qualityDecision({ approved: true, issues: ['t=4.5s minor: reflet'], reason: 'OK' }, 0, { stage: 'video', mode: 'warn' })).toBe('accept_with_warning');
-  });
-});
-
-describe('Réglage QUALITY_GATE_MODE', () => {
-  const original = process.env.QUALITY_GATE_MODE;
-  afterEach(() => {
-    if (original === undefined) delete process.env.QUALITY_GATE_MODE; else process.env.QUALITY_GATE_MODE = original;
-    vi.resetModules();
-  });
-  it.each([[undefined, 'warn'], ['', 'warn'], ['warn', 'warn'], ['BLOCK', 'block'], ['autre', 'warn']])('%j donne %j', async (raw, expected) => {
-    vi.resetModules();
-    if (raw === undefined) delete process.env.QUALITY_GATE_MODE; else process.env.QUALITY_GATE_MODE = raw;
-    const { env } = await import('@/env');
-    expect(env.QUALITY_GATE_MODE).toBe(expected);
+    expect(clipLoopDecision({ approved: true, issues: ['t=4.5s minor: reflet'], reason: 'OK' }, 0)).toBe('accept_with_warning');
   });
 });
 

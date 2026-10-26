@@ -1,32 +1,9 @@
 /**
- * Patch v3.1 · decision rules of the automatic quality gate.
- *
- * `warn` (default, temporary): a keyframe or clip still rejected after its automatic retry is kept with
- * warnings and the video goes on; the RIMCO validator (step 8) remains the final barrier.
- * `block`: historical behaviour (a rejected shot fails), to restore once a verification orchestration exists.
- * Readable text alone never blocks: it is retried once on keyframes, then reported as a warning.
+ * Quality warnings kept on accepted shots (minor defects, readable text, human acceptance), shown to the Studio and
+ * the validator. The accept / correct / review decision itself is in core/verification/loop.ts (25/10).
  */
-export type QualityGateMode = 'warn' | 'block';
 export type QualityStage = 'keyframe' | 'video';
 export type QualityVerdict = { approved: boolean; issues: string[]; reason: string; readableText?: boolean };
-export type QualityDecision = 'accept' | 'accept_with_warning' | 'retry' | 'reject';
-
-/** Automatic retries per keyframe or clip (database constraint: 0..1). */
-export const MAX_AUTOMATIC_RETRIES = 1;
-
-export function qualityDecision(verdict: QualityVerdict, retryCount: number, input: { stage: QualityStage; mode: QualityGateMode }): QualityDecision {
-  const canRetry = retryCount < MAX_AUTOMATIC_RETRIES;
-  if (verdict.approved) {
-    if (verdict.readableText) {
-      // A clip is never paid twice for text alone; a keyframe gets one cheap retry with « blank signs ».
-      return input.stage === 'keyframe' && canRetry ? 'retry' : 'accept_with_warning';
-    }
-    // On clips, the judge lists minor defects while approving: kept as warnings.
-    return input.stage === 'video' && verdict.issues.length ? 'accept_with_warning' : 'accept';
-  }
-  if (canRetry) return 'retry';
-  return input.mode === 'warn' ? 'accept_with_warning' : 'reject';
-}
 
 /** Short, user-facing list of defects recorded on a shot accepted with warnings. */
 export function warningIssues(verdict: QualityVerdict): string[] {

@@ -5,7 +5,7 @@ import { useCallback, useEffect, useState } from 'react';
 type QualityWarning = { shotNumber: number; title: string; stage: 'keyframe' | 'video'; issues: string[] };
 type Item = { id: string; title?: string; status: string; durationSeconds?: number; tier?: 'standard' | 'pro' | 'premium' | 'test'; workflow?: 'multi_clip' | 'single'; previewUrl?: string | null; createdAt?: string; validationId?: string; version?: number; department?: string; userId?: string; qualityWarnings?: QualityWarning[] };
 
-/** Defects the automatic check let through (QUALITY_GATE_MODE=warn): the validator is the final barrier. */
+/** Minor defects of accepted shots and shots accepted by a human against the automatic check: the validator is the final barrier. */
 function QualityWarnings({ warnings }: { warnings: QualityWarning[] }) {
   return <div role="status" className="mt-4 rounded-md border border-[#eadfc7] bg-[#fbf6ed] p-3"><p className="text-[10px] font-semibold uppercase tracking-wide text-[#675432]">Points signalés par le contrôle automatique</p><ul className="mt-2 space-y-1 text-xs leading-5 text-[#765d39]">{warnings.map((warning) => <li key={`${warning.shotNumber}-${warning.stage}`}>⚠ Plan {warning.shotNumber}{warning.title ? ` · ${warning.title}` : ''} ({warning.stage === 'keyframe' ? 'image-clé' : 'clip'}) : {warning.issues.join(' ; ') || 'à vérifier'}</li>)}</ul><p className="mt-2 text-[10px] text-[#88847d]">Ces défauts n’ont pas bloqué la génération. Vérifiez-les dans la vidéo avant d’approuver.</p></div>;
 }

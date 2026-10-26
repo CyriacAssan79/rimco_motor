@@ -114,6 +114,17 @@ async function validatedFields<T>(call: LlmCall, prompt: string, schema: z.ZodTy
   throw new FalLlmBriefError(`Impossible de construire un brief vidéo valide après une nouvelle tentative : ${lastIssue}`, completedRequests, hasReportedCost ? costUsd : null);
 }
 
+/** Fields of a queued LLM answer (shot correction), or null when the answer is incomplete or invalid. */
+export function parseLlmFields<T>(response: unknown, schema: z.ZodType<T>): T | null {
+  if (incompleteResponseIssue(response)) return null;
+  try {
+    const result = schema.safeParse(parseJson(outputText(response)));
+    return result.success ? result.data : null;
+  } catch { return null; }
+}
+
+export { responseCost as llmResponseCost };
+
 function responseCost(response: unknown): number | null {
   if (!response || typeof response !== 'object') return null;
   const root = response as { usage?: { cost?: unknown }; data?: { usage?: { cost?: unknown } } };

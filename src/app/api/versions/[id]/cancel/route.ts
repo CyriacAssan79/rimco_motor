@@ -8,6 +8,7 @@ import { env } from '@/env';
 import { KEYFRAME_IMAGE_ENDPOINT, KEYFRAME_VISION_ENDPOINT, KEYFRAME_VIDEO_ENDPOINTS } from '@/core/providers/fal-keyframes';
 import { KLING_REFERENCE_ENDPOINT, SEEDANCE_REFERENCE_ENDPOINT, WAN_REFERENCE_ENDPOINT } from '@/core/providers/fal-reference-video';
 import { KLING_ENDPOINT } from '@/core/providers/fal-kling';
+import { FAL_LLM_ENDPOINT } from '@/core/providers/fal-llm';
 
 export async function POST(_request: Request, context: { params: Promise<{ id: string }> }) {
   try {
@@ -40,7 +41,7 @@ export async function POST(_request: Request, context: { params: Promise<{ id: s
         console.warn('Annulation Fal non confirmée.');
       }
     }
-    const { data: shots } = await admin.from('video_shots').select('provider_request_id,provider_endpoint,keyframe_request_id,keyframe_endpoint,keyframe_quality_request_id,keyframe_quality_endpoint,video_quality_request_id,video_quality_endpoint,video_quality_retry_count,video_quality_ledger_ids,usage_ledger_id,keyframe_retry_count,keyframe_image_ledger_ids,keyframe_quality_ledger_ids,provider_reconciliation_required,end_keyframe_status,end_keyframe_request_id,end_keyframe_quality_request_id,end_keyframe_ledger_ids').eq('version_id', id);
+    const { data: shots } = await admin.from('video_shots').select('provider_request_id,provider_endpoint,keyframe_request_id,keyframe_endpoint,keyframe_quality_request_id,keyframe_quality_endpoint,video_quality_request_id,video_quality_endpoint,video_quality_retry_count,video_quality_ledger_ids,usage_ledger_id,keyframe_retry_count,keyframe_image_ledger_ids,keyframe_quality_ledger_ids,provider_reconciliation_required,end_keyframe_status,end_keyframe_request_id,end_keyframe_quality_request_id,end_keyframe_ledger_ids,revision_request_id,revision_ledger_id').eq('version_id', id);
     if (shots?.length) {
       try {
         const credential = await getFalCredentialById(version.fal_credential_id, admin);
@@ -52,6 +53,7 @@ export async function POST(_request: Request, context: { params: Promise<{ id: s
           if (shot.end_keyframe_status === 'generating' && shot.end_keyframe_request_id) cancellations.push(fal.queue.cancel(KEYFRAME_IMAGE_ENDPOINT, { requestId: shot.end_keyframe_request_id }));
           if (shot.end_keyframe_status === 'checking' && shot.end_keyframe_quality_request_id) cancellations.push(fal.queue.cancel(KEYFRAME_VISION_ENDPOINT, { requestId: shot.end_keyframe_quality_request_id }));
           if (shot.video_quality_request_id) cancellations.push(fal.queue.cancel(shot.video_quality_endpoint || KEYFRAME_VISION_ENDPOINT, { requestId: shot.video_quality_request_id }));
+          if (shot.revision_request_id) cancellations.push(fal.queue.cancel(FAL_LLM_ENDPOINT, { requestId: shot.revision_request_id }));
           if (shot.provider_request_id) cancellations.push(fal.queue.cancel(shot.provider_endpoint || adapterEndpoint, { requestId: shot.provider_request_id }));
         }
         await Promise.allSettled(cancellations);
@@ -63,7 +65,7 @@ export async function POST(_request: Request, context: { params: Promise<{ id: s
     const uncertainCost = (shots ?? []).some((shot) => shot.provider_reconciliation_required);
     const providerBackedLedgerIds = new Set<string>();
     for (const shot of shots ?? []) {
-      const attempt = Math.min(1, Number(shot.keyframe_retry_count ?? 0));
+      const attempt = Number(shot.keyframe_retry_count ?? 0);
       const imageIds = Array.isArray(shot.keyframe_image_ledger_ids) ? shot.keyframe_image_ledger_ids : [];
       const qualityIds = Array.isArray(shot.keyframe_quality_ledger_ids) ? shot.keyframe_quality_ledger_ids : [];
       if (shot.keyframe_request_id && typeof imageIds[attempt] === 'string') providerBackedLedgerIds.add(imageIds[attempt]);
@@ -72,6 +74,8 @@ export async function POST(_request: Request, context: { params: Promise<{ id: s
       const videoQualityIds = Array.isArray(shot.video_quality_ledger_ids) ? shot.video_quality_ledger_ids : [];
       if (shot.video_quality_request_id && typeof videoQualityIds[videoQualityAttempt] === 'string') providerBackedLedgerIds.add(videoQualityIds[videoQualityAttempt]);
       if (shot.provider_request_id && typeof shot.usage_ledger_id === 'string') providerBackedLedgerIds.add(shot.usage_ledger_id);
+      // A correction already sent to the director may be billed: kept for reconciliation.
+      if (shot.revision_request_id && typeof shot.revision_ledger_id === 'string') providerBackedLedgerIds.add(shot.revision_ledger_id);
       // End frame (P5): a submitted image or check may already be billed, so its reservation is kept for reconciliation.
       const endIds = Array.isArray(shot.end_keyframe_ledger_ids) ? shot.end_keyframe_ledger_ids : [];
       if (shot.end_keyframe_status === 'generating' && typeof endIds[0] === 'string') providerBackedLedgerIds.add(endIds[0]);

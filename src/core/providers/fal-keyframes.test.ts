@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { buildKeyframeAnimationPrompt, buildKeyframePrompt, buildKeyframeQualityPrompt, buildVideoQualityPrompt, canAnimateKeyframes, extractFalVisionResult, keyframeQualityAction, parseKeyframeQuality, selectKeyframeReferenceIds, shouldExcludePeople, shouldGenerateKeyframes, videoQualityAction } from './fal-keyframes';
+import { buildKeyframeAnimationPrompt, buildKeyframePrompt, buildKeyframeQualityPrompt, buildVideoQualityPrompt, canAnimateKeyframes, extractFalVisionResult, parseKeyframeQuality, selectKeyframeReferenceIds, shouldExcludePeople, shouldGenerateKeyframes } from './fal-keyframes';
 
 const { mockSubmit, mockStatus, mockResult } = vi.hoisted(() => ({ mockSubmit: vi.fn(), mockStatus: vi.fn(), mockResult: vi.fn() }));
 vi.mock('@fal-ai/client', () => ({ createFalClient: vi.fn(() => ({ queue: { submit: mockSubmit, status: mockStatus, result: mockResult } })) }));
@@ -160,7 +160,7 @@ describe('fal keyframe helpers', () => {
     expect(mockSubmit).toHaveBeenCalledWith(KEYFRAME_VISION_ENDPOINT, { input: expect.objectContaining({
       model: 'anthropic/claude-sonnet-5.5',
       reasoning: true,
-      max_tokens: 1500,
+      max_tokens: 4000,
       system_prompt: expect.stringContaining('objet JSON compact'),
       image_urls: ['https://assets.example/keyframe.png'],
     }) });
@@ -224,19 +224,10 @@ describe('fal keyframe helpers', () => {
     expect(shouldGenerateKeyframes('premium')).toBe(true);
   });
 
-  it('allows only one automatic quality retry and blocks animation until every keyframe passes', () => {
-    expect(keyframeQualityAction(true, 0)).toBe('accept');
-    expect(keyframeQualityAction(false, 0)).toBe('retry');
-    expect(keyframeQualityAction(false, 1)).toBe('reject');
+  it('blocks animation until every keyframe passes', () => {
     expect(canAnimateKeyframes(['ready', 'checking'])).toBe(false);
     expect(canAnimateKeyframes(['ready', 'ready'])).toBe(true);
     expect(canAnimateKeyframes([])).toBe(false);
-  });
-
-  it('allows only one automatic retry after a video clip fails quality control', () => {
-    expect(videoQualityAction(true, 0)).toBe('accept');
-    expect(videoQualityAction(false, 0)).toBe('retry');
-    expect(videoQualityAction(false, 1)).toBe('reject');
   });
 
   it('animates Standard keyframes through Wan 3.0 using the accepted image as its first frame', async () => {

@@ -100,7 +100,7 @@ describe('v3.2 · conduite normale et personnes dans la voiture (essais du 22/10
 
   it('met les personnes dans la voiture quand elle roule, dehors seulement quand elle est arrêtée', () => {
     const inside = buildKeyframeAnimationPrompt({ shot: moving, vehicle: 'Haval H6', durationS: 5, mood: '', lighting: 'day', castDescription: 'Woman, 30, white shirt' });
-    expect(inside).toContain('seated inside the car (the driver at the wheel)');
+    expect(inside).toContain('seated inside the car (the driver at the wheel, facing forward, eyes on the road ahead)');
     expect(inside).toContain('nobody walks or stands outside the moving car');
     const outside = buildKeyframeAnimationPrompt({ shot: stopped, vehicle: 'Haval H6', durationS: 5, mood: '', lighting: 'day', castDescription: 'Woman, 30, white shirt' });
     expect(outside).toContain('nobody leans on the car');

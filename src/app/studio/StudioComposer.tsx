@@ -10,6 +10,9 @@ import {
   inferVehicleCategory,
 } from "@/core/scenes/catalog";
 import { MAX_STORYBOARD_DIRECTION_LENGTH } from "@/core/storyboard-direction";
+import { peoplePresetIds, peoplePresets, type PeoplePresetId } from "@/core/people-presets";
+import type { ReviewRequest } from "@/core/verification/loop";
+import { ShotReviewPanel } from "@/components/shot-review-panel";
 
 type Format = "16:9" | "9:16" | "1:1";
 type Job = {
@@ -35,6 +38,7 @@ type Job = {
   stageElapsedSeconds?: number | null;
   nextPollInSeconds?: number;
   reconciliationRequired?: boolean;
+  reviewRequired?: ReviewRequest[];
   qualityWarnings?: Array<{
     shotNumber: number;
     title: string;
@@ -146,6 +150,7 @@ export function StudioComposer({ mode }: { mode: "mock" | "live" }) {
   const [locationAssetId, setLocationAssetId] = useState("");
   const [castAssets, setCastAssets] = useState<CastAsset[]>([]);
   const [castIds, setCastIds] = useState<string[]>([]);
+  const [peoplePreset, setPeoplePreset] = useState<PeoplePresetId>("none");
 
   const selectedDossier = vehicleDossiers.find(
     (vehicle) => vehicle.key === vehicleDossierId,
@@ -410,6 +415,10 @@ export function StudioComposer({ mode }: { mode: "mock" | "live" }) {
         throw new Error(
           "Choisissez un véhicule avec au moins une photo validée.",
         );
+      if (!effectivePlaceIds.length)
+        throw new Error(
+          "Choisissez au moins un lieu : chaque plan est tourné dans un lieu de la médiathèque.",
+        );
       const selectedVehiclePhotoIds = [
         assetId,
         ...selectedDossier.photos
@@ -434,6 +443,7 @@ export function StudioComposer({ mode }: { mode: "mock" | "live" }) {
           mood: selectedScene?.mood ?? "",
           format,
           castAssetIds: castIds,
+          peoplePreset: castIds.length ? "none" : peoplePreset,
         }),
       });
       const directorData = await directorResponse.json();
@@ -590,7 +600,7 @@ export function StudioComposer({ mode }: { mode: "mock" | "live" }) {
                     : job.status === "cancelled"
                       ? "La génération a été annulée."
                       : (job.error ??
-                        `${job.processingStage ? `${({ queued: "En file d’attente", keyframing: `Création des images-clés${job.completedKeyframes != null && job.totalKeyframes != null ? ` · ${job.completedKeyframes}/${job.totalKeyframes}` : ""}`, generating: "Génération vidéo", quality_checking: "Contrôle qualité", transferring: "Transfert du fichier", postprocessing: "Logo et finalisation" } as Record<string, string>)[job.processingStage] ?? "Génération en cours"}${job.stageElapsedSeconds != null ? ` · ${job.stageElapsedSeconds} s` : ""}` : "Génération en cours"}${job.totalQualityShots ? ` · ${job.checkedQualityShots ?? 0}/${job.totalQualityShots} plans contrôlés` : ""}. Actualisation automatique selon le délai de suivi du fournisseur.`)}
+                        `${job.processingStage ? `${({ queued: "En file d’attente", keyframing: `Création des images-clés${job.completedKeyframes != null && job.totalKeyframes != null ? ` · ${job.completedKeyframes}/${job.totalKeyframes}` : ""}`, generating: "Génération vidéo", quality_checking: "Contrôle qualité", awaiting_review: "Décision requise sur un plan", transferring: "Transfert du fichier", postprocessing: "Logo et finalisation" } as Record<string, string>)[job.processingStage] ?? "Génération en cours"}${job.stageElapsedSeconds != null ? ` · ${job.stageElapsedSeconds} s` : ""}` : "Génération en cours"}${job.totalQualityShots ? ` · ${job.checkedQualityShots ?? 0}/${job.totalQualityShots} plans contrôlés` : ""}. Actualisation automatique selon le délai de suivi du fournisseur.`)}
             </p>
             {job.shotProgress && (
               <div className="mt-3 grid gap-1.5 sm:grid-cols-2">
@@ -609,6 +619,17 @@ export function StudioComposer({ mode }: { mode: "mock" | "live" }) {
                 ))}
               </div>
             )}
+            <ShotReviewPanel
+              versionId={job.id}
+              items={job.reviewRequired ?? []}
+              onChanged={() =>
+                setJob((previous) =>
+                  previous
+                    ? { ...previous, reviewRequired: [], error: undefined, nextPollInSeconds: 5 }
+                    : previous,
+                )
+              }
+            />
             {job.keyframes && job.keyframes.length > 0 && (
               <div className="mt-4 border-t border-[#eeeae4] pt-4">
                 <p className="mb-3 text-[10px] font-semibold uppercase tracking-wide text-[#716d66]">
@@ -983,10 +1004,35 @@ export function StudioComposer({ mode }: { mode: "mock" | "live" }) {
                 </div>
               )}
             </fieldset>
-            <p className="text-[9px] leading-4 text-[#88847d]">
-              Sans casting, le véhicule reste vide, sauf si la description
-              demande des personnes.
-            </p>
+            {castIds.length === 0 && (
+              <fieldset>
+                <legend className="mb-2 text-[11px] font-semibold">
+                  Personnage
+                </legend>
+                <div className="flex flex-wrap gap-1.5">
+                  {peoplePresetIds.map((id) => (
+                    <button
+                      type="button"
+                      key={id}
+                      onClick={() => {
+                        setPeoplePreset(id);
+                        clearFormError();
+                      }}
+                      aria-pressed={peoplePreset === id}
+                      className={`rounded-full border px-2.5 py-1.5 text-[10px] transition ${peoplePreset === id ? "border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]" : "border-[#e5e2dd] text-[#77736d] hover:border-[#c51e1c]"}`}
+                    >
+                      {peoplePresets[id].label}
+                    </button>
+                  ))}
+                </div>
+                <p className="mt-2 text-[9px] leading-4 text-[#88847d]">
+                  Sans photo de casting, l’IA décrit la personne une fois et
+                  la reprend dans chaque plan ; la ressemblance d’un plan à
+                  l’autre reste approximative. Sans personnage, le véhicule
+                  reste vide, sauf si la description demande des personnes.
+                </p>
+              </fieldset>
+            )}
             {audioAssets.length > 0 && (
               <label className="grid gap-1.5 text-[11px] font-semibold">
                 Musique

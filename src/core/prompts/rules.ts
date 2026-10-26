@@ -27,11 +27,24 @@ export const NO_TEXT_VIDEO = 'One continuous full-frame shot, no cuts, never a s
 /** Normal road driving (22/10: a car drifted on a city street at the start of a clip). */
 export const CALM_DRIVING = 'Calm, normal driving: the car stays in its lane and follows the road at a constant speed; no drift, skid, spin, sharp turn or sudden acceleration.';
 
+/** 24/10: the video engine invented streets of another country as the camera moved. */
+export function placeRule(place: string, market?: string): string {
+  return `Place: ${place}${market ? ` (${market})` : ''}. Everything the camera reveals belongs to this same place: same road layout, buildings and vegetation; nothing from another city or country.`;
+}
+
 /** A car shown at an angle to its lane forces the video model to rotate it, which reads as a drift. */
 export const HEADING_ALIGNED = 'The car points along its lane, in its direction of travel.';
 
-/** 22/10: a character walked beside the moving car. In a moving shot, people are inside the car. */
-export const PEOPLE_IN_MOVING_CAR = 'seated inside the car (the driver at the wheel), seen through the windows; nobody walks or stands outside the moving car';
+/** 22/10: a character walked beside the moving car. 24/10: the driver looked backwards while driving. */
+export const PEOPLE_IN_MOVING_CAR = 'seated inside the car (the driver at the wheel, facing forward, eyes on the road ahead), seen through the windows; nobody walks or stands outside the moving car';
+
+/** 24/10 (Pro, « Entrée dans le showroom »): the car drove into a showroom and floated over a podium. Indoors it never moves. */
+export const INTERIOR_STILL = 'Indoor showroom: the car stands still on the showroom floor, all four tyres on the floor; it never drives in or out and never floats; only the camera moves.';
+
+/** 24/10: the steering wheel switched sides between shots. Side read from `brands.steering_side`. */
+export function steeringRule(side: 'left' | 'right'): string {
+  return `${side === 'left' ? 'Left' : 'Right'}-hand drive: the steering wheel and the driver are on the car’s ${side} side.`;
+}
 
 /** People never touch the bodywork: frequent physical artefact of video models. */
 export const NO_BODYWORK_CONTACT = 'nobody leans on the car';

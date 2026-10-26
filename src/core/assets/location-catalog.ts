@@ -23,6 +23,20 @@ export function curatedLocationAsset(location: CuratedLocation) {
   return { id: location.id, kind: 'place' as const, title: location.title, category: location.category, path: location.path, status: 'validée' as const, previewUrl: location.path, isCurated: true as const };
 }
 
+/** Max length of a place description sent to the models (the prompts are capped). */
+export const PLACE_DESCRIPTION_MAX_CHARS = 160;
+
+/**
+ * Short description of a selected place, sent to the director and the image and video models so that everything
+ * they add stays in that place (24/10: European-looking streets as the camera moved).
+ */
+export function placeDescription(place: { id: string; title?: string | null; category?: string | null }): string {
+  const curated = findCuratedLocation(place.id);
+  const text = curated ? `${curated.location}. ${curated.setting}` : [place.title, place.category].filter(Boolean).join(' · ');
+  const clean = text.replace(/[<>{}]/g, ' ').replace(/\s+/g, ' ').trim();
+  return clean.length > PLACE_DESCRIPTION_MAX_CHARS ? `${clean.slice(0, PLACE_DESCRIPTION_MAX_CHARS - 1).replace(/[ ,;:.]+[^ ]*$/, '')}.` : clean;
+}
+
 export type PlaceTimeOfDay = 'day' | 'night' | 'interior';
 
 /**

@@ -4,13 +4,15 @@ import { errorResponse, getActor, HttpError } from '@/core/auth/guards';
 import { createSupabaseServerClient } from '@/core/supabase/server';
 import { createStorageAdminClient } from '@/core/storage/supabase';
 import { env } from '@/env';
-import { buildDirectorUserPrompt, buildSingleShotStoryboardInstruction, castDescriptionSchema, MAX_CAST_PER_VIDEO, validateStoryboardCast, vehicleDescriptionForPrompt, buildStoryboardInstruction, isTierDurationSupported, singleShotStoryboardSchema, storyboardDurationIssue, storyboardSchema, validatePremiumTwentySecondStoryboard, validateSingleShotStoryboard, validateStoryboard, type ClipDurationSeconds, type StoryboardShot } from '@/core/storyboard';
+import { buildDirectorUserPrompt, buildSingleShotStoryboardInstruction, castDescriptionSchema, interiorShotIssue, MAX_CAST_PER_VIDEO, validateStoryboardCast, vehicleDescriptionForPrompt, buildStoryboardInstruction, isTierDurationSupported, singleShotStoryboardSchema, storyboardDurationIssue, storyboardSchema, validatePremiumTwentySecondStoryboard, validateSingleShotStoryboard, validateStoryboard, type ClipDurationSeconds, type StoryboardShot } from '@/core/storyboard';
 import { getStoryboardModeRoute } from '@/core/providers/storyboard-routing';
 import { buildFalLlmInput, createFalLlmProvider, FalLlmBriefError, llmReservationUsd } from '@/core/providers/fal-llm';
 import { createFalClient } from '@fal-ai/client';
 import { getActiveFalCredential } from '@/core/providers/fal-credential-vault';
 import { reserveLlmCost, settleUsageCost } from '@/core/billing/ledger';
-import { findCuratedLocation, placeTimeOfDay } from '@/core/assets/location-catalog';
+import { findCuratedLocation, placeDescription, placeTimeOfDay } from '@/core/assets/location-catalog';
+import { BRAND_SETTINGS_COLUMNS, loadBrandSettings } from '@/core/brand-market';
+import { peoplePresetIds } from '@/core/people-presets';
 import { estimateGridPriceFcfa } from '@/core/pricing';
 import { storyboardDirectionSchema } from '@/core/storyboard-direction';
 
@@ -26,6 +28,8 @@ const requestSchema = z.object({
   direction: storyboardDirectionSchema.default(''),
   format: z.enum(['16:9', '9:16', '1:1', '4:5']).default('16:9'),
   character: z.string().trim().max(160).default(''),
+  /** Studio « Personnage » choice, ignored when a casting is selected. */
+  peoplePreset: z.enum(peoplePresetIds).default('none'),
   lighting: z.string().trim().max(160).default(''),
   mood: z.string().trim().max(160).default(''),
   castAssetIds: z.array(z.string().uuid()).max(MAX_CAST_PER_VIDEO).default([]),
@@ -95,14 +99,19 @@ export async function POST(request: Request) {
       throw new HttpError(422, 'Une ou plusieurs photos véhicule sélectionnées ne sont plus disponibles.');
     }
     const selectedPlaces = places;
+    // Aucun plan 100 % IA : chaque plan est tourné dans un lieu choisi par l’utilisateur (sinon le moteur invente une ville).
+    if (!selectedPlaces.length) throw new HttpError(422, 'Choisissez au moins un lieu dans la médiathèque : chaque plan est tourné dans un lieu sélectionné.');
+    const { marketLocation } = await loadBrandSettings(supabase.from('brands').select(BRAND_SETTINGS_COLUMNS).eq('id', actor.brandId).maybeSingle());
     const instructionInput = {
       durationSeconds: input.durationSeconds,
       vehicle: vehicleDescriptionForPrompt(dossier),
       vehiclePhotos: selectedVehicle.map((photo) => ({ id: photo.id, role: photo.photo_role ?? 'exterior', title: photo.title ?? 'Photo véhicule', angle: photo.angle })),
-      places: selectedPlaces.map((place) => ({ id: place.id, title: place.title ?? 'Lieu', category: place.category, timeOfDay: placeTimeOfDay(place) })),
+      places: selectedPlaces.map((place) => ({ id: place.id, title: place.title ?? 'Lieu', category: place.category, timeOfDay: placeTimeOfDay(place), description: placeDescription(place) })),
       purpose: input.purpose, direction: input.direction, format: input.format,
       character: input.character, lighting: input.lighting, mood: input.mood,
       cast,
+      peoplePreset: cast.length ? 'none' as const : input.peoplePreset,
+      marketLocation,
     };
     const instruction = input.workflow === 'single'
       ? buildSingleShotStoryboardInstruction({ ...instructionInput, mode: input.mode })
@@ -140,6 +149,7 @@ export async function POST(request: Request) {
         locationPhotoId: selectedPlaces[index % Math.max(1, selectedPlaces.length)]?.id ?? null,
       }));
       shots = input.workflow === 'single' ? singleShotStoryboardSchema.parse(drafts) : storyboardSchema.parse(drafts);
+      if (!cast.length && input.peoplePreset !== 'none') castDescription = 'Adult driver in their thirties, warm brown skin, short black hair, white shirt and navy trousers.';
       totalEstimatedPriceFcfa = 0;
     } else {
       const admin = createStorageAdminClient();
@@ -160,13 +170,20 @@ export async function POST(request: Request) {
           const fal = createFalClient({ credentials: falCredential.apiKey });
           return fal.subscribe('openrouter/router', { input: buildFalLlmInput(prompt, system, env.LLM_MODEL!) as never });
         });
+        // Without a sheet the people would be dropped at generation (patch v3.2, F9): a requested « Personnage » needs one.
+        const peopleSheetIssue = (sheet: string | undefined) => !cast.length && input.peoplePreset !== 'none' && !sheet ? 'castDescription est obligatoire : décris les personnes demandées.' : null;
+        const interiorPlaceIds = selectedPlaces.filter((place) => placeTimeOfDay(place) === 'interior').map((place) => place.id);
+        const placeIssue = (shots: StoryboardShot[]) => shots.some((shot) => !shot.locationPhotoId) ? 'Chaque plan doit avoir un locationPhotoId choisi parmi les lieux listés.' : null;
         const responseSchema = input.workflow === 'single'
-          ? singleShotStoryboardResponseSchema
+          ? singleShotStoryboardResponseSchema.superRefine(({ shots, castDescription: sheet }, context) => {
+              const issue = [placeIssue(shots), interiorShotIssue(shots, interiorPlaceIds), peopleSheetIssue(sheet)].filter(Boolean).join(' ');
+              if (issue) context.addIssue({ code: 'custom', path: ['shots'], message: issue });
+            })
           // Patch v3.2 (A5): wrong durations make the answer invalid (automatic corrected retry), never silently rewritten.
-          : z.object({ castDescription: castDescriptionSchema.optional(), shots: storyboardSchema }).strict().superRefine(({ shots }, context) => {
-              const issue = premiumTwentySecond
+          : z.object({ castDescription: castDescriptionSchema.optional(), shots: storyboardSchema }).strict().superRefine(({ shots, castDescription: sheet }, context) => {
+              const issue = [premiumTwentySecond
                 ? shots.length === 4 && shots.every((shot) => shot.durationSeconds === 5) ? null : 'Exactement 4 plans de 5 secondes.'
-                : storyboardDurationIssue(shots, input.durationSeconds, route.adapterFamily);
+                : storyboardDurationIssue(shots, input.durationSeconds, route.adapterFamily), placeIssue(shots), interiorShotIssue(shots, interiorPlaceIds), peopleSheetIssue(sheet)].filter(Boolean).join(' ');
               if (issue) context.addIssue({ code: 'custom', path: ['shots'], message: issue });
             });
         // Layer 1 (locked rules + approved references) goes in the system prompt; layer 2 (user brief) is the only user content.
