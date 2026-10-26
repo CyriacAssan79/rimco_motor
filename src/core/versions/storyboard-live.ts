@@ -3,7 +3,7 @@ import { HttpError } from '@/core/auth/guards';
 import { buildBrief } from '@/core/brief';
 import { getStoryboardModeRoute } from '@/core/providers/storyboard-routing';
 import { wanReferenceVideoProvider, klingReferenceVideoProvider, seedanceReferenceVideoProvider, safeProviderError, type ReferenceVideoProvider } from '@/core/providers/fal-reference-video';
-import { ANIMATION_PROMPT_MAX_LENGTH, buildEndKeyframePrompt, buildEndKeyframeQualityPrompt, buildKeyframeAnimationPrompt, buildKeyframePrompt, buildKeyframeQualityPrompt, buildVideoQualityPrompt, framingCriterionOf, isMoving, canAnimateKeyframes, needsEndKeyframe, resolveShotType, KEYFRAME_MAX_REFERENCES, KEYFRAME_QUALITY_RESERVE_USD, KEYFRAME_VIDEO_ENDPOINTS, KEYFRAME_IMAGE_ENDPOINT, KEYFRAME_VISION_ENDPOINT, keyframeVideoProviders, readKeyframe, readKeyframeQuality, selectKeyframeReferenceIds, shouldGenerateKeyframes, submitKeyframe, submitKeyframeQuality } from '@/core/providers/fal-keyframes';
+import { buildEndKeyframePrompt, buildEndKeyframeQualityPrompt, buildKeyframeAnimationPrompt, buildKeyframePrompt, buildKeyframeQualityPrompt, buildVideoQualityPrompt, framingCriterionOf, hasStrictFrameChecks, isMoving, canAnimateKeyframes, needsEndKeyframe, resolveShotType, KEYFRAME_MAX_REFERENCES, KEYFRAME_QUALITY_RESERVE_USD, KEYFRAME_VIDEO_ENDPOINTS, KEYFRAME_IMAGE_ENDPOINT, KEYFRAME_VISION_ENDPOINT, keyframeVideoProviders, readKeyframe, readKeyframeQuality, selectKeyframeReferenceIds, shouldGenerateKeyframes, submitKeyframe, submitKeyframeQuality } from '@/core/providers/fal-keyframes';
 import { logFalStatusFailure } from '@/core/providers/fal-observability';
 import { klingVideoProvider, KLING_ENDPOINT } from '@/core/providers/fal-kling';
 import { createStorageAdminClient } from '@/core/storage/supabase';
@@ -273,7 +273,7 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
     department: actor.department, status: 'generating',
   }).select('id').single();
   if (videoError || !video) throw new HttpError(500, 'Impossible de créer la vidéo. Réessayez.');
-  const storedBrief = { ...brief, storyboard: generationShots, approvedStoryboard: input.storyboard, generationTier: input.storyMode, overlayLogo: input.overlayLogo, audioAssetId: input.audioAssetId ?? null, multiClipMode: !isSingleShot, singleStoryboardMode: isSingleShot, storyMode: input.storyMode, clipDurationSeconds: input.clipDurationSeconds, finalDurationSeconds: finalVideoSeconds(input.clipDurationSeconds), purpose: input.purpose, vehicleDossierId: input.vehicleDossierId, vehiclePhotoIds: selectedVehiclePhotos.map((photo) => photo.id), keyframeReferencesByShot, placeIds: input.placeIds,  castAssets, castDescription, placeDescriptions, interiorPlaceIds, renderSettings: render, ...(marketLocation ? { marketLocation } : {}), ...(steeringSide ? { steeringSide } : {}), ...(trafficSide ? { trafficSide } : {}), motionMatrix, framingRules: true, endFrameMode: endFrameCount > 0, promptRules: 'v3.2', ...(pricingWarning ? { pricingWarning } : {}), ...(premiumQualityMode ? { videoQualityMode: true } : {}), costPlanUsd: costPlanForBrief(costPlan), shotLighting, processingMetrics: { requestedAt: new Date().toISOString() }, shotProcessingMetrics: {}, ...(input.comparisonCampaignId ? { comparisonCampaignId: input.comparisonCampaignId } : {}) };
+  const storedBrief = { ...brief, storyboard: generationShots, approvedStoryboard: input.storyboard, generationTier: input.storyMode, overlayLogo: input.overlayLogo, audioAssetId: input.audioAssetId ?? null, multiClipMode: !isSingleShot, singleStoryboardMode: isSingleShot, storyMode: input.storyMode, clipDurationSeconds: input.clipDurationSeconds, finalDurationSeconds: finalVideoSeconds(input.clipDurationSeconds), purpose: input.purpose, vehicleDossierId: input.vehicleDossierId, vehiclePhotoIds: selectedVehiclePhotos.map((photo) => photo.id), keyframeReferencesByShot, placeIds: input.placeIds,  castAssets, castDescription, placeDescriptions, interiorPlaceIds, renderSettings: render, ...(marketLocation ? { marketLocation } : {}), ...(steeringSide ? { steeringSide } : {}), ...(trafficSide ? { trafficSide } : {}), motionMatrix, framingRules: true, frameChecks: 2, endFrameMode: endFrameCount > 0, promptRules: 'v3.2', ...(pricingWarning ? { pricingWarning } : {}), ...(premiumQualityMode ? { videoQualityMode: true } : {}), costPlanUsd: costPlanForBrief(costPlan), shotLighting, processingMetrics: { requestedAt: new Date().toISOString() }, shotProcessingMetrics: {}, ...(input.comparisonCampaignId ? { comparisonCampaignId: input.comparisonCampaignId } : {}) };
   const { data: version, error: versionError } = await admin.from('video_versions').insert({
     video_id: video.id, number: 1, brief_json: storedBrief, generated_prompt: displayPrompts.join('\n\n--- Plan suivant ---\n\n'),
     ai_model_id: videoModel.id, fal_credential_id: falCredential.id, status: 'queued', generation_seconds: finalVideoSeconds(input.clipDurationSeconds),
@@ -568,7 +568,7 @@ async function refreshEndKeyframe(input: {
   }
 
   if (status === 'queued') {
-    const prompt = buildEndKeyframePrompt({ shot: draft, durationS: Number(shot.duration_seconds), format: String(brief.format ?? '16:9'), excludePeople: people.excludePeople, castTitles: people.castTitles, castDescription: people.castDescription, ...placeForShot(brief, draft) });
+    const prompt = buildEndKeyframePrompt({ shot: draft, durationS: Number(shot.duration_seconds), format: String(brief.format ?? '16:9'), excludePeople: people.excludePeople, castTitles: people.castTitles, castDescription: people.castDescription, ...placeForShot(brief, draft), strictFrames: hasStrictFrameChecks(brief) });
     try {
       const job = await submitKeyframe({ prompt, imageUrls: [startUrl, input.vehicleUrl], aspectRatio: String(brief.format ?? '16:9'), resolution: render.keyframeResolution }, apiKey);
       const { error } = await update({ end_keyframe_status: 'generating', end_keyframe_request_id: job.requestId });
@@ -598,7 +598,7 @@ async function refreshEndKeyframe(input: {
       if (uploadError) throw new Error(uploadError.message);
       const endUrl = await createSignedStorageObjectUrl((path, expiresIn) => admin.storage.from(target.bucket).createSignedUrl(path, expiresIn), target.bucket, target.path);
       if (!endUrl) throw new Error('lien signé indisponible');
-      const job = await submitKeyframeQuality({ prompt: `${buildEndKeyframeQualityPrompt({ excludePeople: people.excludePeople, castTitles: people.castTitles, castDescription: people.castDescription, ...storedDrivingRules(brief), onRoad: placeForShot(brief, draft).onRoad })} Shot: ${draft.title}; camera: ${draft.camera}.`, imageUrls: [endUrl, startUrl, input.vehicleUrl] }, apiKey);
+      const job = await submitKeyframeQuality({ prompt: `${buildEndKeyframeQualityPrompt({ excludePeople: people.excludePeople, castTitles: people.castTitles, castDescription: people.castDescription, ...storedDrivingRules(brief), onRoad: placeForShot(brief, draft).onRoad, framing: hasStrictFrameChecks(brief) ? framingCriterionOf(brief, draft, 'still') : undefined })} Shot: ${draft.title}; camera: ${draft.camera}.`, imageUrls: [endUrl, startUrl, input.vehicleUrl] }, apiKey);
       const { error } = await update({ end_keyframe_status: 'checking', end_keyframe_path: target.path, end_keyframe_quality_request_id: job.requestId });
       if (error) await giveUp(`Contrôle de l’image de fin non enregistré (request_id=${job.requestId}).`, [charge(qualityLedgerId, KEYFRAME_QUALITY_RESERVE_USD)]);
     } catch (cause) {
@@ -609,7 +609,7 @@ async function refreshEndKeyframe(input: {
 
   if (status === 'checking' && typeof shot.end_keyframe_quality_request_id === 'string') {
     let state;
-    try { state = await readKeyframeQuality(shot.end_keyframe_quality_request_id, apiKey); } catch { return; }
+    try { state = await readKeyframeQuality(shot.end_keyframe_quality_request_id, apiKey, KEYFRAME_VISION_ENDPOINT, 'end_keyframe'); } catch { return; }
     if (state.status === 'checking') return;
     await charge(qualityLedgerId, state.costUsd ?? KEYFRAME_QUALITY_RESERVE_USD);
     if (state.status === 'failed' || !state.quality) { await giveUp('Contrôle de l’image de fin invalide.', []); return; }
@@ -817,7 +817,7 @@ async function refreshKeyframes(input: {
       }
       const signedUrl = await createSignedStorageObjectUrl((storagePath, expiresIn) => admin.storage.from(target.bucket).createSignedUrl(storagePath, expiresIn), target.bucket, target.path);
       if (!signedUrl) throw new HttpError(503, 'Impossible de créer le lien de contrôle temporaire.');
-      const visionPrompt = `${buildKeyframeQualityPrompt({ vehicleReferenceCount, hasLocationReference: Boolean(draft.locationPhotoId), excludePeople: people.excludePeople, castTitles: people.castTitles, castDescription: people.castDescription, ...storedDrivingRules(brief), interior: placeForShot(brief, draft).interior, onRoad: placeForShot(brief, draft).onRoad, moving: isMoving(draft), framing: framingCriterionOf(brief, draft), plan: draft })}`;
+      const visionPrompt = `${buildKeyframeQualityPrompt({ vehicleReferenceCount, hasLocationReference: Boolean(draft.locationPhotoId), excludePeople: people.excludePeople, castTitles: people.castTitles, castDescription: people.castDescription, ...storedDrivingRules(brief), interior: placeForShot(brief, draft).interior, onRoad: placeForShot(brief, draft).onRoad, moving: isMoving(draft), framing: framingCriterionOf(brief, draft, 'still'), plan: draft })}`;
       let qualityJob: { requestId: string };
       try {
         qualityJob = await submitKeyframeQuality({ prompt: visionPrompt, imageUrls: [signedUrl, ...referenceUrls] }, apiKey);
@@ -961,7 +961,7 @@ async function refreshKeyframes(input: {
     const prompt = buildKeyframeAnimationPrompt({
       shot: draft, vehicle: String(brief.vehicle_description ?? 'Véhicule de référence'),
       durationS: Number(shot.duration_seconds), mood: String(brief.mood ?? ''), lighting: lightingForShot(brief, Number(shot.shot_number)),
-      excludePeople: people.excludePeople, castTitles: people.castTitles, castDescription: people.castDescription, hasEndFrame: Boolean(endImageUrl), maxLength: ANIMATION_PROMPT_MAX_LENGTH[adapterFamily],
+      excludePeople: people.excludePeople, castTitles: people.castTitles, castDescription: people.castDescription, hasEndFrame: Boolean(endImageUrl),
       ...placeForShot(brief, draft),
     });
     const job = await provider.submit({ prompt, referenceImageUrls: [signedUrl], ...(endImageUrl ? { endImageUrl } : {}), durationS: Number(shot.duration_seconds), aspectRatio: String(brief.format ?? '16:9'), endUserId: String(video.user_id) }, apiKey);
@@ -1060,7 +1060,7 @@ export async function refreshLiveStoryboard(versionId: string, actor: Actor) {
       const attempt = Math.min(MAX_CLIP_RETRIES, Number(shot.video_quality_retry_count ?? 0));
       let qualityState;
       try {
-        qualityState = await readKeyframeQuality(String(shot.video_quality_request_id), falCredential.apiKey, String(shot.video_quality_endpoint || KEYFRAME_VISION_ENDPOINT));
+        qualityState = await readKeyframeQuality(String(shot.video_quality_request_id), falCredential.apiKey, String(shot.video_quality_endpoint || KEYFRAME_VISION_ENDPOINT), 'video');
       } catch (cause) {
         await recordPollFailure({ admin, versionId, shotNumber, shot, stage: 'video_quality', cause, apiKey: falCredential.apiKey, now: new Date().toISOString() });
         return;
@@ -1108,7 +1108,7 @@ export async function refreshLiveStoryboard(versionId: string, actor: Actor) {
       const retryPrompt = buildKeyframeAnimationPrompt({
         shot: draft, vehicle: String(briefData.vehicle_description ?? 'Véhicule de référence'), durationS: Number(shot.duration_seconds),
         mood: String(briefData.mood ?? ''), lighting: lightingForShot(briefData, Number(shot.shot_number)), excludePeople: retryPeople.excludePeople,
-        castTitles: retryPeople.castTitles, castDescription: retryPeople.castDescription, hasEndFrame: Boolean(retryEndImageUrl), maxLength: ANIMATION_PROMPT_MAX_LENGTH[adapterFamily],
+        castTitles: retryPeople.castTitles, castDescription: retryPeople.castDescription, hasEndFrame: Boolean(retryEndImageUrl),
         retryReason: quality.issues.join('; ') || quality.reason, ...placeForShot(briefData, draft),
       });
       let retryJob: { requestId: string };

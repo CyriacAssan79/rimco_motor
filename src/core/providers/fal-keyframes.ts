@@ -5,7 +5,7 @@ import { type StoryboardShot, type StoryMode, type TravelDirection, type TravelS
 import type { ReferenceVideoProvider } from './fal-reference-video';
 import { MODEL_ENDPOINTS } from './model-routing';
 import { lightingSentence, moodForPrompt } from '@/core/scenes/prompt-values';
-import { DRIVING_RULES, fitPrompt, GROUND_CONTACT, HEADING_ALIGNED, INTERIOR_STILL, PEOPLE_IN_MOVING_CAR, IMAGE_PROMPT_MAX_CHARS, KEEP_IDENTITY, ROAD_ALIGNED, NO_BODYWORK_CONTACT, NO_TEXT_IMAGE, NO_TEXT_VIDEO, placeRule, steeringRule, trafficRule, VIDEO_PROMPT_MAX_CHARS, framingRule, framingCheck, IDENTITY_DEFECT, INTEGRATION_CHECK, NO_EXTRA_VEHICLE_CHECK, WHEEL_PHYSICS, type PromptBlock } from '@/core/prompts/rules';
+import { DRIVING_RULES, fitPrompt, groundContact, HEADING_ALIGNED, INTERIOR_STILL, isBridgePlace, PEOPLE_IN_MOVING_CAR, IMAGE_PROMPT_MAX_CHARS, KEEP_IDENTITY, roadAligned, NO_BODYWORK_CONTACT, NO_TEXT_IMAGE, NO_TEXT_VIDEO, placeRule, steeringRule, trafficRule, VIDEO_PROMPT_MAX_CHARS, framingRule, framingCheck, IDENTITY_DEFECT, INTEGRATION_CHECK, NO_EXTRA_VEHICLE_CHECK, WHEEL_PHYSICS, type PromptBlock } from '@/core/prompts/rules';
 export { GROUND_CONTACT, NO_BODYWORK_CONTACT, WHEEL_PHYSICS } from '@/core/prompts/rules';
 
 export const KEYFRAME_IMAGE_ENDPOINT = 'fal-ai/nano-banana-2/edit';
@@ -88,6 +88,12 @@ export const SAME_PLACE_CHECK = 'The location must be the same recognizable plac
 /** Requested framing given to a judge as a criterion (versions created from 26/10 on). */
 export type FramingCriterion = { shotType: KeyframeShotType; framing: string; crossing?: boolean };
 
+/** 26/10: like the clip judge, so that a retry keeps the blocking defects whole and shortens the minor ones first. */
+const SEVERITY_PREFIX = 'Start each issue with its severity, e.g. "blocking: car cut by the frame" or "minor: reflection too strong".';
+
+/** 24/10 (essai B): the end frame showed the car turned round, so the clip had to reverse to reach it. */
+export const END_FRAME_FORWARD_CHECK = 'The car must face the same way as in image 2: a car turned round, or one that would have to drive backwards from image 2, is blocking.';
+
 /** 24/10: a car driving in the showroom floated over a podium. */
 export const INTERIOR_JUDGE_CHECK = 'This is an indoor showroom: the car must stand still on the floor, all four tyres touching it, never floating or on a podium edge.';
 
@@ -137,7 +143,7 @@ function clipPlanCheck(shot: StoryboardShot): string {
   const camera = ' A camera move different from the plan is minor.';
   if (!isMoving(shot)) return ` The plan says the car is stopped: travel or turning wheels are blocking.${camera}`;
   if (isArrival(shot)) return ` The plan is an arrival: the car slows down and is fully stopped by the last frames; an arrival that never stops is blocking.${camera}`;
-  return ` The car must travel as planned: going another way, or not moving, is blocking.${camera}`;
+  return ` The car must travel as planned: going another way, driving backwards, turning round or not moving is blocking.${camera}`;
 }
 
 /**
@@ -180,7 +186,7 @@ export function buildKeyframeQualityPrompt(input: DrivingRules & { vehicleRefere
   // 26/10: same badge wording as the clip judge, and the requested framing as a criterion, on every tier.
   const framing = input.framing ? ` ${framingCheck(input.framing)}` : '';
   const plan = input.plan ? ` ${shotPlanData(input.plan)}${input.interior ? '' : ` ${keyframePlanCheck(input.plan, input.onRoad)}`}`.trimEnd() : '';
-  return `Compare references in this order: image 1 = candidate keyframe; ${referenceRoles(2, input)}. Verify that the candidate preserves the same exact vehicle identity, color and visible details, that tyres touch the ground (no floating vehicle), and that it is one single full-frame image rather than a collage, diptych, split-screen, or multi-panel composition. An ${IDENTITY_DEFECT} is blocking.${framing}${plan} ${INTEGRATION_CHECK} ${NO_EXTRA_VEHICLE_CHECK} ${input.hasLocationReference ? `${SAME_PLACE_CHECK} ${NO_FOREIGN_SETTING_CHECK} ` : ''}${input.interior ? `${INTERIOR_JUDGE_CHECK} ` : ''}${input.onRoad ? `${ROAD_AXIS_CHECK} ` : ''}${NO_READABLE_TEXT_CHECK}${peopleCheck(input, 'the candidate')}${trafficCheck(input, input.moving)} Check only visible details; do not infer defects that cannot be seen. ${input.framing ? 'Approve only when no blocking defect is visible; list minor defects in issues with "approved": true.' : 'Approve only when no manifest mismatch is visible.'} Return compact JSON only.`;
+  return `Compare references in this order: image 1 = candidate keyframe; ${referenceRoles(2, input)}. Verify that the candidate preserves the same exact vehicle identity, color and visible details, that tyres touch the ground (no floating vehicle), and that it is one single full-frame image rather than a collage, diptych, split-screen, or multi-panel composition. An ${IDENTITY_DEFECT} is blocking.${framing}${plan} ${INTEGRATION_CHECK} ${NO_EXTRA_VEHICLE_CHECK} ${input.hasLocationReference ? `${SAME_PLACE_CHECK} ${NO_FOREIGN_SETTING_CHECK} ` : ''}${input.interior ? `${INTERIOR_JUDGE_CHECK} ` : ''}${input.onRoad ? `${ROAD_AXIS_CHECK} ` : ''}${NO_READABLE_TEXT_CHECK}${peopleCheck(input, 'the candidate')}${trafficCheck(input, input.moving)} Check only visible details; do not infer defects that cannot be seen. ${input.framing ? 'Approve only when no blocking defect is visible; list minor defects in issues with "approved": true.' : 'Approve only when no manifest mismatch is visible.'} ${SEVERITY_PREFIX} Return compact JSON only.`;
 }
 
 const VIDEO_MOTION_CHECK: Record<KeyframeShotType, string> = {
@@ -206,7 +212,7 @@ export function buildVideoQualityPrompt(input: DrivingRules & { vehicleReference
   const { frames, crops } = videoQualityTimestamps(input.durationS ?? 5);
   const frameCount = frames.length;
   const cropStart = frameCount + 1;
-  return `Images 1 to ${frameCount} are frames sampled in order from one generated video clip, at t=${frames.join('s, ')}s. Images ${cropStart} and ${cropStart + 1} are enlarged crops of the lower part of the frame (wheel and road zone) at t=${crops.join('s and ')}s. Reference images: ${referenceRoles(cropStart + 2, input)}.${input.plan ? ` ${shotPlanData(input.plan, false)}` : ''} Check every frame for the same vehicle identity, paint color, visible details and location${input.startKeyframe ? ', continuing the start keyframe (same car, place, light and framing)' : ''}. ${input.hasLocationReference ? `${SAME_PLACE_CHECK} ${NO_FOREIGN_SETTING_CHECK} ` : ''}Tyre-road contact: tyres must stay in contact with the road with a contact shadow, never floating or sinking, and must keep turning consistently with the travel; inspect the crops closely.${input.interior ? ` ${INTERIOR_JUDGE_CHECK} Any travel of the car or rotation of its wheels across the frames is blocking.` : `${motion}${input.onRoad && input.moving ? ` ${ROAD_PATH_CHECK}` : ''}`}${framing}${peopleCheck(input, 'any frame')}${trafficCheck(input, input.moving)} ${INTEGRATION_CHECK} ${NO_EXTRA_VEHICLE_CHECK} ${NO_READABLE_TEXT_CHECK} Start each issue with its time and severity, e.g. "t=2.5s blocking: tyre floats" or "t=4.5s minor: reflection flicker". Set "approved" to false only for blocking defects (${IDENTITY_DEFECT}; collage or split-screen frame;${input.framing ? ` ${input.framing.shotType === 'detail' ? '' : 'a car cut by a frame edge; '}a framing clearly different from the requested one;` : ''} treadmill effect; floating, sliding, drifting or skidding vehicle; deformed wheels; broken road geometry; a setting from another city or country; a pasted-on car; another vehicle clearly visible;${input.plan ? ' a car breaking its planned travel (wrong way, not moving, moving when stopped, an arrival that never stops);' : ''} a person outside a moving car; a person who does not match the casting or the people description${videoDrivingDefects(input)}); minor defects stay listed with "approved": true. Do not invent defects that are not visible. Return compact JSON only.`;
+  return `Images 1 to ${frameCount} are frames sampled in order from one generated video clip, at t=${frames.join('s, ')}s. Images ${cropStart} and ${cropStart + 1} are enlarged crops of the lower part of the frame (wheel and road zone) at t=${crops.join('s and ')}s. Reference images: ${referenceRoles(cropStart + 2, input)}.${input.plan ? ` ${shotPlanData(input.plan, false)}` : ''} Check every frame for the same vehicle identity, paint color, visible details and location${input.startKeyframe ? ', continuing the start keyframe (same car, place, light and framing)' : ''}. ${input.hasLocationReference ? `${SAME_PLACE_CHECK} ${NO_FOREIGN_SETTING_CHECK} ` : ''}${input.moving === false ? 'Tyre contact: tyres stay in contact with the floor or road with a contact shadow, never floating or sinking; wheels do not turn' : 'Tyre-road contact: tyres must stay in contact with the road with a contact shadow, never floating or sinking, and must keep turning consistently with the travel'}; inspect the crops closely.${input.interior ? ` ${INTERIOR_JUDGE_CHECK} Any travel of the car or rotation of its wheels across the frames is blocking.` : `${motion}${input.onRoad && input.moving ? ` ${ROAD_PATH_CHECK}` : ''}`}${framing}${peopleCheck(input, 'any frame')}${trafficCheck(input, input.moving)} ${INTEGRATION_CHECK} ${NO_EXTRA_VEHICLE_CHECK} ${NO_READABLE_TEXT_CHECK} Start each issue with its time and severity, e.g. "t=2.5s blocking: tyre floats" or "t=4.5s minor: reflection flicker". Set "approved" to false only for blocking defects (${IDENTITY_DEFECT}; collage or split-screen frame;${input.framing ? ` ${input.framing.shotType === 'detail' ? '' : 'a car cut by a frame edge; '}a framing clearly different from the requested one;` : ''} treadmill effect; floating, sliding, drifting or skidding vehicle; a car that drives backwards or turns round; deformed wheels; broken road geometry; a setting from another city or country; a pasted-on car; another vehicle clearly visible;${input.plan ? ' a car breaking its planned travel (wrong way, driving backwards or turning round, not moving, moving when stopped, an arrival that never stops);' : ''} a person outside a moving car; a person who does not match the casting or the people description${videoDrivingDefects(input)}); minor defects stay listed with "approved": true. Do not invent defects that are not visible. Return compact JSON only.`;
 }
 
 /** Driving defects added to the clip judge's list of blocking defects. */
@@ -256,8 +262,12 @@ const KEYFRAME_MOTION_CUES: Record<KeyframeShotType, string> = {
 /** 26/10: the first image of an arrival shows the car still rolling, a few metres before its stop. */
 const KEYFRAME_ARRIVAL_CUE = 'Captured a few metres before it stops: still rolling slowly, wheels straight, the place reflected in the paint.';
 
+/** 26/10 (vérification « preambule »): in a showroom the car is on display, never « just stopped » on a road. */
+const KEYFRAME_SHOWROOM_HERO_CUE = 'Car on display, stopped, wheels straight, in a clean composition, the showroom reflected in the paint.';
+
 /** Instant of motion of the keyframe: a hero shot with a direction is an arrival, not a car already stopped. */
-function keyframeMotionCue(shot: StoryboardShot): string {
+function keyframeMotionCue(shot: StoryboardShot, interior?: boolean): string {
+  if (interior && resolveShotType(shot) === 'hero') return KEYFRAME_SHOWROOM_HERO_CUE;
   return isArrival(shot) ? KEYFRAME_ARRIVAL_CUE : KEYFRAME_MOTION_CUES[resolveShotType(shot)];
 }
 
@@ -301,9 +311,17 @@ export function travelSentence(shot: Pick<StoryboardShot, 'travelDirection' | 't
 /**
  * 26/10 · requested framing as a judge criterion, frozen as `brief_json.framingRules` at creation. The same on
  * every tier: the tier is never read here. Versions created before keep their judges.
+ * `brief_json.frameChecks === 2` (vérification « preambule »): the keyframe and the end frame are still images, so
+ * the car may not enter or leave their frame; the tolerance stays for the clip.
  */
-export function framingCriterionOf(brief: Record<string, unknown>, shot: StoryboardShot): FramingCriterion | undefined {
-  return brief.framingRules === true ? { shotType: resolveShotType(shot), framing: shot.framing, crossing: isCrossing(shot) } : undefined;
+export function framingCriterionOf(brief: Record<string, unknown>, shot: StoryboardShot, stage: 'still' | 'clip' = 'clip'): FramingCriterion | undefined {
+  if (brief.framingRules !== true) return undefined;
+  return { shotType: resolveShotType(shot), framing: shot.framing, crossing: stage === 'still' && hasStrictFrameChecks(brief) ? false : isCrossing(shot) };
+}
+
+/** Versions created after the « preambule » check: still frames judged without crossing tolerance, complete end-frame judge. */
+export function hasStrictFrameChecks(brief: Record<string, unknown>): boolean {
+  return brief.frameChecks === 2;
 }
 
 /** A pass-by: the car crosses the frame, so it may enter or leave it. */
@@ -334,7 +352,8 @@ function peopleText(input: { excludePeople?: boolean; castTitles?: string[]; cas
       : `Same people as in the first frame (faces, hair, clothes); nobody else; ${place}.`;
   }
   if (input.excludePeople) {
-    return input.stage === 'keyframe' ? 'Nobody in or around the car; windows dark or reflective.' : 'Nobody appears; windows stay dark or reflective.';
+    // 26/10 (vérification « preambule »): the brand's steering wheel shows through the windows, so they are not dark.
+    return input.stage === 'keyframe' ? 'Nobody in or around the car; the empty cabin is visible through the windows.' : 'Nobody appears; the cabin stays empty, visible through the windows.';
   }
   const description = peopleSheetText(input.castDescription);
   if (!description) return '';
@@ -353,17 +372,43 @@ export function qualityFeedbackForPrompt(quality: { issues?: string[]; reason?: 
   return cleaned || null;
 }
 
-/** Place block shared by the keyframe, animation and end-frame prompts (shortened before anything locked). */
-const placeBlock = (place: string | undefined, market: string | undefined): PromptBlock => ({ text: place ? placeRule(place, market) : '', shrinkTo: 120 });
+/**
+ * Place blocks shared by the keyframe, animation and end-frame prompts. 26/10 (vérification « preambule »): only the
+ * description may be shortened, after the action and the framing, and dropped only as the very last resort (a 400-character
+ * people sheet on a brisk rolling shot); the rule that keeps the camera in the place is locked.
+ */
+function placeBlocks(place: string | undefined, market: string | undefined, interior?: boolean): PromptBlock[] {
+  if (!place) return [];
+  const { description, rule } = placeRule(place, market, interior);
+  return [{ text: description, shrinkTo: 40, shrinkOrder: 1, drop: 4 }, { text: rule }];
+}
 /** Locked: a moving car drives on the brand's side of the road (brands.traffic_side). */
 const trafficBlock = (trafficSide: 'left' | 'right' | undefined, moving: boolean): PromptBlock => ({ text: trafficSide && moving ? trafficRule(trafficSide) : '' });
 /** Locked: in a showroom the car never moves (24/10: it drove in and floated over a podium). */
 const interiorBlock = (interior: boolean | undefined): PromptBlock => ({ text: interior ? INTERIOR_STILL : '' });
 
-const fix = (retryReason: string | null | undefined): PromptBlock => {
-  const feedback = qualityFeedbackForPrompt({ reason: retryReason ?? '' });
-  // 26/10: an instruction for the generators (the « data » fencing is kept for the director, an LLM, in its <defects> tags).
-  return { text: feedback ? `Correct this defect of the previous attempt: ${feedback}.` : '', shrinkTo: 80, drop: 2 };
+const MINOR_DEFECT = /^(?:t=[\d.]+\s*s\s+)?minor\b/i;
+const feedbackText = (items: string[], max: number) => qualityFeedbackForPrompt({ reason: items.join('; ') })?.slice(0, max).trim() ?? '';
+
+/**
+ * Judge feedback of the previous attempt, split by severity (26/10). The blocking defects are the reason of the retry:
+ * 300 characters at most, shortened last of all, so they stay whole in practice. The defects marked « minor » are
+ * shortened first, before the action or the framing, and may disappear. A defect without a severity counts as blocking.
+ * Before, the whole feedback was cut from its end: a blocking defect listed after a minor one could be lost.
+ */
+export function splitQualityFeedback(retryReason: string | null | undefined): { blocking: string; minor: string } {
+  const items = (retryReason ?? '').split(';').map((item) => item.trim()).filter(Boolean);
+  return { blocking: feedbackText(items.filter((item) => !MINOR_DEFECT.test(item)), 300), minor: feedbackText(items.filter((item) => MINOR_DEFECT.test(item)), 200) };
+}
+
+// 26/10: an instruction for the generators (the « data » fencing is kept for the director, an LLM, in its <defects> tags).
+const fix = (retryReason: string | null | undefined): PromptBlock[] => {
+  const { blocking, minor } = splitQualityFeedback(retryReason);
+  return [
+    // Shortened last of all (after the action, framing, light and place description), dropped only as the ultimate resort.
+    { text: blocking ? `Correct this defect of the previous attempt: ${blocking}.` : '', shrinkTo: 120, shrinkOrder: 2, drop: 5 },
+    { text: minor ? `If possible, also avoid: ${minor}.` : '', shrinkTo: 0, shrinkOrder: -1 },
+  ];
 };
 
 /** Patch v3.2 · keyframe prompt: identity, place and light, instant of motion, ground contact, people, zero text. Capped. */
@@ -400,50 +445,46 @@ export function buildKeyframePrompt(input: {
     { text: `References: ${roles}. Re-stage the car in the location from the shot's viewpoint; ignore the photos' backgrounds and studio light. Keep its exact shape, paint, wheels, lights and badges.` },
     // 26/10: dropped as a last resort, after the judge's feedback (the action and framing still describe the shot).
     { text: `Shot: ${input.shot.scene}.`, shrinkTo: 60, drop: 3 },
-    placeBlock(input.place, input.market),
+    ...placeBlocks(input.place, input.market, input.interior),
     interiorBlock(input.interior),
     { text: `Action: ${input.shot.action}.`, shrinkTo: 30 },
-    { text: `${keyframeMotionCue(input.shot)} ${travelSentence(input.shot)}${input.onRoad ? ` ${ROAD_ALIGNED}` : isMoving(input.shot) ? ` ${HEADING_ALIGNED}` : ''}` },
+    { text: `${keyframeMotionCue(input.shot, input.interior)} ${travelSentence(input.shot)}${input.onRoad ? ` ${roadAligned(isBridgePlace(input.place))}` : isMoving(input.shot) ? ` ${HEADING_ALIGNED}` : ''}` },
     trafficBlock(input.trafficSide, isMoving(input.shot)),
     { text: `Framing: ${input.shot.framing}. Camera: ${input.shot.camera}.`, shrinkTo: 30 },
     { text: input.framed ? framingRule(resolveShotType(input.shot)) : '' },
     // 26/10: the lighting option (up to 160 characters) may be shortened; matching the place's light and the ground contact stay locked.
     { text: `Light: ${lightingSentence(input.lighting)};`, shrinkTo: 30 },
-    { text: `the car is lit like the place (sun direction, reflections). ${GROUND_CONTACT}` },
+    { text: `the car is lit like the place (sun direction, reflections). ${groundContact(input.interior)}` },
     { text: peopleDirection({ ...input, stage: 'keyframe', moving: isMoving(input.shot) }) },
     { text: NO_TEXT_IMAGE },
-    fix(input.retryReason),
+    ...fix(input.retryReason),
   ], IMAGE_PROMPT_MAX_CHARS);
 }
 
 /**
- * Prompt length accepted by each animation engine. fal rejects a longer Kling O3 prompt with a 422
- * (« body.prompt: String should have at most 2500 characters », observed 22/10); Wan 3.0 and Seedance 2.5
- * document no limit. Since v3.2 every engine also gets the common 2 000-character cap.
+ * Patch v3.2 · animation prompt, capped at 2 000 characters for every engine (VIDEO_PROMPT_MAX_CHARS). The lowest
+ * engine limit is Kling O3's 2 500 (fal 422, 22/10), so no per-engine limit is needed (removed 26/10).
  */
-export const ANIMATION_PROMPT_MAX_LENGTH: Record<'wan' | 'kling' | 'seedance', number | undefined> = { wan: undefined, kling: 2500, seedance: undefined };
-
-/** Patch v3.2 · animation prompt, capped at 2 000 characters (or the engine limit when lower). */
-export function buildKeyframeAnimationPrompt(input: { shot: StoryboardShot; vehicle: string; durationS: number; mood: string; lighting: string; excludePeople?: boolean; retryReason?: string | null; castTitles?: string[]; castDescription?: string | null; hasEndFrame?: boolean; maxLength?: number; place?: string; market?: string; interior?: boolean; framed?: boolean } & DrivingRules) {
+export function buildKeyframeAnimationPrompt(input: { shot: StoryboardShot; vehicle: string; durationS: number; mood: string; lighting: string; excludePeople?: boolean; retryReason?: string | null; castTitles?: string[]; castDescription?: string | null; hasEndFrame?: boolean; place?: string; market?: string; interior?: boolean; framed?: boolean } & DrivingRules) {
   return fitPrompt([
     { text: `Animate this image as the first frame of a ${input.durationS}-second live-action car commercial shot. ${KEEP_IDENTITY}` },
     { text: `Action: ${input.shot.action}.`, shrinkTo: 60 },
     { text: `Camera: ${input.shot.camera}.`, shrinkTo: 40 },
     // Framing is set by the start keyframe; here it is a reminder, dropped as a last resort (the clip judge still checks it).
     { text: input.framed ? framingRule(resolveShotType(input.shot), isCrossing(input.shot)) : '', drop: 3 },
-    placeBlock(input.place, input.market),
+    ...placeBlocks(input.place, input.market, input.interior),
     interiorBlock(input.interior),
     // 26/10: an arrival is said once, by the travel sentence.
     { text: isArrival(input.shot) ? travelSentence(input.shot) : `${ANIMATION_MOTION[resolveShotType(input.shot)]} ${travelSentence(input.shot)}` },
-    { text: isMoving(input.shot) ? `${WHEEL_PHYSICS} ${drivingInstruction(input.shot)}` : GROUND_CONTACT },
+    { text: isMoving(input.shot) ? `${WHEEL_PHYSICS} ${drivingInstruction(input.shot)}` : groundContact(input.interior) },
     trafficBlock(input.trafficSide, isMoving(input.shot)),
     { text: input.hasEndFrame ? 'The supplied end frame is the exact last frame: the car drives smoothly from its start to its end position.' : '' },
     { text: peopleDirection({ ...input, stage: 'animation', moving: isMoving(input.shot) }) },
     { text: NO_TEXT_VIDEO },
     // 26/10: only a catalogue mood, in English (free text never reaches the prompt).
     { text: moodForPrompt(input.mood) ? `Mood: ${moodForPrompt(input.mood)}.` : '', drop: 1 },
-    fix(input.retryReason),
-  ], Math.min(VIDEO_PROMPT_MAX_CHARS, input.maxLength ?? VIDEO_PROMPT_MAX_CHARS));
+    ...fix(input.retryReason),
+  ], VIDEO_PROMPT_MAX_CHARS);
 }
 
 /** P5 · rolling shots only: the last frame shows the same shot after the car has covered ground. */
@@ -461,20 +502,27 @@ const END_FRAME_TRAVEL: Record<TravelDirection, string> = {
   static: 'at the same place',
 };
 
-export function buildEndKeyframePrompt(input: { shot: StoryboardShot; durationS: number; format: string; excludePeople?: boolean; castTitles?: string[]; castDescription?: string | null; place?: string; market?: string; interior?: boolean; onRoad?: boolean } & DrivingRules) {
+/** `strictFrames`: versions with `frameChecks: 2` also get the framing rule of a still frame (whole car in frame). */
+export function buildEndKeyframePrompt(input: { shot: StoryboardShot; durationS: number; format: string; excludePeople?: boolean; castTitles?: string[]; castDescription?: string | null; place?: string; market?: string; interior?: boolean; onRoad?: boolean; strictFrames?: boolean } & DrivingRules) {
   const where = END_FRAME_TRAVEL[input.shot.travelDirection ?? 'left_to_right'];
   return fitPrompt([
-    { text: `Image 1 is the opening frame of a ${input.durationS}-second live-action car commercial shot; image 2 shows the exact vehicle. Create the closing frame of the same continuous shot: same car, place, light and camera (${input.shot.camera}), with the car having driven ${where}, realistically for its speed. Fixed objects stay where they are in the world. ${GROUND_CONTACT}`, shrinkTo: 300 },
-    placeBlock(input.place, input.market),
-    { text: input.onRoad ? ROAD_ALIGNED : '' },
+    { text: `Image 1 is the opening frame of a ${input.durationS}-second live-action car commercial shot; image 2 shows the exact vehicle. Create the closing frame of the same continuous shot: same car, place, light and camera (${input.shot.camera}), with the car having driven forward ${where}, realistically for its speed. Fixed objects stay where they are in the world. ${groundContact(input.interior)}`, shrinkTo: 300 },
+    ...placeBlocks(input.place, input.market, input.interior),
+    { text: input.onRoad ? roadAligned(isBridgePlace(input.place)) : '' },
+    { text: input.strictFrames ? framingRule(resolveShotType(input.shot)) : '' },
     trafficBlock(input.trafficSide, true),
     { text: peopleDirection({ ...input, stage: 'animation', moving: true }) },
     { text: `${NO_TEXT_IMAGE} Compose for ${input.format}.` },
   ], IMAGE_PROMPT_MAX_CHARS);
 }
 
-export function buildEndKeyframeQualityPrompt(input: DrivingRules & { excludePeople?: boolean; castTitles?: string[]; castDescription?: string | null; onRoad?: boolean }) {
-  return `Image 1 = candidate closing frame; image 2 = approved opening frame of the same shot; image 3 = approved photo of the exact vehicle. Approve only if the candidate shows the same vehicle (identity, paint, wheels, badges), the same location and light, a plausible camera continuity with image 2, and the vehicle visibly further along its path than in image 2. Reject a collage or split-screen. ${input.onRoad ? `${ROAD_AXIS_CHECK} ` : ''}${NO_READABLE_TEXT_CHECK}${peopleCheck(input, 'the candidate')}${trafficCheck(input, true)} Do not invent defects that are not visible. Return compact JSON only.`;
+/**
+ * Judge of the end frame. With `framing` (versions with `frameChecks: 2`, vérification « preambule »), it also checks
+ * what the keyframe judge checks: the requested framing, the pasted-on look and another vehicle.
+ */
+export function buildEndKeyframeQualityPrompt(input: DrivingRules & { excludePeople?: boolean; castTitles?: string[]; castDescription?: string | null; onRoad?: boolean; framing?: FramingCriterion }) {
+  const complete = input.framing ? ` ${framingCheck(input.framing)} ${INTEGRATION_CHECK} ${NO_EXTRA_VEHICLE_CHECK} ${END_FRAME_FORWARD_CHECK}` : '';
+  return `Image 1 = candidate closing frame; image 2 = approved opening frame of the same shot; image 3 = approved photo of the exact vehicle. Approve only if the candidate shows the same vehicle (identity, paint, wheels, badges), the same location and light, a plausible camera continuity with image 2, and the vehicle visibly further along its path than in image 2. Reject a collage or split-screen.${complete} ${input.onRoad ? `${ROAD_AXIS_CHECK} ` : ''}${NO_READABLE_TEXT_CHECK}${peopleCheck(input, 'the candidate')}${trafficCheck(input, true)} Do not invent defects that are not visible. ${SEVERITY_PREFIX} Return compact JSON only.`;
 }
 
 export function parseKeyframeQuality(text: string): KeyframeQuality | null {
@@ -490,7 +538,7 @@ export function parseKeyframeQuality(text: string): KeyframeQuality | null {
   return null;
 }
 
-export function extractFalVisionResult(result: unknown): { output: string; costUsd: number | null } {
+export function extractFalVisionResult(result: unknown): { output: string; costUsd: number | null; completionTokens?: number } {
   const output = findVisionOutput(result);
   const reasoning = findVisionReasoning(result);
   const resolvedOutput = parseKeyframeQuality(output) || !parseKeyframeQuality(reasoning) ? output : reasoning;
@@ -498,9 +546,12 @@ export function extractFalVisionResult(result: unknown): { output: string; costU
   const data = asRecord(root?.data);
   const usage = asRecord(data?.usage) ?? asRecord(root?.usage);
   const cost = usage?.cost;
+  const completionTokens = usage?.completion_tokens;
   return {
     output: resolvedOutput,
     costUsd: typeof cost === 'number' && Number.isFinite(cost) && cost >= 0 ? cost : null,
+    // 26/10: logged to compare with VISION_MAX_OUTPUT_TOKENS (a verdict cut by the budget is lost).
+    ...(typeof completionTokens === 'number' && Number.isFinite(completionTokens) ? { completionTokens } : {}),
   };
 }
 
@@ -631,7 +682,7 @@ export async function submitKeyframeQuality(input: { prompt: string; imageUrls: 
   return { requestId: result.request_id };
 }
 
-export async function readKeyframeQuality(requestId: string, apiKey: string, endpoint = KEYFRAME_VISION_ENDPOINT) {
+export async function readKeyframeQuality(requestId: string, apiKey: string, endpoint = KEYFRAME_VISION_ENDPOINT, stage: 'keyframe' | 'end_keyframe' | 'video' = 'keyframe') {
   const client = fal(apiKey);
   const status = await client.queue.status(endpoint, { requestId, logs: true });
   const statusValue = String(status.status);
@@ -643,7 +694,8 @@ export async function readKeyframeQuality(requestId: string, apiKey: string, end
   }
   if (statusValue !== 'COMPLETED') return { status: 'checking' as const, costUsd: null, quality: null };
   const result = await client.queue.result(endpoint, { requestId });
-  const { output, costUsd } = extractFalVisionResult(result);
+  const { output, costUsd, completionTokens } = extractFalVisionResult(result);
+  console.info('vision_usage', JSON.stringify({ stage, requestId, completionTokens: completionTokens ?? null, maxTokens: VISION_MAX_OUTPUT_TOKENS }));
   const quality = parseKeyframeQuality(output);
   const outputExcerpt = output.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 180);
   return quality

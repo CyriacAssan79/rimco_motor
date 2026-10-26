@@ -108,9 +108,9 @@ describe('fiche de lieu · validation, repli et version figée', () => {
     expect(fallback).toMatchObject({ described: false, profile: { shotTypes: ['hero', 'detail'], maxSpeed: 'slow', dust: false } });
     const matrix = buildMotionMatrix([{ id: 'old-place', ...fallback }], [{ id: 'front', angle: '3/4 avant · nez à droite' }]);
     expect(matrix.undescribed).toEqual(['old-place']);
-    expect(directorMotionTable(matrix)).toContain('"old-place":{"profile":"default","maxSpeed":"slow"');
+    expect(directorMotionTable(matrix)).toBe('L1 (default): maxSpeed slow; P1 detail static/towards_camera, hero static/towards_camera');
     const instruction = buildStoryboardInstruction({ durationSeconds: 10, mode: 'pro', vehicle: 'GWM Tank 300', vehiclePhotos: [{ id: 'front', role: 'exterior', title: 'Avant' }], places: [{ id: 'old-place', title: 'Carrefour de Marcory' }], motionMatrix: matrix });
-    expect(instruction).toContain('A place marked profile: default is not described yet: keep its shots simple (hero or detail, a slow arrival at most).');
+    expect(instruction).toContain('A place marked (default) is not described yet: keep its shots simple (hero or detail, a slow arrival at most).');
   });
 
   it('la fiche est figée dans la version : modifier le lieu ne change pas une vidéo lancée', () => {

@@ -3,11 +3,13 @@
  * plus the length guard that keeps each prompt under its engine's limit.
  *
  * Measured limit: Kling O3 Pro rejects prompts over 2 500 characters (fal 422 « String should have at most
- * 2500 characters », 2026-10-22). Other engines do not document one on their fal pages, so every video prompt
- * is capped at 2 000 characters and every image prompt at 2 200, with margin.
+ * 2500 characters », 2026-10-22). Other video engines do not document one on their fal pages, so every video prompt
+ * is capped at 2 000 characters, with margin. Image prompts: Nano Banana 2 edit documents `maxLength: 50000`
+ * (fal OpenAPI schema, checked 2026-10-26); they are capped at 2 500 (was 2 200, a guess) so that a retry keeps the
+ * judge's blocking defects and the shot's action whole.
  */
 export const VIDEO_PROMPT_MAX_CHARS = 2_000;
-export const IMAGE_PROMPT_MAX_CHARS = 2_200;
+export const IMAGE_PROMPT_MAX_CHARS = 2_500;
 
 // ——— Shared rules (English: the image and video models follow English best) ———
 
@@ -16,6 +18,9 @@ export const KEEP_IDENTITY = 'Keep the exact car (shape, paint, wheels, badges),
 
 /** Tyre-road contact: the defect the client sees first. */
 export const GROUND_CONTACT = 'Every visible tyre touches the road with a contact shadow; the car never floats.';
+/** 26/10 (vérification « preambule »): indoors the car stands on a floor, not a road. */
+export const GROUND_CONTACT_INTERIOR = 'Every visible tyre touches the floor with a contact shadow; the car never floats.';
+export const groundContact = (interior?: boolean) => interior ? GROUND_CONTACT_INTERIOR : GROUND_CONTACT;
 
 /** Positive wheel physics, sent to the video engine for moving shots only. */
 export const WHEEL_PHYSICS = 'Tyres roll on the road without slipping, turning at the car’s speed; contact shadows stay under them; the body has weight and the suspension moves slightly.';
@@ -24,8 +29,11 @@ export const WHEEL_PHYSICS = 'Tyres roll on the road without slipping, turning a
 export const NO_TEXT_IMAGE = 'One full-frame photo, never a collage or split-screen. No text, logo, watermark or readable plate; every sign in the place is blank. No CGI look, no extra vehicle.';
 export const NO_TEXT_VIDEO = 'One continuous full-frame shot, no cuts, never a split-screen. No text or logo appears; signs stay blank.';
 
-/** Normal road driving (22/10: a car drifted on a city street at the start of a clip). */
-export const CALM_DRIVING = 'Calm, normal driving: the car stays in its lane and follows the road at a constant speed; no drift, skid, spin, sharp turn or sudden acceleration.';
+/**
+ * Normal road driving (22/10: a car drifted on a city street at the start of a clip). 26/10: forward only, back in
+ * the driving sentences (24/10, essai B: a U-turn then reversing; the rule had left with the revert of 25/10).
+ */
+export const CALM_DRIVING = 'Calm, normal driving: the car stays in its lane and follows the road at a constant speed; no drift, skid, spin, reversing, U-turn, sharp turn or sudden acceleration.';
 
 /**
  * 26/10 · one driving instruction per case, so that it never contradicts the travel sentence: an arrival slows
@@ -34,13 +42,21 @@ export const CALM_DRIVING = 'Calm, normal driving: the car stays in its lane and
 export type DrivingKind = 'cruise' | 'arrival' | 'dynamic';
 export const DRIVING_RULES: Record<DrivingKind, string> = {
   cruise: CALM_DRIVING,
-  arrival: 'Calm arrival: the car stays in its lane and follows the road, slowing down gently and evenly; no drift, skid, spin, sharp turn or sudden braking.',
-  dynamic: 'Brisk, controlled driving: the car stays in its lane and follows the road at a steady speed; no drift, skid, spin, sharp turn or sudden acceleration.',
+  arrival: 'Calm arrival: the car stays in its lane and follows the road, slowing down gently and evenly; no drift, skid, spin, reversing, U-turn, sharp turn or sudden braking.',
+  dynamic: 'Brisk, controlled driving: the car stays in its lane and follows the road at a steady speed; no drift, skid, spin, reversing, U-turn, sharp turn or sudden acceleration.',
 };
 
-/** 24/10: the video engine invented streets of another country as the camera moved. */
-export function placeRule(place: string, market?: string): string {
-  return `Place: ${place}${market ? ` (${market})` : ''}. Everything the camera reveals belongs to this same place: same road layout, buildings and vegetation; nothing from another city or country.`;
+/**
+ * 24/10: the video engine invented streets of another country as the camera moved. 26/10 (vérification
+ * « preambule »): the description may be shortened, the rule never (a shortened block read « belongs to this same. »);
+ * indoors the rule speaks of walls and windows, not of roads and vegetation.
+ */
+export function placeRule(place: string, market?: string, interior?: boolean): { description: string; rule: string } {
+  const same = interior ? 'same walls, windows and floor' : 'same road layout, buildings and vegetation';
+  return {
+    description: `Place: ${place}${market ? ` (${market})` : ''}.`,
+    rule: `Everything the camera reveals belongs to this same place: ${same}; nothing from another city or country.`,
+  };
 }
 
 /** A car shown at an angle to its lane forces the video model to rotate it, which reads as a drift. */
@@ -50,7 +66,12 @@ export const HEADING_ALIGNED = 'The car points along its lane, in its direction 
  * 26/10 motion matrix: the car's orientation is given against the road of the place, never against the frame
  * (replaces HEADING_ALIGNED on versions that carry a matrix).
  */
-export const ROAD_ALIGNED = 'The car keeps to its lane along the road of the place (a bridge: its deck), never across, against or off the road.';
+export const ROAD_ALIGNED = 'The car keeps to its lane along the road of the place, never across, against or off the road.';
+/** 26/10 (vérification « preambule »): « (a bridge: its deck) » only for a bridge. */
+export const ROAD_ALIGNED_BRIDGE = 'The car keeps to its lane along the road of the place (a bridge: its deck), never across, against or off the road.';
+export const roadAligned = (bridge: boolean) => bridge ? ROAD_ALIGNED_BRIDGE : ROAD_ALIGNED;
+/** A place is a bridge when its description or title says so (English sheet, or French title of an uploaded place). */
+export const isBridgePlace = (place: string | undefined) => /\b(?:bridges?|ponts?)\b/i.test(place ?? '');
 
 /** 22/10: a character walked beside the moving car. 24/10: the driver looked backwards while driving. */
 export const PEOPLE_IN_MOVING_CAR = 'seated inside the car (the driver at the wheel, facing forward, eyes on the road ahead), seen through the windows; nobody walks or stands outside the moving car';
@@ -66,17 +87,17 @@ export function steeringRule(side: 'left' | 'right', occupied = true): string {
   const capitalized = side === 'left' ? 'Left' : 'Right';
   return occupied
     ? `${capitalized}-hand drive: the steering wheel and the driver are on the car’s ${side} side.`
-    : `${capitalized}-hand drive: the steering wheel, visible through the windscreen, is on the car’s ${side} side.`;
+    : `${capitalized}-hand drive: the steering wheel, visible through the windows, is on the car’s ${side} side.`;
 }
 
 /**
  * 26/10: side of the road the cars drive on, read from `brands.traffic_side`. Written from the car's own direction:
  * a car driving towards the camera in right-hand traffic shows on the left of the image, which is correct.
+ * No oncoming cars (vérification « preambule »): the generators are told « no extra vehicle » and the judges block one.
  */
 export function trafficRule(side: 'left' | 'right'): string {
   const capitalized = side === 'left' ? 'Left' : 'Right';
-  const other = side === 'left' ? 'right' : 'left';
-  return `${capitalized}-hand traffic: the car keeps to the ${side}-hand lane of its own direction (its ${side}, not the image’s); oncoming cars pass on its ${other}.`;
+  return `${capitalized}-hand traffic: the car keeps to the ${side}-hand lane of its own direction (its ${side}, not the image’s).`;
 }
 
 /**
@@ -115,10 +136,12 @@ export const NO_BODYWORK_CONTACT = 'nobody leans on the car';
 
 /**
  * One block of a prompt. Blocks keep their order. `drop` (lower first) marks optional blocks removed when the
- * prompt is too long; `shrinkTo` marks blocks that may be shortened down to that many characters first.
- * Blocks with neither (identity, zero text, people) are never touched.
+ * prompt is too long; `shrinkTo` marks blocks that may be shortened down to that many characters first, by
+ * `shrinkOrder` (lower first, default 0), then in the order of the prompt. 26/10: the judge's minor defects go first
+ * (-1), the place description last (1). Blocks with neither (identity, zero text, people, place rule, blocking defects)
+ * are never touched.
  */
-export type PromptBlock = { text: string; drop?: number; shrinkTo?: number };
+export type PromptBlock = { text: string; drop?: number; shrinkTo?: number; shrinkOrder?: number };
 
 export class PromptTooLongError extends Error {
   constructor(readonly length: number, readonly max: number) {
@@ -128,25 +151,46 @@ export class PromptTooLongError extends Error {
 
 const join = (blocks: PromptBlock[]) => blocks.map((block) => block.text.trim()).filter(Boolean).join(' ');
 
-/** Cuts at a word boundary and closes the sentence. */
+/** 26/10: a cut never ends on an article or a preposition (« as in the. »). */
+const DANGLING_WORD = /\s+(?:a|an|the|its|of|to|and|or|with|at|in|on|for|from|by|into|as|than|towards?|along|across|past|over|through)$/i;
+
+/** Cuts at a word boundary, without a dangling article or preposition, and closes the sentence. */
 export function shortenText(text: string, max: number): string {
   const value = text.trim();
   if (value.length <= max) return value;
   if (max < 2) return '';
   const cut = value.slice(0, max - 1);
   const space = cut.lastIndexOf(' ');
-  return `${(space > max * 0.5 ? cut.slice(0, space) : cut).replace(/[,;:.\s]+$/, '')}.`;
+  let clause = (space > max * 0.5 ? cut.slice(0, space) : cut).replace(/[,;:.\s]+$/, '');
+  while (DANGLING_WORD.test(clause)) clause = clause.replace(DANGLING_WORD, '').replace(/[,;:.\s]+$/, '');
+  return `${clause}.`;
 }
 
-/** Assembles the blocks under `max` characters: first shrink, then drop, then refuse. Never cuts a locked block. */
+/**
+ * Assembles the blocks under `max` characters: first shrink, then drop, then refuse. Never cuts a locked block.
+ * 26/10: blocks of the same `shrinkOrder` share the excess in proportion to what each may give, so that one block
+ * (the action) is not cut to its floor while the next ones stay whole.
+ */
 export function fitPrompt(input: PromptBlock[], max: number): string {
   const blocks = input.map((block) => ({ ...block }));
   let text = join(blocks);
   if (text.length <= max) return text;
-  for (const block of blocks.filter((entry) => entry.shrinkTo !== undefined)) {
+  const shrinkable = blocks.filter((entry) => entry.shrinkTo !== undefined);
+  for (const order of [...new Set(shrinkable.map((entry) => entry.shrinkOrder ?? 0))].sort((a, b) => a - b)) {
+    const group = shrinkable.filter((entry) => (entry.shrinkOrder ?? 0) === order);
     const excess = join(blocks).length - max;
     if (excess <= 0) break;
-    block.text = shortenText(block.text, Math.max(block.shrinkTo!, block.text.length - excess));
+    const room = group.map((block) => Math.max(0, block.text.trim().length - block.shrinkTo!));
+    const total = room.reduce((sum, value) => sum + value, 0);
+    if (total > 0) group.forEach((block, index) => {
+      block.text = shortenText(block.text, Math.max(block.shrinkTo!, block.text.trim().length - Math.ceil(excess * room[index] / total)));
+    });
+    // Rounding or a word boundary may leave a few characters: the blocks of the group then give them in order.
+    for (const block of group) {
+      const left = join(blocks).length - max;
+      if (left <= 0) break;
+      block.text = shortenText(block.text, Math.max(block.shrinkTo!, block.text.length - left));
+    }
   }
   for (const block of [...blocks].filter((entry) => entry.drop !== undefined).sort((a, b) => a.drop! - b.drop!)) {
     if (join(blocks).length <= max) break;

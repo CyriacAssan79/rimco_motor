@@ -283,12 +283,29 @@ export function shotMotionAllowance(shot: StoryboardShot, matrix: MotionMatrix):
   return JSON.stringify({ allowed: allowedCombinations(profile, matrix.photos[shot.vehiclePhotoId] ?? {}), maxSpeed: profile.maxSpeed, dust: profile.dust });
 }
 
-/** Compact table given to the director: per place, the accepted shotType → travelDirection of each photo. */
-export function directorMotionTable(matrix: MotionMatrix): string {
-  return JSON.stringify(Object.fromEntries(Object.entries(matrix.places).map(([placeId, profile]) => [placeId, {
-    ...(matrix.undescribed.includes(placeId) ? { profile: 'default' } : {}),
-    maxSpeed: profile.maxSpeed,
-    dust: profile.dust,
-    photos: Object.fromEntries(Object.entries(matrix.photos).map(([photoId, view]) => [photoId, allowedCombinations(profile, view)])),
-  }])));
+/** Short refs of the places (L1, L2…) and photos (P1, P2…) used in the director's table, explained once in its lists. */
+export type MotionRefs = { places: Record<string, string>; photos: Record<string, string> };
+
+export function motionRefs(placeIds: readonly string[], photoIds: readonly string[]): MotionRefs {
+  return {
+    places: Object.fromEntries(placeIds.map((id, index) => [id, `L${index + 1}`])),
+    photos: Object.fromEntries(photoIds.map((id, index) => [id, `P${index + 1}`])),
+  };
+}
+
+/**
+ * Compact table given to the director: per place, the accepted shotType → travelDirection of each photo.
+ * 26/10 (vérification « preambule »): refs instead of the ids repeated for every place (12 places × 6 photos made a
+ * 9 700-character table), photos with the same combinations grouped. What the code checks is unchanged (ids).
+ */
+export function directorMotionTable(matrix: MotionMatrix, refs: MotionRefs = motionRefs(Object.keys(matrix.places), Object.keys(matrix.photos))): string {
+  return Object.entries(matrix.places).map(([placeId, profile]) => {
+    const groups = new Map<string, string[]>();
+    for (const [photoId, view] of Object.entries(matrix.photos)) {
+      const combos = Object.entries(allowedCombinations(profile, view)).map(([type, directions]) => `${type} ${directions!.join('/')}`).join(', ') || 'none';
+      groups.set(combos, [...groups.get(combos) ?? [], refs.photos[photoId] ?? photoId]);
+    }
+    const head = `${refs.places[placeId] ?? placeId}${matrix.undescribed.includes(placeId) ? ' (default)' : ''}: maxSpeed ${profile.maxSpeed}${profile.dust ? ', dust' : ''}`;
+    return `${head}; ${[...groups].map(([combos, photos]) => `${photos.join(',')} ${combos}`).join('; ')}`;
+  }).join(' | ');
 }

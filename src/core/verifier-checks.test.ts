@@ -35,13 +35,13 @@ describe('vérificateur · chaque règle a son contrôle (26/10)', () => {
   });
 
   it('juge du clip : sens, mouvement, arrêt et arrivée bloquants ; caméra différente mineure', () => {
-    expect(clipJudge(rolling)).toContain('The car must travel as planned: going another way, or not moving, is blocking.');
+    expect(clipJudge(rolling)).toContain('The car must travel as planned: going another way, driving backwards, turning round or not moving is blocking.');
     expect(clipJudge(arriving)).toContain('an arrival that never stops is blocking');
     expect(clipJudge(stopped)).toContain('The plan says the car is stopped: travel or turning wheels are blocking.');
     for (const plan of [rolling, arriving, stopped]) {
       const judge = clipJudge(plan);
       expect(judge).toContain('A camera move different from the plan is minor.');
-      expect(judge).toContain('a car breaking its planned travel (wrong way, not moving, moving when stopped, an arrival that never stops);');
+      expect(judge).toContain('a car breaking its planned travel (wrong way, driving backwards or turning round, not moving, moving when stopped, an arrival that never stops);');
       expect(judge).toContain('a pasted-on car; another vehicle clearly visible;');
       expect(judge).toContain(INTEGRATION_CHECK);
       expect(judge).toContain(NO_EXTRA_VEHICLE_CHECK);

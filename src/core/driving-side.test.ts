@@ -26,7 +26,7 @@ describe('côté de circulation et volant de la marque (26/10)', () => {
   });
 
   it('écrit la règle en termes de voie de la voiture, jamais de gauche ou droite de l’image', () => {
-    expect(TRAFFIC).toBe('Right-hand traffic: the car keeps to the right-hand lane of its own direction (its right, not the image’s); oncoming cars pass on its left.');
+    expect(TRAFFIC).toBe('Right-hand traffic: the car keeps to the right-hand lane of its own direction (its right, not the image’s).');
     expect(trafficRule('left')).toContain('left-hand lane of its own direction');
     expect(TRAFFIC).not.toMatch(/(left|right) (side )?of the (frame|image)/);
   });
@@ -52,7 +52,7 @@ describe('côté de circulation et volant de la marque (26/10)', () => {
 
   it('voiture vide : le volant reste du côté de la marque, et le juge refuse un volant du mauvais côté', () => {
     const empty = steeringRule('left', false);
-    expect(empty).toBe('Left-hand drive: the steering wheel, visible through the windscreen, is on the car’s left side.');
+    expect(empty).toBe('Left-hand drive: the steering wheel, visible through the windows, is on the car’s left side.');
     for (const shot of [towards, parked]) {
       expect(buildKeyframePrompt({ shot, vehicle: 'GWM Tank 300', lighting: 'golden hour', format: '16:9', retryReason: null, excludePeople: true, ...current })).toContain(empty);
       expect(buildKeyframeAnimationPrompt({ shot, vehicle: 'GWM Tank 300', durationS: 5, mood: '', lighting: 'golden hour', excludePeople: true, ...current })).toContain(empty);
@@ -91,7 +91,13 @@ describe('côté de circulation et volant de la marque (26/10)', () => {
     });
     const motion = instruction.split('\n').find((line) => line.startsWith('MOTION:')) ?? '';
     expect(motion).toContain(TRAFFIC);
-    expect(motion).toContain(steeringRule('left'));
+    // Vérification « preambule » (C4): without a character, the empty-car form of the steering rule.
+    expect(motion).toContain(steeringRule('left', false));
+    const withDriver = buildStoryboardInstruction({
+      durationSeconds: 10, mode: 'pro', vehicle: 'GWM Tank 300 gris', vehiclePhotos: [{ id: 'front', role: 'exterior', title: 'Avant' }],
+      places: [{ id: 'hkb', title: 'Pont HKB', timeOfDay: 'day' }], trafficSide: 'right', steeringSide: 'left', peoplePreset: 'driver',
+    });
+    expect(withDriver).toContain(steeringRule('left'));
     const revision = buildShotRevisionInstruction({ vehicle: 'GWM Tank 300', ...current });
     expect(revision).toContain(TRAFFIC);
     expect(revision).toContain(steeringRule('left'));

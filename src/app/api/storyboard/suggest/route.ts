@@ -195,16 +195,18 @@ export async function POST(request: Request) {
         const peopleShots = (shots: StoryboardShot[], sheet: string | undefined) => cast.length ? null : peopleShotsIssue(shots, sheet);
         const interiorPlaceIds = Object.entries(motionMatrix.places).filter(([, profile]) => profile.timeOfDay === 'interior').map(([id]) => id);
         const placeIssue = (shots: StoryboardShot[]) => shots.some((shot) => !shot.locationPhotoId) ? 'Chaque plan doit avoir un locationPhotoId choisi parmi les lieux listés.' : null;
+        // 26/10: the ALLOWED table uses refs (P1, L1…); a ref given instead of an id triggers the corrected retry.
+        const knownIds = (shots: StoryboardShot[]) => shots.some((shot) => !selectedVehicle.some((photo) => photo.id === shot.vehiclePhotoId) || (shot.locationPhotoId && !selectedPlaces.some((place) => place.id === shot.locationPhotoId))) ? 'vehiclePhotoId et locationPhotoId reprennent l’id complet des listes, jamais une référence P1 ou L1.' : null;
         const responseSchema = input.workflow === 'single'
           ? singleShotStoryboardResponseSchema.superRefine(({ shots, castDescription: sheet }, context) => {
-              const issue = [placeIssue(shots), interiorShotIssue(shots, interiorPlaceIds), motionMatrixIssue(shots, motionMatrix), forbiddenShotsIssue(shots), peopleSheetIssue(sheet), peopleShots(shots, sheet)].filter(Boolean).join(' ');
+              const issue = [placeIssue(shots), knownIds(shots), interiorShotIssue(shots, interiorPlaceIds), motionMatrixIssue(shots, motionMatrix), forbiddenShotsIssue(shots), peopleSheetIssue(sheet), peopleShots(shots, sheet)].filter(Boolean).join(' ');
               if (issue) context.addIssue({ code: 'custom', path: ['shots'], message: issue });
             })
           // Patch v3.2 (A5): wrong durations make the answer invalid (automatic corrected retry), never silently rewritten.
           : z.object({ briefConflicts: briefConflictsSchema, castDescription: castDescriptionSchema.optional(), shots: storyboardSchema }).strict().superRefine(({ shots, castDescription: sheet }, context) => {
               const issue = [premiumTwentySecond
                 ? shots.length === 4 && shots.every((shot) => shot.durationSeconds === 5) ? null : 'Exactement 4 plans de 5 secondes.'
-                : storyboardDurationIssue(shots, input.durationSeconds, route.adapterFamily), placeIssue(shots), interiorShotIssue(shots, interiorPlaceIds), motionMatrixIssue(shots, motionMatrix), forbiddenShotsIssue(shots), peopleSheetIssue(sheet), peopleShots(shots, sheet)].filter(Boolean).join(' ');
+                : storyboardDurationIssue(shots, input.durationSeconds, route.adapterFamily), placeIssue(shots), knownIds(shots), interiorShotIssue(shots, interiorPlaceIds), motionMatrixIssue(shots, motionMatrix), forbiddenShotsIssue(shots), peopleSheetIssue(sheet), peopleShots(shots, sheet)].filter(Boolean).join(' ');
               if (issue) context.addIssue({ code: 'custom', path: ['shots'], message: issue });
             });
         // Layer 1 (locked rules + approved references) goes in the system prompt; layer 2 (user brief) is the only user content.
@@ -252,6 +254,7 @@ export async function POST(request: Request) {
     const briefConflicts = mergeBriefConflicts(directorConflicts, detectBriefConflicts(input.direction, {
       placeTimes: selectedPlaces.map((place) => motionMatrix.places[place.id]?.timeOfDay ?? null),
       hasInteriorPhoto: selectedVehicle.some((photo) => vehicleViewOf(photo).angle === 'interior'),
+      lighting: input.lighting,
     }));
     // The launch route accepts only this exact storyboard (and people sheet), for this user and these choices.
     const storyboardSignature = signStoryboard({ storyboard: shots, castDescription, context: { userId: actor.id, vehicleDossierId: input.vehicleDossierId, workflow: input.workflow, mode: input.mode, durationSeconds: input.durationSeconds, format: input.format } }, signingKey);

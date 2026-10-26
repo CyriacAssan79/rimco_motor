@@ -37,7 +37,7 @@ describe('showroom · le véhicule reste immobile (essai Pro du 24/10)', () => {
     const keyframe = buildKeyframePrompt({ shot: still, vehicle: 'GWM Tank 300 gris', lighting: 'interior', format: '16:9', retryReason: null, hasLocationReference: true, excludePeople: true, interior: true });
     expect(keyframe).toContain('the car stands still on the showroom floor');
     expect(keyframe.length).toBeLessThanOrEqual(IMAGE_PROMPT_MAX_CHARS);
-    const animation = buildKeyframeAnimationPrompt({ shot: still, vehicle: 'GWM Tank 300 gris', durationS: 5, mood: '', lighting: 'interior', excludePeople: true, interior: true, retryReason: 'E'.repeat(300), castDescription: 'D'.repeat(400), maxLength: 2_500 });
+    const animation = buildKeyframeAnimationPrompt({ shot: still, vehicle: 'GWM Tank 300 gris', durationS: 5, mood: '', lighting: 'interior', excludePeople: true, interior: true, retryReason: 'E'.repeat(300), castDescription: 'D'.repeat(400) });
     expect(animation).toContain('it never drives in or out');
     expect(animation).toContain('The car is stopped: wheels do not turn.');
     expect(animation.length).toBeLessThanOrEqual(VIDEO_PROMPT_MAX_CHARS);

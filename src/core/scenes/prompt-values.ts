@@ -6,14 +6,14 @@ import { scenePresets } from './catalog';
  * Only catalogue values exist here: any other value is ignored, so no free text from the brief can reach the locked
  * layer (director system prompt, generator prompts).
  */
-const LIGHTING_EN: Record<string, { text: string; timeOfDay: PlaceTimeOfDay }> = {
-  'Lumière naturelle claire du matin': { text: 'Clear natural morning light', timeOfDay: 'day' },
-  'Lumière douce du début de matinée': { text: 'Soft early-morning light', timeOfDay: 'golden' },
-  'Lumière de lever du jour, douce et réaliste': { text: 'Soft, realistic sunrise light', timeOfDay: 'golden' },
-  'Lumière douce de fin de journée': { text: 'Soft late-afternoon light', timeOfDay: 'golden' },
-  'Éclairage de soirée doux, sans couleurs artificielles excessives': { text: 'Soft evening lighting without excessive artificial colours', timeOfDay: 'night' },
-  'Nuit urbaine avec éclairage doux et réaliste': { text: 'Urban night with soft, realistic street lighting', timeOfDay: 'night' },
-  'Lumière intérieure diffuse et régulière': { text: 'Even, diffuse interior light', timeOfDay: 'interior' },
+const LIGHTING_EN: Record<string, { text: string; timeOfDay: PlaceTimeOfDay; label: string }> = {
+  'Lumière naturelle claire du matin': { text: 'Clear natural morning light', timeOfDay: 'day', label: 'matin' },
+  'Lumière douce du début de matinée': { text: 'Soft early-morning light', timeOfDay: 'golden', label: 'début de matinée' },
+  'Lumière de lever du jour, douce et réaliste': { text: 'Soft, realistic sunrise light', timeOfDay: 'golden', label: 'lever du jour' },
+  'Lumière douce de fin de journée': { text: 'Soft late-afternoon light', timeOfDay: 'golden', label: 'fin de journée' },
+  'Éclairage de soirée doux, sans couleurs artificielles excessives': { text: 'Soft evening lighting without excessive artificial colours', timeOfDay: 'night', label: 'soirée' },
+  'Nuit urbaine avec éclairage doux et réaliste': { text: 'Urban night with soft, realistic street lighting', timeOfDay: 'night', label: 'nuit' },
+  'Lumière intérieure diffuse et régulière': { text: 'Even, diffuse interior light', timeOfDay: 'interior', label: 'intérieur' },
 };
 
 const MOOD_EN: Record<string, string> = {
@@ -42,9 +42,20 @@ export const catalogMoods: readonly string[] = [...new Set(scenePresets.map((sce
 export const onlyCatalogLighting = (value: string) => catalogLightings.includes(value.trim()) ? value.trim() : '';
 export const onlyCatalogMood = (value: string) => catalogMoods.includes(value.trim()) ? value.trim() : '';
 
-/** English light sentence and its time of day for a Studio chip; null for anything else. */
-export function lightingForPrompt(value: string | null | undefined): { text: string; timeOfDay: PlaceTimeOfDay } | null {
+/** English light sentence, time of day and short French label for a Studio chip; null for anything else. */
+export function lightingForPrompt(value: string | null | undefined): { text: string; timeOfDay: PlaceTimeOfDay; label: string } | null {
   return LIGHTING_EN[(value ?? '').trim()] ?? null;
+}
+
+/**
+ * 26/10 (vérification « preambule »): the light chip when its time of day is the one of none of the chosen places
+ * (every place's time known), e.g. « fin de journée » with daytime places. The shots then take their place's light
+ * (resolveShotLighting): the chip is not sent to the director and the user is told (brief conflict).
+ */
+export function lightingMismatch(value: string | null | undefined, placeTimes: ReadonlyArray<PlaceTimeOfDay | null | undefined>): { label: string; timeOfDay: PlaceTimeOfDay } | null {
+  const chip = lightingForPrompt(value);
+  if (!chip || !placeTimes.length || placeTimes.some((time) => !time)) return null;
+  return placeTimes.includes(chip.timeOfDay) ? null : chip;
 }
 
 const FRENCH_LIGHT = /[àâçéèêëîïôûùüÿœ]|lumi[eè]re|\bnuit\b|\bjour\b|\bmatin\b|\bsoir/i;

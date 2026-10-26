@@ -58,7 +58,7 @@ describe('cadre · prompts et juges', () => {
   const place = placeDescription(bridge);
 
   it('demande que tout ce que la caméra révèle reste dans le lieu choisi', () => {
-    expect(placeRule(place, market)).toContain(`(${market})`);
+    expect(placeRule(place, market).description).toContain(`(${market})`);
     const animation = buildKeyframeAnimationPrompt({ shot, vehicle: 'GWM Tank 300 gris', durationS: 5, mood: 'premium', lighting: 'day', excludePeople: true, place, market });
     expect(animation).toContain('Everything the camera reveals belongs to this same place');
     expect(animation.length).toBeLessThanOrEqual(VIDEO_PROMPT_MAX_CHARS);
@@ -70,7 +70,7 @@ describe('cadre · prompts et juges', () => {
 
   it('tient sous la limite Kling même avec un plan très long, des personnes et une reprise', () => {
     const long = shotDraftSchema.parse({ ...shot, action: 'A'.repeat(400), camera: 'B'.repeat(400), scene: 'C'.repeat(400) });
-    const prompt = buildKeyframeAnimationPrompt({ shot: long, vehicle: 'GWM Tank 300 gris', durationS: 5, mood: 'premium and confident', lighting: 'golden hour', castDescription: 'D'.repeat(400), place, market, retryReason: 'E'.repeat(300), maxLength: 2_500 });
+    const prompt = buildKeyframeAnimationPrompt({ shot: long, vehicle: 'GWM Tank 300 gris', durationS: 5, mood: 'premium and confident', lighting: 'golden hour', castDescription: 'D'.repeat(400), place, market, retryReason: 'E'.repeat(300) });
     expect(prompt.length).toBeLessThanOrEqual(VIDEO_PROMPT_MAX_CHARS);
     expect(prompt).toContain('Place: HKB bridge');
     const image = buildKeyframePrompt({ shot: long, vehicle: 'GWM Tank 300 gris', lighting: 'golden hour', format: '16:9', retryReason: 'E'.repeat(300), vehicleReferenceCount: 4, hasLocationReference: true, castDescription: 'D'.repeat(400), place, market });

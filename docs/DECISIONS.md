@@ -1,5 +1,49 @@
 # Décisions
 
+## Marche arrière et demi-tour interdits de nouveau (2026-10-26)
+
+- **Constat** : la règle « la voiture roule seulement en marche avant », ajoutée le 24/10 après l’essai B (un demi-tour puis une marche arrière), a disparu avec le retour à la version du 23/10 (commit du 25/10). Elle n’a pas été remise depuis. Un demi-tour n’était plus interdit en amont : seul le juge du clip pouvait le refuser après coup, indirectement (« va dans un autre sens »), et seulement en Premium.
+- **Décision** :
+  - **Générateurs** : les trois phrases de conduite (croisière, arrivée, conduite dynamique) disent « no drift, skid, spin, reversing, U-turn… ». Pas de bloc à part : les prompts d’animation sont déjà au plafond de 2 000 caractères dans les pires cas. L’image de fin montre la voiture « having driven forward » plus loin.
+  - **Juge du clip** : une voiture qui recule ou fait demi-tour est un défaut bloquant, écrit explicitement.
+  - **Juge de l’image de fin** : une voiture retournée, ou qui aurait dû reculer depuis l’image de départ, est bloquante. Cela vaut pour les nouvelles vidéos seulement (marqueur `frameChecks: 2`).
+  - **Réalisateur** : « reverses, in reverse, backs up, U-turn, turns round, three-point turn » dans la scène ou l’action rendent sa réponse invalide ; elle est alors corrigée automatiquement. Ces mots ne sont pas lus dans le champ caméra : « reverse tracking », c’est-à-dire un travelling arrière, reste permis.
+  - **Liste fermée des conflits** : « marche arrière », « demi-tour », « recule »… donnent « Marche arrière ou demi-tour demandé : la voiture roule toujours en marche avant. ». « La caméra recule » n’est pas signalé.
+- **Vidéos déjà lancées** : les phrases de conduite des générateurs, l’image de fin « driven forward » et la formulation du juge du clip s’appliquent à la prochaine étape. Le nouveau contrôle du juge de l’image de fin ne s’applique pas.
+
+## Prompts « preambule » : incohérences corrigées après vérification (2026-10-26)
+
+- **Constat** (vérification des prompts générés sur la branche `preambule`) :
+  - sur une reprise d’image clé, la description du lieu et la règle « tout ce que la caméra révèle appartient à ce lieu » formaient un seul bloc raccourcissable : le prompt finissait par « Everything the camera reveals belongs to this same. », ou perdait la règle entière ;
+  - la règle de circulation parlait de « voitures en face », alors que les générateurs reçoivent « aucun autre véhicule » et que les juges bloquent tout véhicule bien visible ;
+  - le réalisateur avait interdiction de tout gros plan sans photo correspondante, alors que la table ALLOWED propose des plans détail pour toutes les photos ;
+  - une puce de lumière sans rapport avec les lieux (« fin de journée » avec des lieux de jour) était envoyée au réalisateur, puis ignorée par les générateurs sans que l’utilisateur le sache ;
+  - le juge du clip demandait des roues qui tournent même pour une voiture à l’arrêt ;
+  - plusieurs formulations ne correspondaient pas à la scène : une route en showroom, un « tablier de pont » hors d’un pont, des vitres sombres alors que le volant doit se voir au travers, etc.
+- **Décision** :
+  - **Règle du lieu verrouillée** : `placeRule` renvoie deux parties. La description (« Place: … ») peut être raccourcie jusqu’à 40 caractères, et seulement après l’action, le cadrage, la lumière et le retour du juge (nouvelle option `shrinkLast` de `fitPrompt`). La règle n’est jamais touchée. Dans un cas extrême seulement (fiche de personnes de 400 caractères sur un plan roulant rapide, tous les champs au maximum), la description peut être retirée en tout dernier recours ; la règle reste. En intérieur, la règle parle de « murs, vitres et sol » au lieu de « route, bâtiments et végétation ».
+  - **Circulation** : la règle garde le côté de la voie, sans « voitures en face » (générateurs, réalisateur, correction). Les juges bloquent toujours une voiture dans la voie du mauvais côté.
+  - **Gros plans** : « un gros plan seulement sur un détail visible sur la photo du plan ; pas d’intérieur, d’arrière ni de profil sans photo correspondante ».
+  - **Lumière** : si le moment de la puce ne correspond à aucun des lieux choisis (et que tous les lieux ont un moment connu), un conflit s’ajoute à la liste fermée : « Lumière « fin de journée » demandée : les lieux choisis sont de jour, la lumière suit le lieu. ». La puce n’est alors pas envoyée au réalisateur.
+  - **Voiture à l’arrêt** : le juge du clip demande « pneus au contact du sol ou de la route, roues immobiles ». La phrase « les pneus doivent continuer à tourner » est réservée aux plans en mouvement.
+  - **Longueur du réalisateur** : la table ALLOWED utilise des références courtes (P1… pour les photos, L1… pour les lieux), expliquées une seule fois dans les listes. Les photos qui ont les mêmes combinaisons sont regroupées. Le code vérifie toujours les vrais identifiants, comme avant. Une réponse qui donnerait « P1 » au lieu d’un identifiant est refusée puis corrigée automatiquement. Avec 12 lieux et 6 photos, la consigne passe de **17 246 à 10 796 caractères** (la table seule, de 9 715 à 2 790).
+  - **Jetons des juges** : chaque contrôle visuel journalise `vision_usage` (étape, `completionTokens`, plafond `VISION_MAX_OUTPUT_TOKENS` = 4 000) dans les journaux Vercel, pour comparer la consommation réelle au plafond.
+  - **Formulations** : en showroom, l’image clé dit « voiture exposée, à l’arrêt » et « sol » au lieu de « route » ; « (a bridge: its deck) » n’apparaît que pour un pont ; une voiture vide est « visible à travers les vitres » ; sans personnage, le réalisateur reçoit la règle du volant pour une voiture vide.
+  - **Juges des images fixes** : le juge de l’image clé ne tolère plus une voiture qui entre ou sort du cadre (la tolérance reste pour le clip). Le juge de l’image de fin contrôle aussi le cadrage demandé, l’effet « voiture collée » et un véhicule en trop. Le générateur de l’image de fin reçoit la règle « voiture entière dans le cadre ».
+  - **`ANIMATION_PROMPT_MAX_LENGTH` supprimée** : sa seule valeur (Kling, 2 500) est au-dessus du plafond commun de 2 000 caractères. Elle ne changeait donc rien.
+  - **Retour du juge trié par gravité** : avant, le retour était coupé par la fin. Dans un essai, cette coupe a fait disparaître un défaut **bloquant** (« une deuxième voiture blanche ») et gardé deux défauts mineurs, alors que l’action du plan était réduite à « The SUV drives. ». Désormais :
+    - les défauts bloquants (ou sans gravité indiquée) forment un bloc de 300 caractères au plus, raccourci en tout dernier et retiré seulement en ultime recours. Dans les cas réels, il reste entier ;
+    - les défauts marqués « minor » sont raccourcis en premier : « If possible, also avoid: … » ;
+    - les juges de l’image clé et de l’image de fin commencent maintenant chaque défaut par sa gravité, comme le juge du clip le faisait déjà.
+  - **Ordre de raccourcissement** : défauts mineurs, puis la scène, l’action, le cadrage, la caméra et la lumière, puis la description du lieu, puis les défauts bloquants. Les blocs d’un même rang se partagent l’excédent au prorata de ce que chacun peut céder : l’action n’est plus réduite à son minimum pendant que les blocs suivants restent entiers. Une coupe ne finit plus sur un article ou une préposition (« as in the. »).
+  - **Plafond des prompts d’image** : 2 500 caractères au lieu de 2 200. La valeur de 2 200 était une marge prise faute de limite connue. Le schéma fal de Nano Banana 2 (edit) documente `maxLength: 50000` (vérifié le 26/10). Le plafond vidéo reste à 2 000, pour garder de la marge sous la limite de 2 500 de Kling.
+- **Vidéos déjà lancées** : leur premier prompt d’image clé est déjà envoyé. Les corrections ne les touchent qu’à la prochaine étape (nouvelle tentative, image de fin, animation, contrôle) :
+  - **s’appliquent** (formulations) : règle du lieu entière, circulation sans voitures en face, roues immobiles à l’arrêt dans le juge du clip, formulations du showroom, du pont et de la voiture vide, retour du juge trié par gravité et nouvel ordre de raccourcissement, plafond d’image à 2 500 ;
+  - **ne s’appliquent pas** (comportement des juges) : le juge de l’image clé sans tolérance d’entrée ou de sortie du cadre, et le juge et le générateur de l’image de fin complétés. Ils dépendent du marqueur `frameChecks: 2`, enregistré seulement à la création des nouvelles vidéos ;
+  - **sans objet** : gros plans, conflit de lumière, règle du volant du réalisateur et table ALLOWED ne servent qu’à la préparation du storyboard.
+- **Non traité** :
+  - **Puces de lumière** : griser dans le Studio les puces incompatibles avec les lieux choisis est proposé, mais pas codé.
+
 ## Plans Pro de 3 à 5 s, coût maximal affiché, mode du plafond au choix de l’équipe (2026-10-26)
 
 - **Constat** :

@@ -19,7 +19,7 @@ describe('personnes sans casting : seulement dans les plans prévus (26/10)', ()
   it('un plan sans personnes montre un véhicule vide ; un plan avec personnes reçoit la fiche', () => {
     const empty = shot({ withPeople: false, shotType: 'establishing', travelDirection: 'towards_camera' });
     expect(peopleForShot(brief, empty)).toMatchObject({ excludePeople: true, castDescription: null });
-    expect(keyframe(empty)).toContain('Nobody in or around the car; windows dark or reflective.');
+    expect(keyframe(empty)).toContain('Nobody in or around the car; the empty cabin is visible through the windows.');
     expect(keyframe(empty)).not.toContain('Adult driver');
     const withPeople = shot({ withPeople: true });
     expect(peopleForShot(brief, withPeople)).toMatchObject({ excludePeople: false, castDescription: sheet });

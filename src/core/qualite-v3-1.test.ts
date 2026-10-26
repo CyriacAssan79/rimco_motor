@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ANIMATION_PROMPT_MAX_LENGTH, buildKeyframeAnimationPrompt, buildKeyframePrompt, buildKeyframeQualityPrompt, buildVideoQualityPrompt, GROUND_CONTACT, NO_BODYWORK_CONTACT, parseKeyframeQuality, SAME_PLACE_CHECK, videoQualityTimestamps } from '@/core/providers/fal-keyframes';
+import { buildKeyframeAnimationPrompt, buildKeyframePrompt, buildKeyframeQualityPrompt, buildVideoQualityPrompt, GROUND_CONTACT, NO_BODYWORK_CONTACT, parseKeyframeQuality, SAME_PLACE_CHECK, videoQualityTimestamps } from '@/core/providers/fal-keyframes';
 import { buildSingleShotStoryboardInstruction, type StoryboardShot } from '@/core/storyboard';
 import { collectQualityWarnings, storedQualityWarnings, warningIssues } from '@/core/versions/quality-gate';
 import { clipLoopDecision, keyframeLoopDecision } from '@/core/verification/loop';
@@ -101,28 +101,19 @@ describe('Limite de longueur du prompt Kling (422 observé le 22/10)', () => {
     ...extra,
   });
 
-  it('tient sous 2 500 caractères le plan roulant qui dépassait chez Kling, sans rien retirer (v3.2)', () => {
+  it('tient sous 2 000 caractères (sous la limite Kling de 2 500) le plan roulant qui dépassait, sans rien retirer (v3.2)', () => {
     const full = animation(rolling);
     expect(full.length).toBeLessThanOrEqual(2000);
-    const fitted = animation(rolling, { maxLength: ANIMATION_PROMPT_MAX_LENGTH.kling });
-    expect(fitted).toBe(full);
-    expect(fitted).toContain('Action: a.');
-    expect(fitted).toContain('Tyres roll on the road without slipping');
-    expect(fitted).toContain('Same people as in the first frame');
-    expect(fitted).toContain('Mood:');
+    expect(full).toContain('Action: a.');
+    expect(full).toContain('Tyres roll on the road without slipping');
+    expect(full).toContain('Same people as in the first frame');
+    expect(full).toContain('Mood:');
   });
 
-  it('tient la limite dans le pire cas (champs au maximum, reprise et image de fin)', () => {
+  it('tient la limite commune dans le pire cas (champs au maximum, reprise et image de fin)', () => {
     const long = (size: number) => 'word '.repeat(size / 5).trim();
     const worst: StoryboardShot = { ...rolling, action: long(240), camera: long(240) };
-    const fitted = animation(worst, { castDescription: long(400), retryReason: long(300), hasEndFrame: true, mood: long(160), lighting: long(160), maxLength: 2500 });
-    expect(fitted.length).toBeLessThanOrEqual(2500);
-  });
-
-  it('laisse le prompt intact quand il tient ou quand le moteur n’a pas de limite', () => {
-    const full = animation(rolling);
-    expect(animation(rolling, { maxLength: ANIMATION_PROMPT_MAX_LENGTH.wan })).toBe(full);
-    expect(animation(rolling, { maxLength: ANIMATION_PROMPT_MAX_LENGTH.seedance })).toBe(full);
-    expect(animation(rolling, { maxLength: 10_000 })).toBe(full);
+    const fitted = animation(worst, { castDescription: long(400), retryReason: long(300), hasEndFrame: true, mood: long(160), lighting: long(160) });
+    expect(fitted.length).toBeLessThanOrEqual(2000);
   });
 });

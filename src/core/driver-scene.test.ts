@@ -34,7 +34,7 @@ describe('conducteur · présence, volant et regard (essais du 24/10)', () => {
   it('tient sous les limites de longueur avec conducteur, lieu et reprise', () => {
     const long = shotDraftSchema.parse({ ...rolling, action: 'A'.repeat(400), camera: 'B'.repeat(400), scene: 'C'.repeat(400) });
     const place = 'Abidjan, boulevard du front lagunaire. Boulevard dégagé au bord de la lagune avec la ville visible à l’horizon';
-    const animation = buildKeyframeAnimationPrompt({ shot: long, vehicle: 'GWM Tank 300 gris', durationS: 5, mood: 'premium', lighting: 'golden hour', castDescription: 'D'.repeat(400), place, market: 'Abidjan, Côte d’Ivoire', steeringSide: 'left', retryReason: 'E'.repeat(300), maxLength: 2_500 });
+    const animation = buildKeyframeAnimationPrompt({ shot: long, vehicle: 'GWM Tank 300 gris', durationS: 5, mood: 'premium', lighting: 'golden hour', castDescription: 'D'.repeat(400), place, market: 'Abidjan, Côte d’Ivoire', steeringSide: 'left', retryReason: 'E'.repeat(300) });
     expect(animation.length).toBeLessThanOrEqual(VIDEO_PROMPT_MAX_CHARS);
     expect(animation).toContain('Left-hand drive');
     const image = buildKeyframePrompt({ shot: long, vehicle: 'GWM Tank 300 gris', lighting: 'golden hour', format: '16:9', retryReason: 'E'.repeat(300), vehicleReferenceCount: 4, hasLocationReference: true, castDescription: 'D'.repeat(400), place, market: 'Abidjan, Côte d’Ivoire', steeringSide: 'left' });

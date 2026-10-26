@@ -120,7 +120,11 @@ describe('matrice des mouvements · réalisateur, prompts et juges', () => {
 
   it('le réalisateur reçoit la table ALLOWED par lieu et par photo ; sans matrice, la consigne d’avant', () => {
     const withMatrix = buildStoryboardInstruction({ ...base, motionMatrix: buildMotionMatrix([{ id: BRIDGE, ...placeProfileFor({ id: BRIDGE }) }], base.vehiclePhotos) });
-    expect(withMatrix).toContain(`ALLOWED (per place: maxSpeed, dust, and for each photo the accepted shotType → travelDirection): {"${BRIDGE}":{"maxSpeed":"cruise","dust":false,"photos":{"front":{"establishing":["towards_camera"],"rolling":["towards_camera"],"hero":["static","towards_camera"]}}}}`);
+    // Vérification « preambule »: short refs, explained once in the lists; the ids stay in the lists and in the answer.
+    expect(withMatrix).toContain(`Photos: [{"ref":"P1","id":"front",`);
+    expect(withMatrix).toContain(`Places: [{"ref":"L1","id":"${BRIDGE}",`);
+    expect(withMatrix).toContain('L1: maxSpeed cruise; P1 establishing towards_camera, rolling towards_camera, hero static/towards_camera.');
+    expect(withMatrix).toContain('vehiclePhotoId and locationPhotoId always take the full id');
     expect(withMatrix).not.toContain('Match travelDirection to the photo angle');
     expect(buildStoryboardInstruction(base)).toContain('Match travelDirection to the photo angle');
   });

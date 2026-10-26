@@ -29,7 +29,7 @@ describe('v3.2 · garde-fou de longueur', () => {
     }
   });
 
-  it('garde les images clés et les images de fin sous 2 200 caractères', () => {
+  it('garde les images clés et les images de fin sous 2 500 caractères', () => {
     const still = buildKeyframePrompt({ shot: longest, vehicle: 'GWM Tank 300', lighting, format: '16:9', retryReason: judgeFeedback, vehicleReferenceCount: 3, hasLocationReference: true, castTitles });
     const end = buildEndKeyframePrompt({ shot: longest, durationS: 15, format: '16:9', castTitles });
     for (const prompt of [still, end]) {
