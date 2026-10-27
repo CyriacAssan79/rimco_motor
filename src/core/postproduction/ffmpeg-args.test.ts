@@ -9,6 +9,12 @@ import { hasTransparentPngPixels } from './photo-fidelity';
 import { makeClipPreviewArgs, makeFinalVideoArgs, makeMultiClipMontageArgs, makePhotoFidelityShotArgs, makeShotMontageArgs, shouldOverlayLogo } from './ffmpeg-args';
 
 describe('FFmpeg final video arguments', () => {
+  it.each([3, 4, 7, 8, 11, 12, 16, 2.5])('accepte %s secondes de clips actifs après désactivation, avec exactement 2 s de logo', (seconds) => {
+    const args = makeMultiClipMontageArgs({ shotFiles: ['/tmp/active.mp4'], shotDurations: [seconds], logoFile: '/app/logo.png', outputFile: '/tmp/final.mp4', clipDurationSeconds: seconds, finalDurationSeconds: seconds + 2, audioFile: '/tmp/music.mp3' }).join(' ');
+    expect(args).toContain(`atrim=duration=${seconds + 2}`);
+    expect(args).toContain(`-t ${seconds + 2}`);
+    expect(() => makeMultiClipMontageArgs({ shotFiles: ['/tmp/active.mp4'], shotDurations: [seconds], logoFile: '/app/logo.png', outputFile: '/tmp/final.mp4', clipDurationSeconds: seconds, finalDurationSeconds: seconds + 1 })).toThrow('deux secondes');
+  });
   it('un seul clip validé donne 5 s de film et 2 s de logo, avec musique limitée à 7 s', () => {
     const args = makeMultiClipMontageArgs({ shotFiles: ['/tmp/active.mp4'], shotDurations: [5], logoFile: '/app/logo.png', outputFile: '/tmp/final.mp4', clipDurationSeconds: 5, finalDurationSeconds: 7, audioFile: '/tmp/music.mp3' }).join(' ');
     expect(args).toContain('concat=n=1:v=1:a=0');
@@ -150,6 +156,9 @@ describe('FFmpeg logo rendering', () => {
       expect((await stat(output)).size).toBeGreaterThan(0);
       const probe = run(['-hide_banner', '-i', output, '-f', 'null', '-']);
       expect(`${probe.stderr}`).toContain('Duration: 00:00:17.00');
+      // Regression: one remaining Pro shot lasts 4 s; the old 7/12/17/22 whitelist rejected its 6 s film.
+      run(makeMultiClipMontageArgs({ shotFiles: [clip], shotDurations: [4], logoFile: join(process.cwd(), 'public/brand/logo-rimco.png'), outputFile: output, clipDurationSeconds: 4, finalDurationSeconds: 6, format: '16:9' }));
+      expect(run(['-hide_banner', '-i', output, '-f', 'null', '-']).stderr).toContain('Duration: 00:00:06.00');
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

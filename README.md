@@ -36,6 +36,8 @@ Le projet utilise Next.js App Router, TypeScript strict, Tailwind CSS, Supabase 
 Voir [docs/PROGRESS.md](docs/PROGRESS.md) pour l’état de livraison, [docs/DECISIONS.md](docs/DECISIONS.md) pour les choix d’architecture, et [DESIGN.md](DESIGN.md) pour la référence visuelle.
 # Mise à jour du 27 octobre 2026
 
+Si l’application affiche `notifications.dedupe_key does not exist`, exécuter d’abord le contenu actuel de `supabase/migrations/0036_notifications_actions.sql` dans l’éditeur SQL Supabase, puis actualiser la page. La version corrigée de ce fichier conserve aussi les notifications d’expiration de la migration 0037. Un échec de montage peut ensuite être repris avec le bouton admin **« Relancer uniquement le montage »** : il réutilise les clips conservés, sans nouvelle génération fal.
+
 Dans GitHub, ouvrir `supabase/migrations/0038_human_review_and_pricing.sql`, copier tout le contenu, puis l’exécuter dans l’éditeur SQL de Supabase. Ce script est idempotent. Pour une installation complète, utiliser `supabase/setup.sql`. Aucune migration n’est appliquée automatiquement à un projet distant par Codex.
 
 Après déploiement Vercel, vérifier dans **Administration → Facturation** les trois tarifs de RIMCO : Standard **460 FCFA/s**, Pro **700 FCFA/s**, Premium **950 FCFA/s** (**19 000 FCFA pour 20 secondes de clips**). Les prix déjà enregistrés restent inchangés. Le niveau Test suit Premium.

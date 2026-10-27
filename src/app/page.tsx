@@ -12,6 +12,6 @@ export default async function Home() {
     {env.PROVIDERS_MODE === 'mock' && <p role="status" className="mb-5 border border-[#e7d7b9] bg-[#fbf6ed] p-4 text-sm leading-6 text-[#765d39]">
       <strong>Mode simulation :</strong> cet environnement ne lance pas de génération vidéo réelle. Pour tester une génération réelle, ouvrez le déploiement Preview configuré en mode live.
     </p>}
-    <StudioComposer mode={env.PROVIDERS_MODE} showPrompt={actor.role === 'admin'} />
+    <StudioComposer mode={env.PROVIDERS_MODE} showPrompt={actor.role === 'admin'} canRetryMontage={actor.role === 'admin'} />
   </>;
 }

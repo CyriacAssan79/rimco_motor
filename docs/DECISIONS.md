@@ -1,5 +1,15 @@
 # Décisions
 
+## Correction · Durées Pro et reprise du montage (2026-10-27)
+
+- **Erreur observée** : le montage vérifiait encore une liste fermée de durées finales (7, 12, 17 ou 22 s). Un clip Pro peut durer 3 ou 4 s ; après désactivation d’un plan, le film peut donc avoir une autre durée légitime. Le contrat vérifie maintenant une durée de clips positive et finie, puis **exactement deux secondes de logo**. Le rendu FFmpeg d’un clip actif de 4 s produit bien un film de 6 s ; musique et durée affichée suivent les clips retenus.
+- La durée réellement montée reste dans `brief_json.finalDurationSeconds`. L’affichage utilise cette valeur : on ne réécrit pas `generation_seconds`, dont la contrainte historique n’accepte que certaines durées. Le tarif et les coûts historiques restent inchangés.
+- En cas d’échec du montage, le Studio propose à l’admin **« Relancer uniquement le montage »**. La route serveur contrôle le rôle, l’échec de montage, les clips disponibles et leur validation, puis réserve la reprise par mise à jour conditionnelle de la version. Deux onglets ne peuvent pas lancer deux montages. Cette reprise appelle uniquement FFmpeg et Storage : aucune génération fal, aucun mouvement dans le journal des coûts. Les fichiers restent conservés si l’essai échoue encore.
+- **Notifications** : l’erreur `notifications.dedupe_key does not exist` correspond à la migration **0036** manquante sur la base utilisée. La lecture conserve les notifications existantes sans erreur 500 pendant la mise à jour ; l’administrateur voit dans la cloche quel fichier SQL appliquer. La migration 0036 à jour accepte aussi `expired` (ajouté par 0037), afin de pouvoir être relancée après les migrations suivantes. Le même correctif figure dans `setup.sql`.
+- Vérifications : contrôles de droits et de concurrence, conservation des clips après échec, lecture du schéma ancien et du schéma actuel, durées Pro et rendu vidéo réel ; Playwright confirme le bouton de montage, son blocage pendant le calcul et **zéro nouvelle demande de génération**. Le contrôle SQL local exécute 0036 deux fois avec une notification `expired`, puis vérifie les huit groupes de contrôles de 0038. Aucun projet Supabase distant n’est modifié.
+- Résultat des contrôles globaux : **79 fichiers / 542 tests**, lint et TypeScript réussis ; parcours navigateur de reprise réussi. Le build de production est vérifié en mode simulation.
+- **Action du responsable** : exécuter le contenu actuel de `supabase/migrations/0036_notifications_actions.sql` dans l’éditeur SQL Supabase si la colonne manque, puis actualiser l’application avec le code corrigé. Sur la vidéo en échec, utiliser **« Relancer uniquement le montage »** avec un compte admin. Aucune nouvelle migration n’est nécessaire pour le calcul de durée et la reprise.
+
 ## Partie 6 · Vérification finale et mise en service (2026-10-27)
 
 - Livraison locale sur **`preambule`**, conformément au choix du responsable. Aucun appel de génération payant, aucune migration distante et aucune commande Git vers un service distant.

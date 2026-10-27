@@ -4,15 +4,15 @@ import { errorResponse, getActor, HttpError } from '@/core/auth/guards';
 import { createSupabaseServerClient } from '@/core/supabase/server';
 import { createStorageAdminClient } from '@/core/storage/supabase';
 import { env } from '@/env';
+import { NOTIFICATIONS_MIGRATION_NOTICE, readNotifications } from '@/core/notifications/read';
 
 export async function GET() {
   try {
     const actor = await getActor();
     if (env.PROVIDERS_MODE === 'mock' && !env.NEXT_PUBLIC_SUPABASE_URL) return NextResponse.json({ notifications: [], unread: 0 });
     const supabase = await createSupabaseServerClient();
-    const { data, error } = await supabase.from('notifications').select('id,type,message,version_id,dedupe_key,read_at,created_at').eq('user_id', actor.id).order('created_at', { ascending: false }).limit(20);
-    if (error) throw error;
-    return NextResponse.json({ notifications: data ?? [], unread: (data ?? []).filter((item) => !item.read_at).length });
+    const { notifications, unread, migrationRequired } = await readNotifications(supabase, actor.id);
+    return NextResponse.json({ notifications, unread, ...(migrationRequired && actor.role === 'admin' ? { setupNotice: NOTIFICATIONS_MIGRATION_NOTICE } : {}) });
   } catch (error) { return errorResponse(error); }
 }
 

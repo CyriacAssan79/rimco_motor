@@ -151,7 +151,7 @@ function settingsFromPayload(payload: Record<string, unknown>): StudioSettings |
   };
 }
 
-export function StudioComposer({ mode, showPrompt = false }: { mode: "mock" | "live"; showPrompt?: boolean }) {
+export function StudioComposer({ mode, showPrompt = false, canRetryMontage = false }: { mode: "mock" | "live"; showPrompt?: boolean; canRetryMontage?: boolean }) {
   const [availableModels, setAvailableModels] = useState<Model[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsError, setModelsError] = useState("");
@@ -759,6 +759,13 @@ export function StudioComposer({ mode, showPrompt = false }: { mode: "mock" | "l
             {(jobStatus === "failed" || jobExpired) && !job.reconciliationRequired && (
               <FailedOutcome
                 outcome={job}
+                onRetryMontage={canRetryMontage ? async () => {
+                  const response = await fetch(`/api/versions/${job.id}/montage/retry`, { method: 'POST' });
+                  const data = await response.json().catch(() => ({}));
+                  if (!response.ok) throw new Error(data.error ?? 'Le montage n’a pas pu être relancé.');
+                  tracker.receive(job.id, { ...data, error: undefined, errorMessage: null });
+                  await tracker.reload();
+                } : undefined}
                 onRelaunch={job.settings && !launchBlocked ? () => { tracker.markSeen(job.id); applySettings(job.settings!, true); } : undefined}
                 onVariant={job.settings ? () => applySettings(job.settings!, false) : undefined}
               />

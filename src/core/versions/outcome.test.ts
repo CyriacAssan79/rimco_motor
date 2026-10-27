@@ -1,9 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { libraryVideoHref } from '@/components/video-outcome';
 import { formatFcfa } from '@/core/pricing';
-import { billingSummary, failureBillingText, failureExplanation, studioSettings } from './outcome';
+import { billingSummary, failureBillingText, failureExplanation, playbackDurationSeconds, studioSettings } from './outcome';
 
 describe('end of a video in the Studio', () => {
+  it('affiche la durée du montage raccourci au lieu de la durée de génération historique', () => {
+    expect(playbackDurationSeconds({ finalDurationSeconds: 13 }, 17)).toBe(13);
+    expect(playbackDurationSeconds({ finalDurationSeconds: 4.5 }, 12)).toBe(4.5);
+    expect(playbackDurationSeconds({}, 17)).toBe(17);
+  });
   it('reads back the settings of a video to create a variant or relaunch it', () => {
     expect(studioSettings({
       user_direction: 'Une Haval H6 sur le pont HKB', vehicleDossierId: 'd1', vehiclePhotoIds: ['p1', 'p2'], placeIds: ['l1'],
@@ -22,6 +27,9 @@ describe('end of a video in the Studio', () => {
 });
 
 describe('failure message', () => {
+  it('propose le montage seul après un échec FFmpeg, même si le détail mentionne un délai', () => {
+    expect(failureExplanation('Montage impossible : le montage dépasse le délai autorisé.')).toMatchObject({ cause: 'Le montage a échoué. Les clips générés sont conservés.', advice: expect.stringContaining('sans nouvelle génération') });
+  });
   it('explains a provider refusal in French and keeps the original as technical detail', () => {
     expect(failureExplanation('Content policy violation: the request was flagged by the safety filter (fal error 422).')).toEqual({
       cause: 'Le fournisseur a refusé le contenu demandé (filtre de sécurité).',

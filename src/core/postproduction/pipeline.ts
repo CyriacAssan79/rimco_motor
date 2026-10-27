@@ -213,10 +213,12 @@ export async function assembleShotMontage(versionId: string) {
     await Promise.all([...clipFiles.map((path, index) => writeFile(path, clipBytes[index])), ...(audioFile && audioBytes ? [writeFile(audioFile, audioBytes)] : [])]);
     const requestedCuts = Array.isArray(brief.shotOutputDurations) ? brief.shotOutputDurations : null;
     const cutDurations = requestedCuts?.length === allShots?.length ? shots.map((shot) => Number(requestedCuts[shot.shot_number - 1])) : shots.map((shot) => Number(shot.duration_seconds));
+    const activeClipSeconds = cutDurations.reduce((sum, seconds) => sum + seconds, 0);
+    const finalDurationSeconds = required ? activeClipSeconds + 2 : Number(brief.finalDurationSeconds);
     const startOffsets = editorialStartOffsets(shots.map((shot) => Number(shot.duration_seconds)), cutDurations);
     const montageFps = isStoryboard ? chooseMontageFps(await Promise.all(clipFiles.map((file) => probeVideoFps(ffmpegPath, file)))) : undefined;
     const args = isStoryboard
-      ? makeMultiClipMontageArgs({ shotFiles: clipFiles, shotDurations: cutDurations, shotStartOffsets: startOffsets, audioFile, logoFile, outputFile, fps: montageFps, finalDurationSeconds: required ? cutDurations.reduce((a,b) => a+b, 0) + 2 : Number(brief.finalDurationSeconds), ...(typeof brief.clipDurationSeconds === 'number' ? { clipDurationSeconds: (required ? cutDurations.reduce((a,b) => a+b, 0) : brief.clipDurationSeconds) as 5 | 10 | 15 | 20 } : {}), singleStoryboardMode: brief.singleStoryboardMode === true, format: briefFormat })
+      ? makeMultiClipMontageArgs({ shotFiles: clipFiles, shotDurations: cutDurations, shotStartOffsets: startOffsets, audioFile, logoFile, outputFile, fps: montageFps, finalDurationSeconds, ...(required ? { clipDurationSeconds: activeClipSeconds } : typeof brief.clipDurationSeconds === 'number' ? { clipDurationSeconds: brief.clipDurationSeconds } : {}), singleStoryboardMode: brief.singleStoryboardMode === true, format: briefFormat })
       : makeShotMontageArgs({ shotFiles: clipFiles as [string, string], logoFile, outputFile, overlayLogo, durationSeconds: 6, format: briefFormat });
     await runFfmpeg(ffmpegPath, args);
     const outputStat = await stat(outputFile);
@@ -226,7 +228,7 @@ export async function assembleShotMontage(versionId: string) {
     const finalPath = `${version.video_id}/${versionId}/montage.mp4`;
     const { error: uploadError } = await admin.storage.from('videos').upload(finalPath, output, { contentType: 'video/mp4', upsert: true });
     if (uploadError) throw new HttpError(502, 'Impossible d’enregistrer le montage dans le stockage sécurisé.');
-    const { error: updateVersionError } = await admin.from('video_versions').update({ status: 'ready', final_path: finalPath, raw_path: null, error_message: null, brief_json: { ...brief, processingMetrics: completedMetrics }, updated_at: new Date().toISOString() }).eq('id', versionId);
+    const { error: updateVersionError } = await admin.from('video_versions').update({ status: 'ready', final_path: finalPath, raw_path: null, error_message: null, brief_json: { ...brief, ...(required && isStoryboard ? { clipDurationSeconds: activeClipSeconds, finalDurationSeconds } : {}), processingMetrics: completedMetrics }, updated_at: new Date().toISOString() }).eq('id', versionId);
     if (updateVersionError) throw new HttpError(503, 'Le montage est enregistré; son état doit être réconcilié.');
     const { error: updateVideoError } = await admin.from('videos').update({ status: 'ready', updated_at: new Date().toISOString() }).eq('id', version.video_id);
     if (updateVideoError) throw new HttpError(503, 'Le montage est prêt; son état doit être réconcilié.');

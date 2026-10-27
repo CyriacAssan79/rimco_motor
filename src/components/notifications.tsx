@@ -142,6 +142,7 @@ export function NotificationBell() {
     </button>
     {open && <div className="absolute right-0 top-12 z-30 w-80 max-w-[calc(100vw-2rem)] rounded-xl border border-[var(--border)] bg-white p-3 shadow-xl">
       <p className="px-2 pb-2 text-xs font-semibold">Notifications</p>
+      {snapshot.setupNotice && <p role="status" className="mb-2 rounded bg-[#fbf6ed] p-2 text-xs text-[#765d39]">{snapshot.setupNotice}</p>}
       {snapshot.notifications.length === 0 ? <p className="px-2 py-4 text-xs text-[#6b6760]">Aucune notification.</p> : <ul className="max-h-72 space-y-1 overflow-auto">{snapshot.notifications.map((item) => {
         const href = notificationHref(item);
         const body = <>{item.message}<span className="mt-1 block text-xs text-[#6b6760]">{new Date(item.created_at).toLocaleString('fr-FR')}</span></>;

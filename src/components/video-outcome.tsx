@@ -79,17 +79,29 @@ export function ReadyOutcome({ outcome, onVariant, onSeen, onSubmitted }: { outc
 }
 
 /** Failed video: the cause in French, what was billed, and how to start again. */
-export function FailedOutcome({ outcome, onRelaunch, onVariant }: { outcome: Outcome; onRelaunch?: () => void; onVariant?: () => void }) {
+export function FailedOutcome({ outcome, onRelaunch, onVariant, onRetryMontage }: { outcome: Outcome; onRelaunch?: () => void; onVariant?: () => void; onRetryMontage?: () => Promise<void> }) {
+  const [retrying, setRetrying] = useState(false);
+  const [retryError, setRetryError] = useState('');
   const failure = failureExplanation(outcome.error ?? outcome.errorMessage);
+  const montageFailure = /^Montage impossible\s*:/i.test(outcome.error ?? outcome.errorMessage ?? '');
+  async function retryMontage() {
+    if (!onRetryMontage || retrying) return;
+    setRetrying(true); setRetryError('');
+    try { await onRetryMontage(); }
+    catch (cause) { setRetryError(cause instanceof Error ? cause.message : 'Le montage n’a pas pu être relancé.'); }
+    finally { setRetrying(false); }
+  }
   return <div role="alert" className="mt-4 space-y-2 rounded-md border border-[#f0c9c6] bg-[#fdf4f3] p-4 text-xs leading-5 text-[#55545a]">
     <p className="text-sm font-semibold text-[#9d352e]">La vidéo n’a pas pu être produite.</p>
     <p className="text-[#242428]">{failure.cause}</p>
     <p>{failure.advice}</p>
     <p className="font-semibold text-[#242428]">{failureBillingText(outcome.billing)}</p>
     {failure.detail && <details><summary className="cursor-pointer font-semibold">Détail technique</summary><p className="mt-1 break-words">{failure.detail}</p></details>}
-    {(onRelaunch || onVariant) && <div className="flex flex-wrap gap-2 pt-1">
-      {onRelaunch && <button type="button" onClick={onRelaunch} className="min-h-11 rounded-md bg-[#c51e1c] px-4 text-xs font-semibold text-white">Relancer avec les mêmes réglages</button>}
+    {(onRelaunch || onVariant || onRetryMontage) && <div className="flex flex-wrap gap-2 pt-1">
+      {montageFailure && onRetryMontage && <button type="button" onClick={() => void retryMontage()} disabled={retrying} className="min-h-11 rounded-md bg-[#c51e1c] px-4 text-xs font-semibold text-white disabled:opacity-50">{retrying ? 'Montage en cours…' : 'Relancer uniquement le montage'}</button>}
+      {!montageFailure && onRelaunch && <button type="button" onClick={onRelaunch} className="min-h-11 rounded-md bg-[#c51e1c] px-4 text-xs font-semibold text-white">Relancer avec les mêmes réglages</button>}
       {onVariant && <button type="button" onClick={onVariant} className="min-h-11 rounded-md border border-[#d2cec6] bg-white px-4 text-xs font-semibold text-[#242428]">Modifier les réglages</button>}
     </div>}
+    {retryError && <p role="status" className="text-[#9d352e]">{retryError}</p>}
   </div>;
 }

@@ -1,5 +1,45 @@
 import { expect, test, type Page } from '@playwright/test';
 
+test('reprend uniquement le montage après un échec, sans régénérer les clips', async ({ page }) => {
+  test.setTimeout(120_000);
+  if (process.env.E2E_MOCK_NO_SUPABASE !== '1') {
+    const password = process.env.E2E_ADMIN_PASSWORD;
+    if (!password) throw new Error('Le mot de passe du compte E2E local est absent.');
+    await page.goto('/connexion');
+    await page.getByLabel('Adresse e-mail').fill(process.env.E2E_ADMIN_EMAIL ?? 'admin@rimco.test');
+    await page.getByLabel('Mot de passe').fill(password);
+    await page.getByRole('button', { name: 'Se connecter' }).click();
+    await expect(page).toHaveURL(/\/$/);
+  }
+  const id = '60000000-0000-4000-8000-000000000001';
+  let ready = false; let retries = 0; let generations = 0;
+  let finishMontage!: () => void;
+  const pending = new Promise<void>((resolve) => { finishMontage = resolve; });
+  const version = () => ({ id, videoId: '60000000-0000-4000-8000-000000000002', title: 'Pro à récupérer', status: ready ? 'ready' : 'failed', versionStatus: ready ? 'ready' : 'failed',
+    errorMessage: ready ? null : 'Montage impossible : La vidéo finale doit ajouter exactement deux secondes au logo.', createdAt: new Date().toISOString(),
+    durationSeconds: 6, billing: { chargedFcfa: 0, pending: false },
+    settings: { title: 'Pro à récupérer', description: 'Un SUV', vehicleDossierId: 'vehicle', vehiclePhotoIds: [], placeIds: [], castAssetIds: [], tier: 'pro', durationS: 10, format: '16:9', scenePresetId: '', audioAssetId: null },
+    ...(ready ? { videoUrl: '/mock/mock-video.mp4' } : {}) });
+  await page.route((url) => url.pathname === '/api/versions', (route) => {
+    if (route.request().method() === 'POST') { generations += 1; return route.fulfill({ status: 500, json: { error: 'Aucune nouvelle génération attendue.' } }); }
+    return route.fulfill({ json: { versions: new URL(route.request().url()).searchParams.has('status') ? [] : [version()] } });
+  });
+  await page.route(`**/api/versions/${id}/refresh`, (route) => route.fulfill({ json: version() }));
+  await page.route(`**/api/versions/${id}/montage/retry`, async (route) => {
+    retries += 1; await pending; ready = true;
+    await route.fulfill({ json: { ...version(), generationResubmitted: false } });
+  });
+  await page.goto('/');
+  const retry = page.getByRole('button', { name: 'Relancer uniquement le montage', exact: true });
+  await expect(retry).toBeVisible({ timeout: 45_000 });
+  await expect(page.getByRole('button', { name: 'Relancer avec les mêmes réglages', exact: true })).toHaveCount(0);
+  await retry.click();
+  await expect(page.getByRole('button', { name: 'Montage en cours…', exact: true })).toBeDisabled();
+  finishMontage();
+  await expect(page.getByText('Votre vidéo est prête.', { exact: true })).toBeVisible();
+  expect(retries).toBe(1); expect(generations).toBe(0);
+});
+
 test('images clés puis clips, désactivation et montage en simulation', async ({ page }) => {
   test.setTimeout(120_000);
   if (process.env.E2E_MOCK_NO_SUPABASE !== '1') {

@@ -8,7 +8,7 @@ if (!['build', 'e2e'].includes(task)) throw new Error('Choisissez build ou e2e.'
 const env = { ...process.env, PROVIDERS_MODE: 'mock', E2E_MOCK_NO_SUPABASE: '1', __NEXT_PROCESSED_ENV: 'true', APP_URL: 'http://127.0.0.1:3017' };
 for (const key of Object.keys(env)) if (/^(?:NEXT_PUBLIC_SUPABASE_|SUPABASE_|FAL_|ANTHROPIC_|LLM_|STORYBOARD_SIGNING_KEY|CRON_SECRET)/.test(key)) delete env[key];
 delete env.NODE_ENV;
-const args = task === 'build' ? ['node_modules/next/dist/bin/next', 'build', '--webpack'] : ['node_modules/@playwright/test/cli.js', 'test', '--config=playwright.review.config.ts', '--grep=images clés puis clips'];
+const args = task === 'build' ? ['node_modules/next/dist/bin/next', 'build', '--webpack'] : ['node_modules/@playwright/test/cli.js', 'test', '--config=playwright.review.config.ts', `--grep=${process.argv[3] ?? 'images clés puis clips'}`];
 let runtime;
 if (task === 'e2e') {
   runtime = await mkdtemp(join(tmpdir(), 'rimco-review-'));

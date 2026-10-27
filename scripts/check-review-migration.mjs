@@ -11,6 +11,8 @@ const checks = [];
 try {
   await db.exec(`
     create role anon; create role authenticated; create role service_role;
+    create table notifications(id uuid primary key, user_id uuid, version_id uuid, type text check(type in ('ready','failed','cancelled','validation')));
+    create unique index notifications_user_version_type_idx on notifications(user_id,version_id,type) where version_id is not null;
     create table brands(id uuid primary key, name text);
     create table pricing_settings(brand_id uuid primary key,grid_fcfa_per_second_standard numeric,grid_fcfa_per_second_premium numeric);
     create table video_versions(id uuid primary key,video_id uuid,status text,brief_json jsonb,updated_at timestamptz);
@@ -22,6 +24,16 @@ try {
       primary key(version_id,shot_number));
     create table usage_ledger(id uuid primary key,version_id uuid,ai_model_id uuid,status text,kind text,price_fcfa numeric,applied_fcfa_per_second numeric);
   `);
+  const notificationMigration = await readFile('supabase/migrations/0036_notifications_actions.sql', 'utf8');
+  await db.query("insert into notifications values ($1,$2,$3,'ready')", [id(300), id(301), id(302)]);
+  await db.exec(notificationMigration);
+  await db.query("insert into notifications(id,user_id,version_id,type) values ($1,$2,$3,'expired')", [id(303), id(301), id(302)]);
+  await db.exec(notificationMigration);
+  const noticeRows = (await db.query('select type,dedupe_key from notifications order by id')).rows;
+  assert.deepEqual(noticeRows, [{ type: 'ready', dedupe_key: 'ready' }, { type: 'expired', dedupe_key: 'expired' }]);
+  await db.query("insert into notifications(id,user_id,version_id,type,dedupe_key) values ($1,$2,$3,'ready','ready') on conflict(user_id,version_id,dedupe_key) do nothing", [id(304), id(301), id(302)]);
+  assert.equal((await db.query('select count(*)::int as total from notifications')).rows[0].total, 2);
+  checks.push('0036 upgrades legacy notifications, keeps expired on rerun, and supports duplicate-safe writes');
   await db.query('insert into brands values ($1,$2),($3,$4)', [id(1), 'RIMCO Motors', id(2), 'Another brand']);
   await db.query('insert into pricing_settings values ($1,460,700),($2,500,810)', [id(1), id(2)]);
   const migration = await readFile('supabase/migrations/0038_human_review_and_pricing.sql', 'utf8');

@@ -23,7 +23,8 @@ type MultiClipMontageArgs = {
   logoFile: string;
   outputFile: string;
   finalDurationSeconds: number;
-  clipDurationSeconds?: 5 | 10 | 15 | 20;
+  /** After human review, removing a 3 or 4 s clip can leave any positive duration. */
+  clipDurationSeconds?: number;
   singleStoryboardMode?: boolean;
   qualityCrf?: number;
   format?: VideoFormat;
@@ -170,7 +171,7 @@ export function makeMultiClipMontageArgs(input: MultiClipMontageArgs) {
   if (input.shotFiles.length < 1 || input.shotFiles.length > 6 || input.shotFiles.length !== input.shotDurations.length) throw new Error('Le montage ne contient pas le nombre attendu de plans.');
   const clipSeconds = input.shotDurations.reduce((sum, seconds) => sum + seconds, 0);
   const hasNewDurationContract = input.clipDurationSeconds !== undefined;
-  if (hasNewDurationContract && (![7, 12, 17, 22].includes(input.finalDurationSeconds) || input.finalDurationSeconds !== input.clipDurationSeconds! + 2)) throw new Error('La vidéo finale doit ajouter exactement deux secondes au logo.');
+  if (hasNewDurationContract && (!Number.isFinite(input.clipDurationSeconds) || input.clipDurationSeconds! <= 0 || input.clipDurationSeconds! > 30 || input.finalDurationSeconds !== input.clipDurationSeconds! + 2)) throw new Error('La vidéo finale doit ajouter exactement deux secondes de logo aux clips actifs.');
   if (!hasNewDurationContract && ![5, 10, 15, 20, 30].includes(input.finalDurationSeconds)) throw new Error('La durée enregistrée n’est pas prise en charge.');
   const footageSeconds = input.clipDurationSeconds ?? input.finalDurationSeconds - 2;
   if ((input.singleStoryboardMode ? clipSeconds < footageSeconds : clipSeconds !== footageSeconds) || input.shotDurations.some((seconds) => !Number.isFinite(seconds) || seconds <= 0)) throw new Error('Les plans doivent laisser exactement deux secondes au logo final.');

@@ -3,7 +3,7 @@
  * the tab is visible, and at once when the video follow-up sees a change: no page change needed.
  */
 export type AppNotification = { id: string; type: string; message: string; version_id?: string | null; dedupe_key?: string | null; read_at?: string | null; created_at: string };
-export type CenterSnapshot = { notifications: AppNotification[]; pendingReviewCount: number; loaded: boolean };
+export type CenterSnapshot = { notifications: AppNotification[]; pendingReviewCount: number; loaded: boolean; setupNotice?: string };
 
 export const NOTIFICATIONS_POLL_MS = 60_000;
 export const BASE_TITLE = 'RIMCO Studio';
@@ -64,6 +64,7 @@ export function createNotificationCenter(deps: Deps) {
       ]);
       const next: Partial<CenterSnapshot> = { loaded: true };
       if (notifications?.ok && Array.isArray(notifications.data.notifications)) next.notifications = notifications.data.notifications as AppNotification[];
+      if (notifications?.ok) next.setupNotice = typeof notifications.data.setupNotice === 'string' ? notifications.data.setupNotice : undefined;
       if (reviews?.ok && Array.isArray(reviews.data.versions)) next.pendingReviewCount = reviews.data.versions.length;
       emit(next);
     } finally {
