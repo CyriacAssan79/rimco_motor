@@ -282,7 +282,7 @@ alter table public.video_versions add constraint video_versions_status_check che
 alter table public.assets add column if not exists title text;
 alter table public.assets add column if not exists category text;
 alter table public.assets drop constraint if exists assets_kind_check;
-alter table public.assets add constraint assets_kind_check check (kind in ('vehicle','logo','audio','place','decor','wardrobe','badge'));
+alter table public.assets add constraint assets_kind_check check (kind in ('vehicle','logo','audio','place','decor','wardrobe','badge')) not valid; -- superseded below: older rows are checked by the final rule
 create table if not exists public.notifications (
   id uuid primary key default gen_random_uuid(), user_id uuid not null references public.profiles(id) on delete cascade,
   version_id uuid references public.video_versions(id) on delete cascade, type text not null check (type in ('ready','failed','cancelled','validation')),
@@ -338,6 +338,9 @@ begin
 end $$;
 revoke all on function public.reserve_llm_budget(uuid,uuid,numeric,numeric,numeric,numeric,text) from public, anon, authenticated;
 grant execute on function public.reserve_llm_budget(uuid,uuid,numeric,numeric,numeric,numeric,text) to service_role;
+-- The catalog below replays every past default switch (Veo, Seedance, Kling...). On an existing database two
+-- models of a tier would briefly be default together: the one-default rule is lifted here and restored at the end.
+drop index if exists public.ai_models_one_default_per_tier;
 -- Refresh the catalog from verified provider schemas; unsupported models stay inactive.
 update public.ai_models set is_active=false, is_default=false where fal_endpoint_id='TODO(verify-fal)';
 
@@ -447,7 +450,7 @@ grant execute on function public.settle_budget(uuid,text,numeric,numeric,numeric
 -- Enable requested output durations on the verified image-to-video endpoints.
 -- Veo keeps a 5s final output (6s source); Kling supports up to 15s; Seedance up to 30s.
 alter table public.video_versions drop constraint if exists video_versions_generation_seconds_check;
-alter table public.video_versions add constraint video_versions_generation_seconds_check check (generation_seconds in (5,10,15,20,30));
+alter table public.video_versions add constraint video_versions_generation_seconds_check check (generation_seconds in (5,10,15,20,30)) not valid; -- superseded below: older rows are checked by the final rule
 
 update public.ai_models
 set allowed_durations='{5,10,15}'
@@ -495,7 +498,7 @@ create table if not exists public.video_shots (
   unique(version_id, shot_number)
 );
 alter table public.video_versions drop constraint if exists video_versions_generation_seconds_check;
-alter table public.video_versions add constraint video_versions_generation_seconds_check check (generation_seconds in (5,6,10,15,20,30));
+alter table public.video_versions add constraint video_versions_generation_seconds_check check (generation_seconds in (5,6,10,15,20,30)) not valid; -- superseded below: older rows are checked by the final rule
 alter table public.video_shots enable row level security;
 drop policy if exists video_shots_admin_read on public.video_shots;
 create policy video_shots_admin_read on public.video_shots for select to authenticated using (public.is_admin());
@@ -508,7 +511,7 @@ drop function if exists public.reserve_budget(uuid,uuid,uuid,numeric,numeric,num
 drop function if exists public.reserve_llm_budget(uuid,uuid,numeric,numeric,numeric,numeric,text);
 drop function if exists public.settle_budget(uuid,text,numeric,numeric,numeric,numeric);
 
-create function public.reserve_budget(
+create or replace function public.reserve_budget(
   p_user_id uuid,p_version_id uuid,p_model_id uuid,p_seconds numeric,p_price_usd_second numeric,
   p_usd_to_eur numeric,p_eur_to_fcfa numeric,p_price_fcfa numeric,
   p_department text,p_applied_fcfa_second numeric
@@ -534,7 +537,7 @@ end $$;
 revoke all on function public.reserve_budget(uuid,uuid,uuid,numeric,numeric,numeric,numeric,numeric,text,numeric) from public, anon, authenticated;
 grant execute on function public.reserve_budget(uuid,uuid,uuid,numeric,numeric,numeric,numeric,numeric,text,numeric) to service_role;
 
-create function public.reserve_llm_budget(
+create or replace function public.reserve_llm_budget(
   p_user_id uuid,p_version_id uuid,p_max_cost_usd numeric,
   p_usd_to_eur numeric,p_eur_to_fcfa numeric,p_department text
 ) returns uuid language plpgsql security definer set search_path = '' as $$
@@ -556,7 +559,7 @@ end $$;
 revoke all on function public.reserve_llm_budget(uuid,uuid,numeric,numeric,numeric,text) from public, anon, authenticated;
 grant execute on function public.reserve_llm_budget(uuid,uuid,numeric,numeric,numeric,text) to service_role;
 
-create function public.settle_budget(
+create or replace function public.settle_budget(
   p_entry_id uuid,p_outcome text,p_actual_cost_usd numeric,p_usd_to_eur numeric,p_eur_to_fcfa numeric
 ) returns void language plpgsql security definer set search_path = '' as $$
 declare entry public.usage_ledger%rowtype; final_eur numeric; final_usd numeric; client_price_fcfa numeric;
@@ -612,10 +615,9 @@ alter table public.videos add constraint videos_status_check check (status in ('
 alter table public.video_versions drop constraint if exists video_versions_status_check;
 alter table public.video_versions add constraint video_versions_status_check check (status in ('queued','generating','postprocessing','ready','failed','cancelled'));
 alter table public.assets drop constraint if exists assets_kind_check;
-alter table public.assets add constraint assets_kind_check check (kind in ('vehicle','logo','audio','place','decor','wardrobe','badge'));
-create unique index if not exists notifications_user_version_type_idx
-  on public.notifications(user_id, version_id, type)
-  where version_id is not null;
+alter table public.assets add constraint assets_kind_check check (kind in ('vehicle','logo','audio','place','decor','wardrobe','badge')) not valid; -- superseded below: older rows are checked by the final rule
+-- notifications_user_version_type_idx is no longer created: 0036 replaced it by the dedupe_key index
+-- (several « action requise » per video), and recreating it would fail on an existing database.
 
 notify pgrst, 'reload schema';
 
@@ -972,7 +974,7 @@ alter table public.notifications alter column dedupe_key set not null;
 
 alter table public.notifications drop constraint if exists notifications_type_check;
 alter table public.notifications add constraint notifications_type_check
-  check (type in ('ready','failed','cancelled','validation','action_required','review_requested','approved','rejected'));
+  check (type in ('ready','failed','cancelled','validation','action_required','review_requested','approved','rejected','expired'));
 
 -- The former index was partial (where version_id is not null): ON CONFLICT (user_id, version_id, type)
 -- without a predicate could not use it. The new index is complete, so the upsert can rely on it.
@@ -1105,4 +1107,8 @@ end;
 $$;
 revoke all on function public.rimco_clip_review(uuid,text,integer,jsonb,jsonb) from public, anon, authenticated;
 grant execute on function public.rimco_clip_review(uuid,text,integer,jsonb,jsonb) to service_role;
+notify pgrst, 'reload schema';
+
+-- One default model per tier again, on the final catalog (lifted before the catalog replay above).
+create unique index if not exists ai_models_one_default_per_tier on public.ai_models(tier) where is_default;
 notify pgrst, 'reload schema';

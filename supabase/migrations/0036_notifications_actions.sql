@@ -22,7 +22,7 @@ alter table public.notifications alter column dedupe_key set not null;
 
 alter table public.notifications drop constraint if exists notifications_type_check;
 alter table public.notifications add constraint notifications_type_check
-  check (type in ('ready','failed','cancelled','validation','action_required','review_requested','approved','rejected'));
+  check (type in ('ready','failed','cancelled','validation','action_required','review_requested','approved','rejected','expired'));
 
 -- The former index was partial (where version_id is not null): ON CONFLICT (user_id, version_id, type)
 -- without a predicate could not use it. The new index is complete, so the upsert can rely on it.

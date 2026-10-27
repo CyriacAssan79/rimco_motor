@@ -26,10 +26,10 @@ import { assembleShotMontage, extractRepresentativeVideoFrames } from '@/core/po
 import { MAX_MONTAGE_ATTEMPTS, montageFailureDecision } from '@/core/postproduction/montage-failure';
 import { peopleForShot, storedCast, withCastReferences, type StoredCastMember } from './casting';
 import { collectQualityWarnings, storedQualityWarnings, warningIssues } from './quality-gate';
-import { appendVerification, applyShotRevision, clipRedosDone, pendingClipRedo, pendingHumanFeedback, HUMAN_REVISIONS_PER_SHOT, humanRevisionsUsed, buildShotRevisionInstruction, buildShotRevisionPrompt, clipLoopDecision, defectsAsData, effectiveShotDraft, keyframeCorrectionsAllowed, keyframeLoopDecision, MAX_CLIP_RETRIES, MAX_KEYFRAME_ATTEMPTS, MAX_KEYFRAME_CORRECTIONS, storedVerdict, UNREADABLE_VERDICT, type ReviewRequest } from '@/core/verification/loop';
+import { appendVerification, applyShotRevision, clipRedoReservations, clipRedosDone, pendingClipRedo, pendingHumanFeedback, HUMAN_REVISIONS_PER_SHOT, humanRevisionsUsed, buildShotRevisionInstruction, buildShotRevisionPrompt, clipLoopDecision, defectsAsData, effectiveShotDraft, keyframeCorrectionsAllowed, keyframeLoopDecision, MAX_CLIP_RETRIES, MAX_KEYFRAME_ATTEMPTS, MAX_KEYFRAME_CORRECTIONS, storedVerdict, UNREADABLE_VERDICT, type ReviewRequest } from '@/core/verification/loop';
 import { readShotRevision, SHOT_REVISION_RESERVE_USD, submitShotRevision } from '@/core/providers/fal-shot-revision';
 import type { CreateVersionInput } from './live';
-import { animationSubmitStateAfterFailure, canSubmitAnimation } from './animation-submit-state';
+import { animationSubmitStateAfterFailure, canSubmitAnimation, type AnimationSubmitState } from './animation-submit-state';
 import { reserveGenerationCost, reserveKeyframeCost, reserveLlmCost, settleUsageCost } from '@/core/billing/ledger';
 import { costPlanForBrief, nominalVideoCostUsd, videoCostCapCheck, worstCaseVideoCostUsd, type CostPlanUsd } from '@/core/billing/video-cap';
 import { findCuratedLocation, findSelectableLocation, locationCatalog, placeDescription, placeProfileFor, placeTimeOfDay, resolveShotLighting } from '@/core/assets/location-catalog';
@@ -646,7 +646,9 @@ async function refreshKeyframes(input: {
   const draftsByNumber = new Map(shotDrafts.map((shot, index) => [index + 1, shot]));
   const anyKeyframes = shots.some((shot) => shot.keyframe_status !== 'skipped');
   if (!anyKeyframes) return null;
-  if (canAnimateKeyframes(shots.map((shot) => String(shot.keyframe_status))) && shots.some((shot) => typeof shot.provider_request_id === 'string')) return null;
+  // A shot whose clip is redone waits for its animation again (P1 · clip): it must not be skipped by this shortcut.
+  if (canAnimateKeyframes(shots.map((shot) => String(shot.keyframe_status))) && shots.some((shot) => typeof shot.provider_request_id === 'string')
+    && !shots.some((shot) => shot.keyframe_status === 'ready' && canSubmitAnimation(shot.animation_submit_state as AnimationSubmitState | null, shot.provider_request_id as string | null))) return null;
 
   const persistedReferences = Array.isArray(brief.keyframeReferencesByShot)
     ? brief.keyframeReferencesByShot as Array<{ shotNumber: number; assetIds: string[] }>
@@ -1015,6 +1017,9 @@ async function refreshKeyframes(input: {
     if (result.status === 'rejected') {
       const statusCode = falErrorStatusCode(result.reason);
       const uncertain = statusCode === null || statusCode >= 500;
+      // A clip redo refused by fal is not billed: its internal clip and its check are released (kept if uncertain).
+      const target = animationTargets[index];
+      if (!uncertain) await Promise.all(clipRedoReservations(target.verification_history, target.video_quality_ledger_ids).map((entryId) => settleUsageCost(admin, { entryId, outcome: 'released', actualCostUsd: 0, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA, billable: false })));
       await admin.from('video_shots').update({
         status: 'failed', animation_submit_state: animationSubmitStateAfterFailure(statusCode), video_quality_status: brief.videoQualityMode === true ? 'failed' : 'skipped', provider_reconciliation_required: uncertain,
         provider_last_poll_error: safeProviderError(result.reason, apiKey), provider_next_poll_at: null,

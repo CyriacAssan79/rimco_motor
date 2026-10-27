@@ -78,6 +78,17 @@ export function pendingClipRedo(history: unknown): VerificationEntry | null {
   return null;
 }
 
+/**
+ * Reservations of a clip redo still waiting for its clip: the internal clip and its check (slot MAX_CLIP_RETRIES).
+ * Released when fal refuses the new animation, so a refused redo costs nothing.
+ */
+export function clipRedoReservations(history: unknown, qualityLedgerIds: unknown): string[] {
+  const redo = pendingClipRedo(history);
+  if (!redo) return [];
+  const check = Array.isArray(qualityLedgerIds) ? qualityLedgerIds[MAX_CLIP_RETRIES] : undefined;
+  return [redo.clipLedgerId, check].filter((id): id is string => typeof id === 'string' && id.length > 0);
+}
+
 /** Number of clips already redone by a human for a shot: each new clip gets its own file, the previous one is kept. */
 export function clipRedosDone(history: unknown): number {
   const entries = Array.isArray(history) ? history as VerificationEntry[] : [];

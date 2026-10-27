@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { shotDraftSchema } from '@/core/storyboard';
-import { HUMAN_CLIP_REVISIONS_PER_SHOT, HUMAN_REVISIONS_PER_SHOT, humanRevisionsUsed } from './loop';
+import { clipRedoReservations, HUMAN_CLIP_REVISIONS_PER_SHOT, HUMAN_REVISIONS_PER_SHOT, humanRevisionsUsed } from './loop';
 import { appendVerification, applyShotRevision, buildShotRevisionInstruction, buildShotRevisionPrompt, clipLoopDecision, defectsAsData, effectiveShotDraft, keyframeCorrectionsAllowed, keyframeLoopDecision, MAX_KEYFRAME_CORRECTIONS, shotRevisionSchema, storedVerdict, type VerificationEntry } from './loop';
 
 const ok = { approved: true, issues: [], reason: 'OK' };
@@ -114,5 +114,18 @@ describe('historique des contrôles', () => {
     expect((history as VerificationEntry[])[0].attempt).toBe(0);
     expect((history as VerificationEntry[]).at(-1)?.attempt).toBe(24);
     expect(appendVerification('corrompu', entry)).toHaveLength(1);
+  });
+});
+
+describe('reprise humaine d’un clip refusé', () => {
+  const redo = { stage: 'video', attempt: 1, at: '2026-10-27T12:00:00Z', approved: false, issues: [], reason: '', decision: 'human_revise', by: 'human', scope: 'clip', clipLedgerId: 'clip-1' };
+  it('rend le clip interne et son contrôle à libérer tant que le nouveau clip n’est pas contrôlé', () => {
+    expect(clipRedoReservations([redo], ['q0', 'q1'])).toEqual(['clip-1', 'q1']);
+    // A keyframe check of option b after the decision does not close the redo.
+    expect(clipRedoReservations([redo, { ...redo, stage: 'keyframe', decision: 'accept', by: 'verifier' }], ['q0', 'q1'])).toEqual(['clip-1', 'q1']);
+  });
+  it('ne libère rien une fois le nouveau clip contrôlé, ni sans reprise', () => {
+    expect(clipRedoReservations([redo, { ...redo, decision: 'review', by: 'verifier', scope: undefined }], ['q0', 'q1'])).toEqual([]);
+    expect(clipRedoReservations([], ['q0', 'q1'])).toEqual([]);
   });
 });
