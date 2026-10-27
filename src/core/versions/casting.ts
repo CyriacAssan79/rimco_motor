@@ -1,5 +1,6 @@
-import { shouldExcludePeople } from '@/core/providers/fal-keyframes';
+import { explicitlyNoPeople, shouldExcludePeople, type CabinRule } from '@/core/providers/fal-keyframes';
 import type { StoryboardShot } from '@/core/storyboard';
+import { needsDriver, storedMovingDriver } from './moving-driver';
 
 export type StoredCastMember = { id: string; title: string; path: string };
 
@@ -9,11 +10,25 @@ export function storedCast(brief: Record<string, unknown>): StoredCastMember[] {
     : [];
 }
 
+type ShotPeople = { excludePeople: boolean; castMembers: StoredCastMember[]; castTitles: string[]; castDescription: string | null; cabin?: CabinRule };
+
 /**
  * People policy of one shot. With a selected casting, only the people listed in the shot appear
  * (none = unoccupied vehicle); without casting, the historical brief rule applies, plus the director's text sheet.
+ * 27/10: a car that drives (or has just stopped after driving) is never empty, see moving-driver.ts. `shotNumber`
+ * (1-based) finds the previous shot; without it, only the shot's own motion counts.
  */
-export function peopleForShot(brief: Record<string, unknown>, shot: StoryboardShot | undefined) {
+export function peopleForShot(brief: Record<string, unknown>, shot: StoryboardShot | undefined, shotNumber?: number): ShotPeople {
+  const people = shotPeople(brief, shot);
+  const driver = storedMovingDriver(brief);
+  if (!driver || !shot || !needsDriver(brief, shot, shotNumber)) return people;
+  // People already shown (casting or the director's sheet) are the occupants: they sit inside while the car drives.
+  if (people.castMembers.length || people.castDescription) return people;
+  if (explicitlyNoPeople(String(brief.character ?? ''), String(brief.user_direction ?? ''))) return { ...people, excludePeople: true, cabin: 'hidden' };
+  return { excludePeople: false, castMembers: [], castTitles: [], castDescription: driver.description, cabin: 'driver' };
+}
+
+function shotPeople(brief: Record<string, unknown>, shot: StoryboardShot | undefined): ShotPeople {
   const cast = storedCast(brief);
   if (cast.length) {
     const members = [...new Set(shot?.castIds ?? [])].map((id) => cast.find((member) => member.id === id)).filter((member): member is StoredCastMember => Boolean(member));

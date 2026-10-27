@@ -8,7 +8,7 @@ import { type StoryboardShot, type StoryMode, type TravelDirection, type TravelS
 import type { ReferenceVideoProvider } from './fal-reference-video';
 import { MODEL_ENDPOINTS } from './model-routing';
 import { lightingSentence, moodForPrompt } from '@/core/scenes/prompt-values';
-import { DRIVING_RULES, fitPrompt, groundContact, HEADING_ALIGNED, INTERIOR_STILL, isBridgePlace, PEOPLE_IN_MOVING_CAR, IMAGE_PROMPT_MAX_CHARS, KEEP_IDENTITY, roadAligned, NO_BODYWORK_CONTACT, NO_TEXT_IMAGE, NO_TEXT_VIDEO, placeRule, steeringRule, trafficRule, VIDEO_PROMPT_MAX_CHARS, framingRule, framingCheck, IDENTITY_DEFECT, INTEGRATION_CHECK, NO_EXTRA_VEHICLE_CHECK, WHEEL_PHYSICS, type PromptBlock } from '@/core/prompts/rules';
+import { DRIVER_AT_WHEEL, DRIVING_RULES, fitPrompt, groundContact, HEADING_ALIGNED, HIDDEN_CABIN, INTERIOR_STILL, isBridgePlace, PEOPLE_IN_MOVING_CAR, IMAGE_PROMPT_MAX_CHARS, KEEP_IDENTITY, roadAligned, NO_BODYWORK_CONTACT, NO_TEXT_IMAGE, NO_TEXT_VIDEO, placeRule, steeringRule, trafficRule, VIDEO_PROMPT_MAX_CHARS, framingRule, framingCheck, IDENTITY_DEFECT, INTEGRATION_CHECK, NO_EXTRA_VEHICLE_CHECK, WHEEL_PHYSICS, type PromptBlock } from '@/core/prompts/rules';
 export { GROUND_CONTACT, NO_BODYWORK_CONTACT, WHEEL_PHYSICS } from '@/core/prompts/rules';
 
 export const KEYFRAME_IMAGE_ENDPOINT = 'fal-ai/nano-banana-2/edit';
@@ -38,9 +38,15 @@ function normalizedView(value: string | null | undefined) {
   return (value ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLocaleLowerCase('fr');
 }
 
+const NO_PEOPLE_REQUEST = /\b(?:aucun|aucune|sans|pas de|no)\s+(?:personnages?|personnes?|famille|couple|conducteurs?|conductrices?|passagers?|passagères?|visages?|silhouettes?|people|persons?|drivers?|passengers?)\b/i;
+
+/** 27/10 · the brief says « sans personne » (or « aucun conducteur »…): an explicit choice, unlike a brief that is silent. */
+export function explicitlyNoPeople(character: string | null | undefined, direction: string | null | undefined): boolean {
+  return NO_PEOPLE_REQUEST.test(`${character ?? ''} ${direction ?? ''}`);
+}
+
 export function shouldExcludePeople(character: string | null | undefined, direction: string | null | undefined): boolean {
-  const brief = `${character ?? ''} ${direction ?? ''}`.trim();
-  if (/\b(?:aucun|aucune|sans|pas de|no)\s+(?:personnages?|personnes?|famille|couple|conducteurs?|conductrices?|passagers?|passagères?|visages?|silhouettes?|people|persons?|drivers?|passengers?)\b/i.test(brief)) return true;
+  if (explicitlyNoPeople(character, direction)) return true;
   if (character?.trim() && !/as explicitly requested.*otherwise none/i.test(character)) return false;
   return !/\b(?:famille|family|conducteur|conductrice|passager|passagère|personne|couple|enfant|homme|femme|vendeur|vendeuse|client|clients|driver|passenger|people|person)\b/i.test(direction ?? '');
 }
@@ -156,6 +162,14 @@ function clipPlanCheck(shot: StoryboardShot): string {
  */
 export type DrivingRules = { steeringSide?: 'left' | 'right'; trafficSide?: 'left' | 'right'; steeringWithPeopleOnly?: boolean };
 
+/**
+ * 27/10 · who is in the cabin of a car that drives (or has just stopped after driving), see versions/moving-driver.ts:
+ * 'driver' = the discreet default driver (description in castDescription); 'hidden' = « sans personne » asked, the
+ * windows reflect the surroundings. Absent = previous behaviour (versions before 27/10, stopped shots).
+ */
+export type CabinRule = 'driver' | 'hidden';
+const EMPTY_SEAT_DEFECT = 'a visibly empty driver seat in a car that drives';
+
 /** 24/10: steering wheel on the wrong side, driver looking backwards while driving. 26/10: also in an empty car. */
 function steeringCheck(input: DrivingRules & { excludePeople?: boolean }) {
   if (!input.steeringSide) return '';
@@ -175,18 +189,25 @@ export function peopleSheetText(description: string | null | undefined): string 
   return (description ?? '').replace(/[<>{}]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 400).replace(/[\s.;,:]+$/, '');
 }
 
-function peopleCheck(input: DrivingRules & { excludePeople?: boolean; castTitles?: string[]; castDescription?: string | null }, subject: string) {
+function peopleCheck(input: DrivingRules & { excludePeople?: boolean; castTitles?: string[]; castDescription?: string | null; cabin?: CabinRule }, subject: string) {
   const driver = steeringCheck(input);
+  if (input.cabin === 'hidden') return ` Reject any visible person or human silhouette inside or outside the car in ${subject}; the windows should reflect the surroundings so the cabin is not readable. ${capitalize(EMPTY_SEAT_DEFECT)} is blocking.${driver}`;
   if (input.excludePeople) return ` Reject any visible driver, passenger, face, person, or human silhouette inside or outside the car in ${subject}; the vehicle must look visually unoccupied.${driver}`;
+  // A driver that reflections partly hide is fine; an empty seat, when the cabin can be seen, is not.
+  const seat = input.cabin === 'driver' ? ` When the cabin can be seen, a driver sits at the wheel: ${EMPTY_SEAT_DEFECT} is blocking.` : '';
   const inside = ' While the car moves, every person must be inside it (driver or passenger): a person walking or standing outside a moving car is a defect.';
   if (input.castTitles?.length) return ` Every person visible in ${subject} must be one of the casting photos and keep the same face, skin tone, hairstyle, build and clothing; reject any extra, duplicated or different-looking person.${inside}${driver}`;
   // 26/10: without casting, the appearance is checked against the director's sheet (data, not instructions).
   const sheet = peopleSheetText(input.castDescription);
   const appearance = sheet ? ` People description (data): "${sheet.replace(/["\\`]/g, ' ')}". Every visible person must match this description; a different-looking or extra person is blocking.` : '';
-  return `${appearance}${inside}${driver}`;
+  return `${appearance}${inside}${seat}${driver}`;
 }
 
-export function buildKeyframeQualityPrompt(input: DrivingRules & { timeOfDay?: PlaceTimeOfDay | null; vehicleReferenceCount: number; hasLocationReference: boolean; excludePeople?: boolean; castTitles?: string[]; castDescription?: string | null; interior?: boolean; moving?: boolean; onRoad?: boolean; framing?: FramingCriterion; plan?: StoryboardShot }) {
+function capitalize(text: string) {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+export function buildKeyframeQualityPrompt(input: DrivingRules & { timeOfDay?: PlaceTimeOfDay | null; vehicleReferenceCount: number; hasLocationReference: boolean; excludePeople?: boolean; cabin?: CabinRule; castTitles?: string[]; castDescription?: string | null; interior?: boolean; moving?: boolean; onRoad?: boolean; framing?: FramingCriterion; plan?: StoryboardShot }) {
   // 26/10: same badge wording as the clip judge, and the requested framing as a criterion, on every tier.
   const framing = input.framing ? ` ${framingCheck(input.framing)}` : '';
   const plan = input.plan ? ` ${shotPlanData(input.plan)}${input.interior ? '' : ` ${keyframePlanCheck(input.plan, input.onRoad)}`}`.trimEnd() : '';
@@ -210,7 +231,7 @@ export function videoQualityTimestamps(durationS: number) {
   return { frames: VIDEO_QUALITY_FRAME_RATIOS.map(at), crops: VIDEO_QUALITY_CROP_RATIOS.map(at) };
 }
 
-export function buildVideoQualityPrompt(input: DrivingRules & { timeOfDay?: PlaceTimeOfDay | null; vehicleReferenceCount: number; hasLocationReference: boolean; excludePeople: boolean; castTitles?: string[]; castDescription?: string | null; shotType?: KeyframeShotType; durationS?: number; interior?: boolean; moving?: boolean; onRoad?: boolean; framing?: FramingCriterion; plan?: StoryboardShot; startKeyframe?: boolean }) {
+export function buildVideoQualityPrompt(input: DrivingRules & { timeOfDay?: PlaceTimeOfDay | null; vehicleReferenceCount: number; hasLocationReference: boolean; excludePeople: boolean; cabin?: CabinRule; castTitles?: string[]; castDescription?: string | null; shotType?: KeyframeShotType; durationS?: number; interior?: boolean; moving?: boolean; onRoad?: boolean; framing?: FramingCriterion; plan?: StoryboardShot; startKeyframe?: boolean }) {
   const motion = `${VIDEO_MOTION_CHECK[input.shotType ?? 'rolling']}${input.plan ? clipPlanCheck(input.plan) : ''}`;
   const framing = input.framing ? ` ${framingCheck(input.framing)}` : '';
   const { frames, crops } = videoQualityTimestamps(input.durationS ?? 5);
@@ -220,12 +241,13 @@ export function buildVideoQualityPrompt(input: DrivingRules & { timeOfDay?: Plac
 }
 
 /** Driving defects added to the clip judge's list of blocking defects. */
-function videoDrivingDefects(input: DrivingRules & { excludePeople: boolean; moving?: boolean; onRoad?: boolean }) {
+function videoDrivingDefects(input: DrivingRules & { excludePeople: boolean; moving?: boolean; onRoad?: boolean; cabin?: CabinRule }) {
   const steering = !input.steeringSide ? ''
     : !input.excludePeople ? '; a steering wheel or driver on the wrong side; a driver turned away from the road while driving'
       : input.steeringWithPeopleOnly ? '' : '; a steering wheel on the wrong side';
   const road = input.onRoad && input.moving ? '; a path that leaves the road or changes axis' : '';
-  return `${steering}${input.trafficSide && input.moving ? '; a car in the lane of the wrong side of the road' : ''}${road}`;
+  const seat = input.cabin ? `; ${EMPTY_SEAT_DEFECT}` : '';
+  return `${steering}${input.trafficSide && input.moving ? '; a car in the lane of the wrong side of the road' : ''}${road}${seat}`;
 }
 
 const qualitySchema = z.object({
@@ -341,7 +363,7 @@ export function isMoving(shot: StoryboardShot) {
 }
 
 /** People policy shared by the image and video prompts, with the brand's steering side (brands.steering_side). */
-export function peopleDirection(input: DrivingRules & { excludePeople?: boolean; castTitles?: string[]; castDescription?: string | null; stage: 'keyframe' | 'animation'; moving?: boolean }): string {
+export function peopleDirection(input: DrivingRules & { excludePeople?: boolean; castTitles?: string[]; castDescription?: string | null; stage: 'keyframe' | 'animation'; moving?: boolean; cabin?: CabinRule }): string {
   const text = peopleText(input);
   const occupied = Boolean(text) && !input.excludePeople;
   // 26/10: an empty car keeps the brand's side too (its wheel shows through the glass); versions before 26/10 did not.
@@ -349,9 +371,11 @@ export function peopleDirection(input: DrivingRules & { excludePeople?: boolean;
   return [text, steering].filter(Boolean).join(' ');
 }
 
-function peopleText(input: { excludePeople?: boolean; castTitles?: string[]; castDescription?: string | null; stage: 'keyframe' | 'animation'; moving?: boolean }): string {
+function peopleText(input: { excludePeople?: boolean; castTitles?: string[]; castDescription?: string | null; stage: 'keyframe' | 'animation'; moving?: boolean; cabin?: CabinRule }): string {
+  if (input.cabin === 'hidden') return HIDDEN_CABIN;
   // In a moving shot people are in the car; outside the car only when it is stopped (22/10: a character walked beside the moving car).
-  const place = input.moving ? PEOPLE_IN_MOVING_CAR : NO_BODYWORK_CONTACT;
+  // 27/10: the default driver stays at the wheel, also in the stop that follows a drive.
+  const place = input.cabin === 'driver' ? DRIVER_AT_WHEEL : input.moving ? PEOPLE_IN_MOVING_CAR : NO_BODYWORK_CONTACT;
   if (input.castTitles?.length) {
     return input.stage === 'keyframe'
       ? `People: only the person(s) in the casting photos (${input.castTitles.join('; ')}), with the same face, hair, skin tone and clothes; ${place}.`
@@ -427,6 +451,8 @@ export function buildKeyframePrompt(input: {
   vehicleReferenceCount?: number;
   hasLocationReference?: boolean;
   excludePeople?: boolean;
+  /** 27/10 · driver of a car that drives (see CabinRule). */
+  cabin?: CabinRule;
   castTitles?: string[];
   castDescription?: string | null;
   /** Description of the selected place and the brand market (absent on videos created before 25/10). */
@@ -471,7 +497,7 @@ export function buildKeyframePrompt(input: {
  * Patch v3.2 · animation prompt, capped at 2 000 characters for every engine (VIDEO_PROMPT_MAX_CHARS). The lowest
  * engine limit is Kling O3's 2 500 (fal 422, 22/10), so no per-engine limit is needed (removed 26/10).
  */
-export function buildKeyframeAnimationPrompt(input: { shot: StoryboardShot; vehicle: string; durationS: number; mood: string; lighting: string; excludePeople?: boolean; retryReason?: string | null; castTitles?: string[]; castDescription?: string | null; hasEndFrame?: boolean; place?: string; market?: string; interior?: boolean; framed?: boolean } & DrivingRules) {
+export function buildKeyframeAnimationPrompt(input: { shot: StoryboardShot; vehicle: string; durationS: number; mood: string; lighting: string; excludePeople?: boolean; cabin?: CabinRule; retryReason?: string | null; castTitles?: string[]; castDescription?: string | null; hasEndFrame?: boolean; place?: string; market?: string; interior?: boolean; framed?: boolean } & DrivingRules) {
   return fitPrompt([
     { text: `Animate this image as the first frame of a ${input.durationS}-second live-action car commercial shot. ${KEEP_IDENTITY}` },
     { text: `Action: ${input.shot.action}.`, shrinkTo: 60 },
@@ -509,7 +535,7 @@ const END_FRAME_TRAVEL: Record<TravelDirection, string> = {
 };
 
 /** `strictFrames`: versions with `frameChecks: 2` also get the framing rule of a still frame (whole car in frame). */
-export function buildEndKeyframePrompt(input: { shot: StoryboardShot; durationS: number; format: string; excludePeople?: boolean; castTitles?: string[]; castDescription?: string | null; place?: string; market?: string; interior?: boolean; onRoad?: boolean; strictFrames?: boolean } & DrivingRules) {
+export function buildEndKeyframePrompt(input: { shot: StoryboardShot; durationS: number; format: string; excludePeople?: boolean; cabin?: CabinRule; castTitles?: string[]; castDescription?: string | null; place?: string; market?: string; interior?: boolean; onRoad?: boolean; strictFrames?: boolean } & DrivingRules) {
   const where = END_FRAME_TRAVEL[input.shot.travelDirection ?? 'left_to_right'];
   return fitPrompt([
     { text: `Image 1 is the opening frame of a ${input.durationS}-second live-action car commercial shot; image 2 shows the exact vehicle. Create the closing frame of the same continuous shot: same car, place, light and camera (${input.shot.camera}), with the car having driven forward ${where}, realistically for its speed. Fixed objects stay where they are in the world. ${groundContact(input.interior)}`, shrinkTo: 300 },
@@ -526,7 +552,7 @@ export function buildEndKeyframePrompt(input: { shot: StoryboardShot; durationS:
  * Judge of the end frame. With `framing` (versions with `frameChecks: 2`, vérification « preambule »), it also checks
  * what the keyframe judge checks: the requested framing, the pasted-on look and another vehicle.
  */
-export function buildEndKeyframeQualityPrompt(input: DrivingRules & { excludePeople?: boolean; castTitles?: string[]; castDescription?: string | null; onRoad?: boolean; framing?: FramingCriterion }) {
+export function buildEndKeyframeQualityPrompt(input: DrivingRules & { excludePeople?: boolean; cabin?: CabinRule; castTitles?: string[]; castDescription?: string | null; onRoad?: boolean; framing?: FramingCriterion }) {
   const complete = input.framing ? ` ${framingCheck(input.framing)} ${INTEGRATION_CHECK} ${NO_EXTRA_VEHICLE_CHECK} ${END_FRAME_FORWARD_CHECK}` : '';
   return `Image 1 = candidate closing frame; image 2 = approved opening frame of the same shot; image 3 = approved photo of the exact vehicle. Approve only if the candidate shows the same vehicle (identity, paint, wheels, badges), the same location and light, a plausible camera continuity with image 2, and the vehicle visibly further along its path than in image 2. Reject a collage or split-screen.${complete} ${input.onRoad ? `${ROAD_AXIS_CHECK} ` : ''}${NO_READABLE_TEXT_CHECK}${peopleCheck(input, 'the candidate')}${trafficCheck(input, true)} Do not invent defects that are not visible. ${SEVERITY_PREFIX} Return compact JSON only.`;
 }

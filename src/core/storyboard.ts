@@ -285,6 +285,8 @@ export function peopleShotsIssue(shots: StoryboardShot[], sheet: string | undefi
 
 /** 22/10: a character walked beside the moving car. */
 const PEOPLE_PLACEMENT = 'While the car moves, the people are inside it (driver at the wheel, passengers seated); they stand or walk outside only in a shot where the car is stopped. Say where they are in "action".';
+/** 27/10 · the driver of a car that drives is added by the application (versions/moving-driver.ts). */
+const NO_GHOST_CAR = 'Never call a driving car empty or driverless.';
 
 function peopleRule(input: { cast?: CastMember[]; noPeople?: boolean; peoplePreset?: PeoplePresetId }) {
   if (input.noPeople) return 'PEOPLE: nobody in any shot, inside or outside the car. castIds is [] and castDescription is empty.';
@@ -292,7 +294,7 @@ function peopleRule(input: { cast?: CastMember[]; noPeople?: boolean; peoplePres
   // Studio « Personnage » choice: people are required, and the sheet keeps them identical from shot to shot.
   if (preset) return `PEOPLE: ${preset}. Describe them once in castDescription (age, skin tone, build, hair, clothes and colours). ${PEOPLE_SHOTS} They look identical wherever they appear, never leaning on the car. ${PEOPLE_PLACEMENT} Omit castIds.`;
   if (input.cast?.length) return `PEOPLE: only this approved casting: ${JSON.stringify(input.cast)}. For each shot, castIds lists who is visible ([] = nobody, the car looks empty). The same people in every shot unless the brief asks otherwise; never leaning on the car. ${PEOPLE_PLACEMENT} castDescription stays empty; omit withPeople.`;
-  return `PEOPLE: nobody unless the brief asks. If it does, describe them once in castDescription (age, skin tone, build, hair, clothes and colours). ${PEOPLE_SHOTS} They look identical wherever they appear, never leaning on the car. ${PEOPLE_PLACEMENT} Omit castIds. Without people, castDescription is empty and withPeople false.`;
+  return `PEOPLE: nobody unless the brief asks. If it does, describe them once in castDescription (age, skin tone, build, hair, clothes and colours). ${PEOPLE_SHOTS} They look identical wherever they appear, never leaning on the car. ${PEOPLE_PLACEMENT} Omit castIds. Without people, castDescription is empty and withPeople false. ${NO_GHOST_CAR}`;
 }
 
 /**

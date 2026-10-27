@@ -25,6 +25,7 @@ import { expandSingleShotStoryboard, holdStillInInterior, validateStoryboardCast
 import { assembleShotMontage, extractRepresentativeVideoFrames } from '@/core/postproduction/pipeline';
 import { MAX_MONTAGE_ATTEMPTS, montageFailureDecision } from '@/core/postproduction/montage-failure';
 import { peopleForShot, storedCast, withCastReferences, type StoredCastMember } from './casting';
+import { loadDefaultDriver } from './moving-driver';
 import { collectQualityWarnings, storedQualityWarnings, warningIssues } from './quality-gate';
 import { appendVerification, applyShotRevision, clipRedoReservations, clipRedosDone, pendingClipRedo, pendingHumanFeedback, HUMAN_REVISIONS_PER_SHOT, humanRevisionsUsed, buildShotRevisionInstruction, buildShotRevisionPrompt, clipLoopDecision, defectsAsData, effectiveShotDraft, keyframeCorrectionsAllowed, keyframeLoopDecision, MAX_CLIP_RETRIES, MAX_KEYFRAME_ATTEMPTS, MAX_KEYFRAME_CORRECTIONS, storedVerdict, UNREADABLE_VERDICT, type ReviewRequest } from '@/core/verification/loop';
 import { readShotRevision, SHOT_REVISION_RESERVE_USD, submitShotRevision } from '@/core/providers/fal-shot-revision';
@@ -229,7 +230,9 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
   const prompts = keyframeMode ? [] : generationShots.map((shot) => buildKeyframeAnimationPrompt({ shot, vehicle: vehicleDescription, durationS: shot.durationSeconds, mood: String(brief.mood ?? ''), lighting: String(brief.lighting ?? ''), excludePeople: true }));
   // Lighting per shot follows its place photo (a night place is never lit « comme le matin »).
   const castDescription = castMode ? '' : (input.castDescription ?? '').replace(/[<>{}]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 400);
-  const peopleBrief: Record<string, unknown> = { ...brief, castAssets, castDescription, promptRules: 'v3.2' };
+  // 27/10: a car that drives has a driver; its description (brand setting) is frozen so every shot shows the same person.
+  const movingDriver = await loadDefaultDriver(admin, actor.brandId);
+  const peopleBrief: Record<string, unknown> = { ...brief, castAssets, castDescription, promptRules: 'v3.2', movingDriver, storyboard: generationShots, interiorPlaceIds };
   const endFrameShots = keyframeMode ? generationShots.map((shot) => needsEndKeyframe(shot, env.KEYFRAME_END_FRAME_ROLLING)) : generationShots.map(() => false);
   const endFrameCount = endFrameShots.filter(Boolean).length;
   const shotLighting = generationShots.map((shot) => {
@@ -240,9 +243,9 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
   const keyframePrompts = keyframeMode ? generationShots.map((shot, index) => {
     const referenceIds = keyframeReferencesByShot[index]?.assetIds ?? [shot.vehiclePhotoId];
     const hasLocationReference = Boolean(shot.locationPhotoId && placeAssets.some((photo) => photo.id === shot.locationPhotoId));
-    const people = peopleForShot(peopleBrief, shot);
+    const people = peopleForShot(peopleBrief, shot, index + 1);
     const vehicleReferenceCount = Math.max(1, referenceIds.filter((id) => id !== shot.locationPhotoId && !people.castMembers.some((member) => member.id === id)).length);
-    return buildKeyframePrompt({ shot, vehicle: vehicleDescription, lighting: shotLighting[index], format: input.format, retryReason: null, vehicleReferenceCount, hasLocationReference, excludePeople: people.excludePeople, castTitles: people.castTitles, castDescription: people.castDescription, place: shot.locationPhotoId ? placeDescriptions[shot.locationPhotoId] : undefined, market: marketLocation, steeringSide, trafficSide, interior: Boolean(shot.locationPhotoId && interiorPlaceIds.includes(shot.locationPhotoId)), onRoad: !(shot.locationPhotoId && interiorPlaceIds.includes(shot.locationPhotoId)), framed: true });
+    return buildKeyframePrompt({ shot, vehicle: vehicleDescription, lighting: shotLighting[index], format: input.format, retryReason: null, vehicleReferenceCount, hasLocationReference, excludePeople: people.excludePeople, castTitles: people.castTitles, castDescription: people.castDescription, cabin: people.cabin, place: shot.locationPhotoId ? placeDescriptions[shot.locationPhotoId] : undefined, market: marketLocation, steeringSide, trafficSide, interior: Boolean(shot.locationPhotoId && interiorPlaceIds.includes(shot.locationPhotoId)), onRoad: !(shot.locationPhotoId && interiorPlaceIds.includes(shot.locationPhotoId)), framed: true });
   }) : [];
   const displayPrompts = keyframeMode ? keyframePrompts : prompts;
   // Premium keyframes in 2K (0,12 USD instead of 0,08): frozen for every image, reservation and settlement of this version.
@@ -286,7 +289,7 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
   if (videoError || !video) throw new HttpError(500, 'Impossible de créer la vidéo. Réessayez.');
   // 27/10: validation of the keyframes before the animation, frozen at launch; the brand setting has the last word.
   const keyframeApproval = { required: keyframeMode && resolveKeyframeApproval(await loadBrandApprovalMode(admin, actor.brandId), input.keyframeApproval, input.storyMode) };
-  const storedBrief = { ...brief, filmLighting, timeTransition: input.timeTransition, keyframeApproval, storyboard: generationShots, approvedStoryboard: input.storyboard, generationTier: input.storyMode, overlayLogo: input.overlayLogo, audioAssetId: input.audioAssetId ?? null, multiClipMode: !isSingleShot, singleStoryboardMode: isSingleShot, storyMode: input.storyMode, clipDurationSeconds: input.clipDurationSeconds, finalDurationSeconds: finalVideoSeconds(input.clipDurationSeconds), purpose: input.purpose, vehicleDossierId: input.vehicleDossierId, vehiclePhotoIds: selectedVehiclePhotos.map((photo) => photo.id), keyframeReferencesByShot, placeIds: input.placeIds,  castAssets, castDescription, placeDescriptions, interiorPlaceIds, renderSettings: render, ...(marketLocation ? { marketLocation } : {}), ...(steeringSide ? { steeringSide } : {}), ...(trafficSide ? { trafficSide } : {}), motionMatrix, framingRules: true, frameChecks: 2, endFrameMode: endFrameCount > 0, promptRules: 'v3.2', ...(pricingWarning ? { pricingWarning } : {}), ...(premiumQualityMode ? { videoQualityMode: true } : {}), costPlanUsd: costPlanForBrief(costPlan), shotLighting, processingMetrics: { requestedAt: new Date().toISOString() }, shotProcessingMetrics: {}, ...(input.comparisonCampaignId ? { comparisonCampaignId: input.comparisonCampaignId } : {}) };
+  const storedBrief = { ...brief, filmLighting, timeTransition: input.timeTransition, keyframeApproval, storyboard: generationShots, approvedStoryboard: input.storyboard, generationTier: input.storyMode, overlayLogo: input.overlayLogo, audioAssetId: input.audioAssetId ?? null, multiClipMode: !isSingleShot, singleStoryboardMode: isSingleShot, storyMode: input.storyMode, clipDurationSeconds: input.clipDurationSeconds, finalDurationSeconds: finalVideoSeconds(input.clipDurationSeconds), purpose: input.purpose, vehicleDossierId: input.vehicleDossierId, vehiclePhotoIds: selectedVehiclePhotos.map((photo) => photo.id), keyframeReferencesByShot, placeIds: input.placeIds,  castAssets, castDescription, movingDriver, placeDescriptions, interiorPlaceIds, renderSettings: render, ...(marketLocation ? { marketLocation } : {}), ...(steeringSide ? { steeringSide } : {}), ...(trafficSide ? { trafficSide } : {}), motionMatrix, framingRules: true, frameChecks: 2, endFrameMode: endFrameCount > 0, promptRules: 'v3.2', ...(pricingWarning ? { pricingWarning } : {}), ...(premiumQualityMode ? { videoQualityMode: true } : {}), costPlanUsd: costPlanForBrief(costPlan), shotLighting, processingMetrics: { requestedAt: new Date().toISOString() }, shotProcessingMetrics: {}, ...(input.comparisonCampaignId ? { comparisonCampaignId: input.comparisonCampaignId } : {}) };
   const { data: version, error: versionError } = await admin.from('video_versions').insert({
     video_id: video.id, number: 1, brief_json: storedBrief, generated_prompt: displayPrompts.join('\n\n--- Plan suivant ---\n\n'),
     ai_model_id: videoModel.id, fal_credential_id: falCredential.id, status: 'queued', generation_seconds: finalVideoSeconds(input.clipDurationSeconds),
@@ -581,7 +584,7 @@ async function refreshEndKeyframe(input: {
   }
 
   if (status === 'queued') {
-    const prompt = buildEndKeyframePrompt({ shot: draft, durationS: Number(shot.duration_seconds), format: String(brief.format ?? '16:9'), excludePeople: people.excludePeople, castTitles: people.castTitles, castDescription: people.castDescription, ...placeForShot(brief, draft), strictFrames: hasStrictFrameChecks(brief) });
+    const prompt = buildEndKeyframePrompt({ shot: draft, durationS: Number(shot.duration_seconds), format: String(brief.format ?? '16:9'), excludePeople: people.excludePeople, castTitles: people.castTitles, castDescription: people.castDescription, cabin: people.cabin, ...placeForShot(brief, draft), strictFrames: hasStrictFrameChecks(brief) });
     try {
       const job = await submitKeyframe({ prompt, imageUrls: [startUrl, input.vehicleUrl], aspectRatio: String(brief.format ?? '16:9'), resolution: render.keyframeResolution }, apiKey);
       const { error } = await update({ end_keyframe_status: 'generating', end_keyframe_request_id: job.requestId });
@@ -611,7 +614,7 @@ async function refreshEndKeyframe(input: {
       if (uploadError) throw new Error(uploadError.message);
       const endUrl = await createSignedStorageObjectUrl((path, expiresIn) => admin.storage.from(target.bucket).createSignedUrl(path, expiresIn), target.bucket, target.path);
       if (!endUrl) throw new Error('lien signé indisponible');
-      const job = await submitKeyframeQuality({ prompt: `${buildEndKeyframeQualityPrompt({ excludePeople: people.excludePeople, castTitles: people.castTitles, castDescription: people.castDescription, ...storedDrivingRules(brief), onRoad: placeForShot(brief, draft).onRoad, framing: hasStrictFrameChecks(brief) ? framingCriterionOf(brief, draft, 'still') : undefined })} Shot: ${draft.title}; camera: ${draft.camera}.`, imageUrls: [endUrl, startUrl, input.vehicleUrl] }, apiKey);
+      const job = await submitKeyframeQuality({ prompt: `${buildEndKeyframeQualityPrompt({ excludePeople: people.excludePeople, castTitles: people.castTitles, castDescription: people.castDescription, cabin: people.cabin, ...storedDrivingRules(brief), onRoad: placeForShot(brief, draft).onRoad, framing: hasStrictFrameChecks(brief) ? framingCriterionOf(brief, draft, 'still') : undefined })} Shot: ${draft.title}; camera: ${draft.camera}.`, imageUrls: [endUrl, startUrl, input.vehicleUrl] }, apiKey);
       const { error } = await update({ end_keyframe_status: 'checking', end_keyframe_path: target.path, end_keyframe_quality_request_id: job.requestId });
       if (error) await giveUp(`Contrôle de l’image de fin non enregistré (request_id=${job.requestId}).`, [charge(qualityLedgerId, KEYFRAME_QUALITY_RESERVE_USD)]);
     } catch (cause) {
@@ -696,7 +699,7 @@ async function refreshKeyframes(input: {
     const persistedAssetIds = referenceByShot.get(shotNumber);
     const referenceIds = persistedAssetIds?.length ? persistedAssetIds : [draft.vehiclePhotoId, ...(draft.locationPhotoId ? [draft.locationPhotoId] : [])];
     const vehicleReferenceIds = referenceIds.filter((id) => id !== draft.locationPhotoId && !castIdSet.has(id));
-    const people = peopleForShot(brief, draft);
+    const people = peopleForShot(brief, draft, shotNumber);
     const placePath = draft.locationPhotoId ? locationPaths.get(draft.locationPhotoId) ?? assetsById.get(draft.locationPhotoId)?.path : undefined;
     if (!vehicle || !placePath && draft.locationPhotoId) throw new HttpError(422, `Une référence du plan ${shotNumber} n’est plus disponible.`);
     if (vehicleReferenceIds[0] !== draft.vehiclePhotoId || draft.locationPhotoId && referenceIds.at(-1) !== draft.locationPhotoId) throw new HttpError(422, `L’ordre des références mémorisées du plan ${shotNumber} est invalide.`);
@@ -718,7 +721,7 @@ async function refreshKeyframes(input: {
     /** Next image of the loop: same references, the shot to produce (corrected or not) and the verifier's defects as data. */
     const resubmitKeyframe = async (shotForPrompt: StoryboardShot, retryReason: string, patch: Record<string, unknown>) => {
       const nextAttempt = attempt + 1;
-      const prompt = buildKeyframePrompt({ shot: shotForPrompt, vehicle: String(brief.vehicle_description ?? 'Véhicule fidèle à la photo validée'), lighting: lightingForShot(brief, shotNumber), format: String(brief.format ?? '16:9'), retryReason, vehicleReferenceCount, hasLocationReference: Boolean(draft.locationPhotoId), excludePeople: people.excludePeople, castTitles: people.castTitles, castDescription: people.castDescription, ...placeForShot(brief, shotForPrompt) });
+      const prompt = buildKeyframePrompt({ shot: shotForPrompt, vehicle: String(brief.vehicle_description ?? 'Véhicule fidèle à la photo validée'), lighting: lightingForShot(brief, shotNumber), format: String(brief.format ?? '16:9'), retryReason, vehicleReferenceCount, hasLocationReference: Boolean(draft.locationPhotoId), excludePeople: people.excludePeople, castTitles: people.castTitles, castDescription: people.castDescription, cabin: people.cabin, ...placeForShot(brief, shotForPrompt) });
       const retryPatch = { ...patch, keyframe_status: 'generating', keyframe_endpoint: KEYFRAME_IMAGE_ENDPOINT, keyframe_quality_request_id: null, keyframe_quality_endpoint: null, keyframe_path: null, keyframe_retry_count: nextAttempt, revision_request_id: null, revision_ledger_id: null, provider_poll_failure_count: 0, provider_next_poll_at: null, provider_last_poll_error: null };
       let retryRequestId: string | null = null;
       try {
@@ -848,7 +851,7 @@ async function refreshKeyframes(input: {
       }
       const signedUrl = await createSignedStorageObjectUrl((storagePath, expiresIn) => admin.storage.from(target.bucket).createSignedUrl(storagePath, expiresIn), target.bucket, target.path);
       if (!signedUrl) throw new HttpError(503, 'Impossible de créer le lien de contrôle temporaire.');
-      const visionPrompt = `${buildKeyframeQualityPrompt({ timeOfDay: brief.filmLighting ? storedMotionMatrix(brief)?.places[draft.locationPhotoId ?? ""]?.timeOfDay : undefined, vehicleReferenceCount, hasLocationReference: Boolean(draft.locationPhotoId), excludePeople: people.excludePeople, castTitles: people.castTitles, castDescription: people.castDescription, ...storedDrivingRules(brief), interior: placeForShot(brief, draft).interior, onRoad: placeForShot(brief, draft).onRoad, moving: isMoving(draft), framing: framingCriterionOf(brief, draft, 'still'), plan: draft })}`;
+      const visionPrompt = `${buildKeyframeQualityPrompt({ timeOfDay: brief.filmLighting ? storedMotionMatrix(brief)?.places[draft.locationPhotoId ?? ""]?.timeOfDay : undefined, vehicleReferenceCount, hasLocationReference: Boolean(draft.locationPhotoId), excludePeople: people.excludePeople, castTitles: people.castTitles, castDescription: people.castDescription, cabin: people.cabin, ...storedDrivingRules(brief), interior: placeForShot(brief, draft).interior, onRoad: placeForShot(brief, draft).onRoad, moving: isMoving(draft), framing: framingCriterionOf(brief, draft, 'still'), plan: draft })}`;
       let qualityJob: { requestId: string };
       try {
         qualityJob = await submitKeyframeQuality({ prompt: visionPrompt, imageUrls: [signedUrl, ...referenceUrls] }, apiKey);
@@ -997,11 +1000,11 @@ async function refreshKeyframes(input: {
     const signedUrl = await createSignedStorageObjectUrl((path, expiresIn) => admin.storage.from('videos').createSignedUrl(path, expiresIn), 'videos', shot.keyframe_path);
     if (!signedUrl) throw new HttpError(503, 'Impossible de préparer une image-clé pour son animation.');
     const endImageUrl = await endKeyframeUrl(admin, shot);
-    const people = peopleForShot(brief, draft);
+    const people = peopleForShot(brief, draft, Number(shot.shot_number));
     const prompt = buildKeyframeAnimationPrompt({
       shot: draft, vehicle: String(brief.vehicle_description ?? 'Véhicule de référence'),
       durationS: Number(shot.duration_seconds), mood: String(brief.mood ?? ''), lighting: lightingForShot(brief, Number(shot.shot_number)),
-      excludePeople: people.excludePeople, castTitles: people.castTitles, castDescription: people.castDescription, hasEndFrame: Boolean(endImageUrl),
+      excludePeople: people.excludePeople, castTitles: people.castTitles, castDescription: people.castDescription, cabin: people.cabin, hasEndFrame: Boolean(endImageUrl),
       ...placeForShot(brief, draft),
     });
     const job = await provider.submit({ prompt, referenceImageUrls: [signedUrl], ...(endImageUrl ? { endImageUrl } : {}), durationS: Number(shot.duration_seconds), aspectRatio: String(brief.format ?? '16:9'), endUserId: String(video.user_id) }, apiKey);
@@ -1158,11 +1161,11 @@ async function refreshStoryboardState(versionId: string, actor: Actor) {
       if (retryClaimError) throw new HttpError(503, `Impossible de verrouiller la reprise du plan ${shotNumber}.`);
       if (!retryClaim) return;
       const retryEndImageUrl = await endKeyframeUrl(admin, shot);
-      const retryPeople = peopleForShot(briefData, draft);
+      const retryPeople = peopleForShot(briefData, draft, shotNumber);
       const retryPrompt = buildKeyframeAnimationPrompt({
         shot: draft, vehicle: String(briefData.vehicle_description ?? 'Véhicule de référence'), durationS: Number(shot.duration_seconds),
         mood: String(briefData.mood ?? ''), lighting: lightingForShot(briefData, Number(shot.shot_number)), excludePeople: retryPeople.excludePeople,
-        castTitles: retryPeople.castTitles, castDescription: retryPeople.castDescription, hasEndFrame: Boolean(retryEndImageUrl),
+        castTitles: retryPeople.castTitles, castDescription: retryPeople.castDescription, cabin: retryPeople.cabin, hasEndFrame: Boolean(retryEndImageUrl),
         retryReason: quality.issues.join('; ') || quality.reason, ...placeForShot(briefData, draft),
       });
       let retryJob: { requestId: string };
@@ -1233,7 +1236,7 @@ async function refreshStoryboardState(versionId: string, actor: Actor) {
       const referenceMap = Array.isArray(briefData.keyframeReferencesByShot) ? briefData.keyframeReferencesByShot as Array<{ shotNumber: number; assetIds: string[] }> : [];
       const referenceIds = referenceMap.find((entry) => entry.shotNumber === shotNumber)?.assetIds ?? (draft ? [draft.vehiclePhotoId, ...(draft.locationPhotoId ? [draft.locationPhotoId] : [])] : []);
       const placeId = draft?.locationPhotoId;
-      const clipPeople = peopleForShot(briefData, draft);
+      const clipPeople = peopleForShot(briefData, draft, shotNumber);
       const clipCastIds = clipPeople.castMembers.map((member) => member.id);
       const vehicleIds = referenceIds.filter((id) => id !== placeId && !clipCastIds.includes(id) && !storedCast(briefData).some((member) => member.id === id));
       const { data: refAssets, error: refError } = vehicleIds.length
@@ -1252,7 +1255,7 @@ async function refreshStoryboardState(versionId: string, actor: Actor) {
       const startKeyframeUrl = typeof shot.keyframe_path === 'string' && shot.keyframe_path
         ? await createSignedStorageObjectUrl((path, expiresIn) => admin.storage.from('videos').createSignedUrl(path, expiresIn), 'videos', shot.keyframe_path)
         : null;
-      const visionPrompt = `${buildVideoQualityPrompt({ timeOfDay: briefData.filmLighting ? storedMotionMatrix(briefData)?.places[draft.locationPhotoId ?? ""]?.timeOfDay : undefined, vehicleReferenceCount: vehicleIds.length, hasLocationReference: Boolean(placeId), excludePeople: clipPeople.excludePeople, castTitles: clipPeople.castTitles, castDescription: clipPeople.castDescription, shotType: resolveShotType(draft), durationS: Number(shot.duration_seconds), ...storedDrivingRules(briefData), interior: placeForShot(briefData, draft).interior, onRoad: placeForShot(briefData, draft).onRoad, moving: isMoving(draft), framing: framingCriterionOf(briefData, draft), plan: draft, startKeyframe: Boolean(startKeyframeUrl) })}`;
+      const visionPrompt = `${buildVideoQualityPrompt({ timeOfDay: briefData.filmLighting ? storedMotionMatrix(briefData)?.places[draft.locationPhotoId ?? ""]?.timeOfDay : undefined, vehicleReferenceCount: vehicleIds.length, hasLocationReference: Boolean(placeId), excludePeople: clipPeople.excludePeople, castTitles: clipPeople.castTitles, castDescription: clipPeople.castDescription, cabin: clipPeople.cabin, shotType: resolveShotType(draft), durationS: Number(shot.duration_seconds), ...storedDrivingRules(briefData), interior: placeForShot(briefData, draft).interior, onRoad: placeForShot(briefData, draft).onRoad, moving: isMoving(draft), framing: framingCriterionOf(briefData, draft), plan: draft, startKeyframe: Boolean(startKeyframeUrl) })}`;
       let qualityJob: { requestId: string };
       try {
         qualityJob = await submitKeyframeQuality({ prompt: visionPrompt, imageUrls: [...frameUrls, ...(startKeyframeUrl ? [startKeyframeUrl] : []), ...referenceUrls] }, falCredential.apiKey);

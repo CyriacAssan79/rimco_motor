@@ -76,6 +76,14 @@ export const isBridgePlace = (place: string | undefined) => /\b(?:bridges?|ponts
 /** 22/10: a character walked beside the moving car. 24/10: the driver looked backwards while driving. */
 export const PEOPLE_IN_MOVING_CAR = 'seated inside the car (the driver at the wheel, facing forward, eyes on the road ahead), seen through the windows; nobody walks or stands outside the moving car';
 
+/**
+ * 27/10 · a car that drives has a driver (a driverless moving car reads as a « voiture fantôme »). The default driver
+ * stays discreet: faces and hands are the weak point of the models, so never a close-up on them.
+ */
+export const DRIVER_AT_WHEEL = 'the driver seated at the wheel, facing forward, eyes on the road, seen through the windscreen or side window, face never in close-up; nobody else; nobody outside the car';
+/** 27/10 · « sans personne » asked explicitly: the moving car shows no driver, but no empty cabin either. */
+export const HIDDEN_CABIN = 'The windows reflect the sky and the surroundings, so the cabin cannot be seen; nobody in or around the car.';
+
 /** 24/10 (Pro, « Entrée dans le showroom »): the car drove into a showroom and floated over a podium. Indoors it never moves. */
 export const INTERIOR_STILL = 'Indoor showroom: the car stands still on the showroom floor, all four tyres on the floor; it never drives in or out and never floats; only the camera moves.';
 
