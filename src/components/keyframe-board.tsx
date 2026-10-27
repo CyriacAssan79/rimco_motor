@@ -128,7 +128,7 @@ export function KeyframeBoard({ versionId, board, priceFcfa, onChanged }: { vers
                 </p>
               )}
               {shot.state === 'to_approve' && !shot.canRevise && shot.revisionsLeft === 0 && (
-                <p className="mt-1 text-xs leading-5 text-[#55545a]">Les modifications prévues pour ce plan sont utilisées : validez-le ou annulez la vidéo.</p>
+                <p className="mt-1 text-xs leading-5 text-[#55545a]">Modification utilisée : validez le plan ou annulez la vidéo.</p>
               )}
               {editing === shot.shotNumber && (
                 <div className="mt-3">

@@ -9,10 +9,11 @@ import type { ProcessingMetrics } from './processing-metrics';
 export const PROGRESS_STEPS = ['preparation', 'keyframes', 'clips', 'quality', 'editing'] as const;
 export type ProgressStep = typeof PROGRESS_STEPS[number];
 /** `approval`: the keyframes wait for the user's validation before the animation (27/10). */
-export type ProgressPhase = ProgressStep | 'decision' | 'approval' | 'ready' | 'failed' | 'cancelled';
-const isWaiting = (phase: ProgressPhase) => phase === 'decision' || phase === 'approval';
+export type ProgressPhase = ProgressStep | 'decision' | 'approval' | 'clip_approval' | 'ready' | 'failed' | 'cancelled';
+const runningStatus = (status: string) => ['queued', 'generating', 'postprocessing'].includes(status);
+const isWaiting = (phase: ProgressPhase) => phase === 'decision' || phase === 'approval' || phase === 'clip_approval';
 
-export const STEP_LABELS: Record<ProgressStep | 'decision' | 'approval', string> = {
+export const STEP_LABELS: Record<ProgressStep | 'decision' | 'approval' | 'clip_approval', string> = {
   preparation: 'Préparation',
   keyframes: 'Images clés',
   clips: 'Vidéo des plans',
@@ -20,6 +21,7 @@ export const STEP_LABELS: Record<ProgressStep | 'decision' | 'approval', string>
   editing: 'Montage',
   decision: 'Votre décision',
   approval: 'Votre validation',
+  clip_approval: 'Validation des clips',
 };
 
 export type ShotState = 'keyframe_pending' | 'keyframe_ready' | 'clip_running' | 'clip_ready' | 'checking' | 'checked' | 'decision' | 'failed';
@@ -53,7 +55,7 @@ export type GenerationProgress = {
   /** Step after which « Votre décision » (or « Votre validation ») is shown, while the video waits for a human. */
   decisionAfter: ProgressStep | null;
   /** Which human wait is shown: a shot refused by a verifier, or the keyframe board. */
-  waitKind?: 'decision' | 'approval';
+  waitKind?: 'decision' | 'approval' | 'clip_approval';
   requestedAt: string | null;
   stepStartedAt: string | null;
   /** Finished human waits since the launch, and since the start of the current step (seconds). */
@@ -75,7 +77,7 @@ const parse = (value: string | null | undefined) => {
   return Number.isFinite(ms) ? ms : null;
 };
 
-function mergeIntervals(intervals: Interval[]): Interval[] {
+export function mergeIntervals(intervals: Interval[]): Interval[] {
   const sorted = [...intervals].sort((left, right) => left[0] - right[0]);
   const merged: Interval[] = [];
   for (const interval of sorted) {
@@ -165,18 +167,23 @@ export function buildProgress(input: {
   now: number;
   /** Keyframe board (brief_json.keyframeApproval): its wait is a human wait too. */
   approval?: { required: boolean; requestedAt?: string; approvedAt?: string; expiredAt?: string };
+  clipApproval?: { required: boolean; requestedAt?: string; approvedAt?: string };
 }): GenerationProgress {
   const { metrics, hasQuality, now } = input;
   const steps = PROGRESS_STEPS.filter((step) => (step !== 'keyframes' || input.hasKeyframes || Boolean(metrics.keyframingStartedAt)) && (step !== 'quality' || hasQuality));
   const approvalStart = input.approval?.required ? parse(input.approval.requestedAt) : null;
   const approvalEnd = input.approval?.approvedAt ? parse(input.approval.approvedAt) : input.approval?.expiredAt ? parse(input.approval.expiredAt) : now;
-  const waits = mergeIntervals([...humanWaitIntervals(input.shots, now), ...(approvalStart !== null && approvalEnd !== null ? [[approvalStart, approvalEnd] as Interval] : [])]);
+  const clipApprovalStart = input.clipApproval?.required ? parse(input.clipApproval.requestedAt) : null;
+  const clipApprovalEnd = parse(input.clipApproval?.approvedAt) ?? now;
+  const clipWaits: Interval[] = clipApprovalStart !== null ? [[clipApprovalStart, clipApprovalEnd]] : [];
+  const awaitingClipApproval = runningStatus(input.status) && clipApprovalStart !== null && !input.clipApproval?.approvedAt && !input.shots.some((shot) => ['revising','generating','checking','queued','awaiting_review'].includes(shot.keyframe_status ?? '')) && input.shots.every((shot) => ['passed','awaiting_review'].includes(shot.video_quality_status ?? ''));
+  const waits = mergeIntervals([...clipWaits, ...humanWaitIntervals(input.shots, now), ...(approvalStart !== null && approvalEnd !== null ? [[approvalStart, approvalEnd] as Interval] : [])]);
   const awaitingKeyframe = input.shots.some((shot) => shot.keyframe_status === 'awaiting_review');
   const awaitingClip = input.shots.some((shot) => shot.video_quality_status === 'awaiting_review');
   const running = ['queued', 'generating', 'postprocessing'].includes(input.status);
   const awaitingApproval = running && approvalStart !== null && !input.approval?.approvedAt && !input.approval?.expiredAt;
-  const decisionAfter: ProgressStep | null = !running ? null : awaitingKeyframe || awaitingApproval ? 'keyframes' : awaitingClip ? (hasQuality ? 'quality' : 'clips') : null;
-  const waitKind = awaitingKeyframe || awaitingClip ? 'decision' as const : awaitingApproval ? 'approval' as const : undefined;
+  const decisionAfter: ProgressStep | null = !running ? null : awaitingKeyframe || awaitingApproval ? 'keyframes' : awaitingClip || awaitingClipApproval ? (hasQuality ? 'quality' : 'clips') : null;
+  const waitKind = awaitingClipApproval ? 'clip_approval' as const : awaitingKeyframe || awaitingClip ? 'decision' as const : awaitingApproval ? 'approval' as const : undefined;
   const bounds = stepBoundaries(metrics, { hasQuality });
   let phase: ProgressPhase;
   if (input.status === 'ready') phase = 'ready';
@@ -252,7 +259,7 @@ export type ProgressView = {
   phase: ProgressPhase;
   /** Label of the current step (« Votre décision » while waiting). */
   stepLabel: string;
-  items: Array<{ id: ProgressStep | 'decision' | 'approval'; label: string; state: 'done' | 'current' | 'todo' }>;
+  items: Array<{ id: ProgressStep | 'decision' | 'approval' | 'clip_approval'; label: string; state: 'done' | 'current' | 'todo' }>;
   /** Active time since the launch (human waits excluded), current step time, current wait. */
   totalSeconds: number | null;
   stepSeconds: number | null;
@@ -274,13 +281,13 @@ export function describeProgress(progress: GenerationProgress, clientNow: number
   const stepSeconds = isWaiting(progress.phase) ? waitingSeconds : stepStart === null ? null : Math.max(0, Math.floor((serverNow - stepStart) / 1000) - progress.stepClosedWaitSeconds);
 
   const waitItem = progress.waitKind ?? 'decision';
-  const order: Array<ProgressStep | 'decision' | 'approval'> = [];
+  const order: Array<ProgressStep | 'decision' | 'approval' | 'clip_approval'> = [];
   for (const step of progress.steps) {
     order.push(step);
     if (progress.decisionAfter === step) order.push(waitItem);
   }
   const terminal = progress.phase === 'ready' || progress.phase === 'failed' || progress.phase === 'cancelled';
-  const currentIndex = progress.phase === 'ready' ? order.length : order.indexOf(progress.phase as ProgressStep | 'decision' | 'approval');
+  const currentIndex = progress.phase === 'ready' ? order.length : order.indexOf(progress.phase as ProgressStep | 'decision' | 'approval' | 'clip_approval');
   const items = order.map((id, index) => ({ id, label: STEP_LABELS[id], state: (index < currentIndex ? 'done' : index === currentIndex && !terminal ? 'current' : 'todo') as 'done' | 'current' | 'todo' }));
 
   let eta: ProgressView['eta'] = null;
@@ -298,12 +305,12 @@ export function describeProgress(progress: GenerationProgress, clientNow: number
       }
       // Never a false precision: whole minutes, at least one.
       const minutes = Math.max(1, Math.ceil(remaining / 60));
-      eta = isWaiting(progress.phase) ? { kind: progress.phase === 'approval' ? 'after_approval' : 'after_decision', minutes } : { kind: 'at', endAt: clientNow + minutes * 60_000, minutes };
+      eta = isWaiting(progress.phase) ? { kind: (progress.phase === 'approval' || progress.phase === 'clip_approval') ? 'after_approval' : 'after_decision', minutes } : { kind: 'at', endAt: clientNow + minutes * 60_000, minutes };
     }
   }
   return {
     phase: progress.phase,
-    stepLabel: progress.phase === 'decision' || progress.phase === 'approval' ? STEP_LABELS[progress.phase] : PROGRESS_STEPS.includes(progress.phase as ProgressStep) ? STEP_LABELS[progress.phase as ProgressStep] : progress.phase === 'ready' ? 'Prête' : progress.phase === 'failed' ? 'Échec' : 'Annulée',
+    stepLabel: isWaiting(progress.phase) ? STEP_LABELS[progress.phase] : PROGRESS_STEPS.includes(progress.phase as ProgressStep) ? STEP_LABELS[progress.phase as ProgressStep] : progress.phase === 'ready' ? 'Prête' : progress.phase === 'failed' ? 'Échec' : 'Annulée',
     items,
     totalSeconds,
     stepSeconds,
@@ -313,14 +320,14 @@ export function describeProgress(progress: GenerationProgress, clientNow: number
   };
 }
 
-const LEGACY_PHASES: Record<string, ProgressPhase> = { keyframe_approval: 'approval', queued: 'preparation', keyframing: 'keyframes', generating: 'clips', quality_checking: 'quality', awaiting_review: 'decision', transferring: 'editing', postprocessing: 'editing', ready: 'ready', failed: 'failed', cancelled: 'cancelled' };
+const LEGACY_PHASES: Record<string, ProgressPhase> = { keyframe_approval: 'approval', clip_approval: 'clip_approval', queued: 'preparation', keyframing: 'keyframes', generating: 'clips', quality_checking: 'quality', awaiting_review: 'decision', transferring: 'editing', postprocessing: 'editing', ready: 'ready', failed: 'failed', cancelled: 'cancelled' };
 
 /** When the server sent no `progress` (simulation without Supabase, older response): steps without estimate. */
 export function legacyProgress(version: { status: string; versionStatus?: string | null; processingStage?: string | null; createdAt?: string; reviewRequired?: unknown[] }, now: number): GenerationProgress {
   const status = version.versionStatus ?? version.status;
   const phase = Array.isArray(version.reviewRequired) && version.reviewRequired.length ? 'decision' : LEGACY_PHASES[status === 'ready' || status === 'failed' || status === 'cancelled' ? status : version.processingStage ?? status] ?? 'preparation';
   return {
-    phase, steps: ['preparation', 'keyframes', 'clips', 'quality', 'editing'], decisionAfter: isWaiting(phase) ? 'keyframes' : null, ...(phase === 'approval' ? { waitKind: 'approval' as const } : {}),
+    phase, steps: ['preparation', 'keyframes', 'clips', 'quality', 'editing'], decisionAfter: phase === 'clip_approval' ? 'quality' : isWaiting(phase) ? 'keyframes' : null, ...(phase === 'clip_approval' ? { waitKind: 'clip_approval' as const } : phase === 'approval' ? { waitKind: 'approval' as const } : {}),
     requestedAt: version.createdAt ?? null, stepStartedAt: null, closedWaitSeconds: 0, stepClosedWaitSeconds: 0, waitingSince: null,
     serverNow: new Date(now).toISOString(), shots: [], durations: {}, estimate: null,
   };

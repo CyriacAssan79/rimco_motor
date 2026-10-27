@@ -1,17 +1,28 @@
 import { describe, expect, it } from 'vitest';
 import { shotDraftSchema } from '@/core/storyboard';
+import { HUMAN_CLIP_REVISIONS_PER_SHOT, HUMAN_REVISIONS_PER_SHOT, humanRevisionsUsed } from './loop';
 import { appendVerification, applyShotRevision, buildShotRevisionInstruction, buildShotRevisionPrompt, clipLoopDecision, defectsAsData, effectiveShotDraft, keyframeCorrectionsAllowed, keyframeLoopDecision, MAX_KEYFRAME_CORRECTIONS, shotRevisionSchema, storedVerdict, type VerificationEntry } from './loop';
 
 const ok = { approved: true, issues: [], reason: 'OK' };
 const refused = { approved: false, issues: ['Véhicule de biais par rapport à sa voie'], reason: 'Orientation' };
 const shot = shotDraftSchema.parse({ title: 'Arrivée sur le pont', shotType: 'rolling', travelDirection: 'towards_camera', travelSpeed: 'cruise', castIds: ['cast-1'], scene: 'SUV on the HKB bridge', framing: 'Wide', location: 'HKB bridge', action: 'The SUV drives towards camera', camera: 'Static camera', durationSeconds: 5, vehiclePhotoId: 'front', locationPhotoId: 'bridge' });
 
+it('compte indépendamment une modification humaine par image et par clip, y compris Refaire', () => {
+  expect(HUMAN_REVISIONS_PER_SHOT).toBe(1);
+  expect(HUMAN_CLIP_REVISIONS_PER_SHOT).toBe(1);
+  const history = [{ stage: 'keyframe', by: 'human', decision: 'human_retry' }];
+  expect(humanRevisionsUsed(history)).toBe(1);
+  expect(humanRevisionsUsed(history, 'video')).toBe(0);
+  expect(humanRevisionsUsed([...history, { stage: 'video', by: 'human', decision: 'human_revise' }], 'video')).toBe(1);
+});
+
 describe('vérificateur 1 · images clés', () => {
-  it('renvoie une image refusée au réalisateur, au plus deux fois, puis attend une décision humaine', () => {
+  it('réserve deux images : une correction automatique puis la planche humaine', () => {
     const allowed = keyframeCorrectionsAllowed(1 + MAX_KEYFRAME_CORRECTIONS);
-    expect(allowed).toBe(2);
+    expect(1 + MAX_KEYFRAME_CORRECTIONS).toBe(2);
+    expect(allowed).toBe(1);
     expect(keyframeLoopDecision(refused, 0, allowed)).toBe('revise');
-    expect(keyframeLoopDecision(refused, 1, allowed)).toBe('revise');
+    expect(keyframeLoopDecision(refused, 1, allowed)).toBe('review');
     expect(keyframeLoopDecision(refused, 2, allowed)).toBe('review');
   });
 
@@ -33,6 +44,12 @@ describe('vérificateur 1 · images clés', () => {
   it('garde une seule correction pour une vidéo lancée avant la boucle (2 tentatives réservées)', () => {
     expect(keyframeCorrectionsAllowed(2)).toBe(1);
     expect(keyframeLoopDecision(refused, 1, keyframeCorrectionsAllowed(2))).toBe('review');
+  });
+
+  it('préserve les trois réservations des vidéos déjà lancées', () => {
+    expect(keyframeCorrectionsAllowed(3)).toBe(2);
+    expect(keyframeLoopDecision(refused, 1, keyframeCorrectionsAllowed(3))).toBe('revise');
+    expect(keyframeLoopDecision(refused, 2, keyframeCorrectionsAllowed(3))).toBe('review');
   });
 });
 
@@ -89,11 +106,12 @@ describe('historique des contrôles', () => {
     expect(storedVerdict(null)).toBeNull();
   });
 
-  it('garde les 20 derniers contrôles d’un plan', () => {
+  it('conserve les contrôles et décisions pour que les budgets et désaccords ne disparaissent pas', () => {
     const entry: VerificationEntry = { stage: 'keyframe', attempt: 0, at: '2026-10-25T20:00:00Z', approved: false, issues: ['x'], reason: 'r', decision: 'revise', by: 'verifier' };
     let history: unknown = [];
     for (let index = 0; index < 25; index += 1) history = appendVerification(history, { ...entry, attempt: index });
-    expect((history as VerificationEntry[]).length).toBe(20);
+    expect((history as VerificationEntry[]).length).toBe(25);
+    expect((history as VerificationEntry[])[0].attempt).toBe(0);
     expect((history as VerificationEntry[]).at(-1)?.attempt).toBe(24);
     expect(appendVerification('corrompu', entry)).toHaveLength(1);
   });

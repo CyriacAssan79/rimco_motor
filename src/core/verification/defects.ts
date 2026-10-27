@@ -5,7 +5,7 @@
  */
 export const DEFECT_CODES = [
   'identity', 'framing', 'cut_off', 'wrong_direction', 'floating', 'sliding', 'treadmill', 'place', 'foreign_setting',
-  'pasted_on', 'extra_vehicle', 'people', 'steering', 'traffic_side', 'text', 'other',
+  'pasted_on', 'extra_vehicle', 'people', 'steering', 'traffic_side', 'lighting', 'text', 'other',
 ] as const;
 export type DefectCode = typeof DEFECT_CODES[number];
 
@@ -24,6 +24,7 @@ export const DEFECT_LABELS_FR: Record<DefectCode, string> = {
   people: 'Les personnes ne correspondent pas à la demande',
   steering: 'Le volant ou le conducteur est du mauvais côté',
   traffic_side: 'La voiture roule du mauvais côté de la route',
+  lighting: 'La lumière ne correspond pas au moment de la journée du lieu ou change pendant le clip',
   text: 'Un texte ou un logo lisible apparaît dans l’image',
   other: 'Autre défaut signalé par le contrôle automatique',
 };

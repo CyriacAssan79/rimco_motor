@@ -16,23 +16,23 @@ const premium = input('premium', 20, 4, KEYFRAME_VIDEO_PRICES_USD_PER_SECOND.see
 describe('coût maximal d’une vidéo, relances automatiques comprises (26/10)', () => {
   it('Standard 20 s : 4 plans Wan, images clés 1K', () => {
     expect(nominalVideoCostUsd(standard).totalUsd).toBe(3.12);
-    // Clips ×2, 3 images and 3 checks per shot, 2 clip checks per shot, 2 director corrections at 0,05 $ per shot.
-    expect(worstCaseVideoCostUsd(standard)).toEqual({ videoUsd: 4, keyframesUsd: 0.96, qualityUsd: 2, revisionsUsd: 0.4, storyboardUsd: 0, totalUsd: 7.36 });
+    // Clips ×2, 2 images and 2 checks per shot, 2 clip checks per shot, 1 director correction at 0,05 $ per shot.
+    expect(worstCaseVideoCostUsd(standard)).toEqual({ videoUsd: 4, keyframesUsd: 0.64, qualityUsd: 1.6, revisionsUsd: 0.2, storyboardUsd: 0, totalUsd: 6.44 });
   });
 
   it('Pro 15 s : 3 plans Kling de 5 s', () => {
     expect(nominalVideoCostUsd(pro).totalUsd).toBe(2.52);
-    expect(worstCaseVideoCostUsd(pro)).toEqual({ videoUsd: 3.36, keyframesUsd: 0.72, qualityUsd: 1.5, revisionsUsd: 0.3, storyboardUsd: 0, totalUsd: 5.88 });
+    expect(worstCaseVideoCostUsd(pro)).toEqual({ videoUsd: 3.36, keyframesUsd: 0.48, qualityUsd: 1.2, revisionsUsd: 0.15, storyboardUsd: 0, totalUsd: 5.19 });
   });
 
   it('Premium 20 s : 4 plans Seedance, images clés 2K', () => {
     expect(nominalVideoCostUsd(premium).totalUsd).toBe(10.74);
-    expect(worstCaseVideoCostUsd(premium)).toEqual({ videoUsd: 18.92, keyframesUsd: 1.44, qualityUsd: 2, revisionsUsd: 0.4, storyboardUsd: 0, totalUsd: 22.76 });
+    expect(worstCaseVideoCostUsd(premium)).toEqual({ videoUsd: 18.92, keyframesUsd: 0.96, qualityUsd: 1.6, revisionsUsd: 0.2, storyboardUsd: 0, totalUsd: 21.68 });
   });
 
   it('compte les images de fin et le storyboard une fois, sans correction du réalisateur hors images clés', () => {
     const withExtras = { ...premium, storyboardCostUsd: 0.02, endFrameCount: 2, endFrameCostUsd: 0.22 };
-    expect(worstCaseVideoCostUsd(withExtras).totalUsd).toBe(23.22);
+    expect(worstCaseVideoCostUsd(withExtras).totalUsd).toBe(22.14);
     expect(worstCaseVideoCostUsd({ ...standard, keyframeImageCostUsd: 0, keyframeQualityCostUsd: 0 }).revisionsUsd).toBe(0);
   });
 
@@ -41,7 +41,7 @@ describe('coût maximal d’une vidéo, relances automatiques comprises (26/10)'
     expect(videoCostCapCheck(plan, 15, 'nominal')).toEqual({ ok: true });
     const refused = videoCostCapCheck(plan, 15, 'worst_case');
     expect(refused.ok).toBe(false);
-    if (!refused.ok) expect(refused.message).toBe('Cette configuration dépasse le plafond de coût par vidéo (22.76 $ au maximum, toutes les relances automatiques comprises, pour 15.00 $ autorisés). Réduisez la durée ou choisissez un autre niveau.');
+    if (!refused.ok) expect(refused.message).toBe('Cette configuration dépasse le plafond de coût par vidéo (21.68 $ au maximum, toutes les relances automatiques comprises, pour 15.00 $ autorisés). Réduisez la durée ou choisissez un autre niveau.');
     expect(videoCostCapCheck(plan, 10, 'nominal')).toMatchObject({ ok: false });
     expect(videoCostCapCheck(plan, undefined, 'worst_case')).toEqual({ ok: true });
   });
@@ -49,8 +49,8 @@ describe('coût maximal d’une vidéo, relances automatiques comprises (26/10)'
   it('les deux montants sont figés dans brief_json.costPlanUsd, le nominal restant au format d’avant', () => {
     const plan = { nominal: nominalVideoCostUsd(premium), worstCase: worstCaseVideoCostUsd(premium), capMode: 'nominal' as const, capUsd: null };
     const stored = JSON.parse(JSON.stringify({ costPlanUsd: costPlanForBrief(plan) })) as Record<string, unknown>;
-    expect(stored.costPlanUsd).toMatchObject({ totalUsd: 10.74, capUsd: null, capMode: 'nominal', worstCase: { totalUsd: 22.76 } });
-    expect(storedCostPlan(stored)).toEqual({ nominalUsd: 10.74, worstCaseUsd: 22.76 });
+    expect(stored.costPlanUsd).toMatchObject({ totalUsd: 10.74, capUsd: null, capMode: 'nominal', worstCase: { totalUsd: 21.68 } });
+    expect(storedCostPlan(stored)).toEqual({ nominalUsd: 10.74, worstCaseUsd: 21.68 });
     // Versions created before 26/10: nominal only.
     expect(storedCostPlan({ costPlanUsd: { ...nominalVideoCostUsd(premium), capUsd: null } })).toEqual({ nominalUsd: 10.74, worstCaseUsd: null });
     expect(storedCostPlan({})).toBeNull();

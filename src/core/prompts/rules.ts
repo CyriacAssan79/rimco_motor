@@ -66,9 +66,9 @@ export const HEADING_ALIGNED = 'The car points along its lane, in its direction 
  * 26/10 motion matrix: the car's orientation is given against the road of the place, never against the frame
  * (replaces HEADING_ALIGNED on versions that carry a matrix).
  */
-export const ROAD_ALIGNED = 'The car keeps to its lane along the road of the place, never across, against or off the road.';
+export const ROAD_ALIGNED = 'The car stays in its lane, parallel to the lane markings and the kerb; its body is not turned towards the camera unless the shot type requires it. Never across, against or off the road.';
 /** 26/10 (vérification « preambule »): « (a bridge: its deck) » only for a bridge. */
-export const ROAD_ALIGNED_BRIDGE = 'The car keeps to its lane along the road of the place (a bridge: its deck), never across, against or off the road.';
+export const ROAD_ALIGNED_BRIDGE = `On a bridge, stay on its deck. ${ROAD_ALIGNED}`;
 export const roadAligned = (bridge: boolean) => bridge ? ROAD_ALIGNED_BRIDGE : ROAD_ALIGNED;
 /** A place is a bridge when its description or title says so (English sheet, or French title of an uploaded place). */
 export const isBridgePlace = (place: string | undefined) => /\b(?:bridges?|ponts?)\b/i.test(place ?? '');

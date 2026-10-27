@@ -5,14 +5,15 @@ describe('pricing',()=>{
   it('applies the fixed five-second client price by tier',()=>{
     expect(estimatePriceFcfa(5,'standard')).toBe(2300);
     expect(estimatePriceFcfa(5,'pro')).toBe(3500);
-    expect(estimatePriceFcfa(5,'premium')).toBe(3500);
-    expect(estimatePriceFcfa(5,'test')).toBe(3500);
+    expect(estimatePriceFcfa(5,'premium')).toBe(4750);
+    expect(estimatePriceFcfa(5,'test')).toBe(4750);
   });
   it('uses the active brand grid for Standard and Premium client prices',()=>{
-    const grid = { standard: 460, premium: 700 };
-    expect(estimateGridPriceFcfa(20, 'premium', grid)).toBe(14000);
+    const grid = { standard: 460, pro: 700, premium: 950 };
+    expect(estimateGridPriceFcfa(20, 'premium', grid)).toBe(19000);
     expect(estimateGridPriceFcfa(20, 'standard', grid)).toBe(9200);
     expect(estimateGridPriceFcfa(20, 'pro', grid)).toBe(14000);
+    expect(estimateGridPriceFcfa(20, 'test', grid)).toBe(19000);
   });
   it('converts real provider cost to EUR and FCFA',()=>{
     expect(estimateRealCost(5,.1,.9,655.957)).toEqual({costUsd:.5,costEur:.45,costRealFcfa:.45*655.957});

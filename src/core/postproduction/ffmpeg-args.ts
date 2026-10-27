@@ -167,7 +167,7 @@ export function makeShotMontageArgs(input: MontageArgs) {
 
 /** Assemble generated footage, then append a distinct two-second animated brand end card. */
 export function makeMultiClipMontageArgs(input: MultiClipMontageArgs) {
-  if (input.shotFiles.length < (input.singleStoryboardMode ? 1 : 2) || input.shotFiles.length !== input.shotDurations.length) throw new Error('Le montage ne contient pas le nombre attendu de plans.');
+  if (input.shotFiles.length < 1 || input.shotFiles.length > 6 || input.shotFiles.length !== input.shotDurations.length) throw new Error('Le montage ne contient pas le nombre attendu de plans.');
   const clipSeconds = input.shotDurations.reduce((sum, seconds) => sum + seconds, 0);
   const hasNewDurationContract = input.clipDurationSeconds !== undefined;
   if (hasNewDurationContract && (![7, 12, 17, 22].includes(input.finalDurationSeconds) || input.finalDurationSeconds !== input.clipDurationSeconds! + 2)) throw new Error('La vidéo finale doit ajouter exactement deux secondes au logo.');
@@ -206,6 +206,16 @@ export function makeMultiClipMontageArgs(input: MultiClipMontageArgs) {
   else args.push('-an');
   args.push('-c:v', 'libx264', '-preset', 'veryfast', '-crf', String(qualityCrf), '-pix_fmt', 'yuv420p', '-r', String(fps), '-movflags', '+faststart', '-t', String(input.finalDurationSeconds), input.outputFile);
   return args;
+}
+
+/** On-demand review preview: silent, no logo, 540p, at most six clips, normalized before concatenation. */
+export function makeClipPreviewArgs(input: { shotFiles: string[]; shotDurations: number[]; outputFile: string; format: VideoFormat }) {
+  if (!input.shotFiles.length || input.shotFiles.length > 6 || input.shotFiles.length !== input.shotDurations.length || input.shotDurations.some((n) => !Number.isFinite(n) || n <= 0 || n > 30)) throw new Error('Les clips de l’aperçu sont invalides.');
+  const dimensions: Record<VideoFormat, [number, number]> = { '16:9': [960, 540], '9:16': [540, 960], '1:1': [540, 540], '4:5': [432, 540] };
+  const [w, h] = dimensions[input.format];
+  const filters = input.shotFiles.map((_, i) => `[${i}:v]scale=${w}:${h}:force_original_aspect_ratio=decrease,pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=24,trim=duration=${input.shotDurations[i]},setpts=PTS-STARTPTS[v${i}]`);
+  filters.push(`${input.shotFiles.map((_, i) => `[v${i}]`).join('')}concat=n=${input.shotFiles.length}:v=1:a=0[out]`);
+  return ['-hide_banner', '-loglevel', 'error', '-y', ...input.shotFiles.flatMap((file) => ['-i', file]), '-filter_complex_threads', '1', '-filter_complex', filters.join(';'), '-map', '[out]', '-an', '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '30', '-threads', '1', '-movflags', '+faststart', input.outputFile];
 }
 
 /** Older versions without the setting inherit the new default: logo enabled. */

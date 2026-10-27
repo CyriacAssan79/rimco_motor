@@ -1,3 +1,6 @@
+import { createHash } from 'node:crypto';
+import { isClipActive, montageShots, storedClipApproval } from '@/core/versions/clip-approval';
+import { createSignedStorageObjectUrl } from '@/core/storage/signed-video';
 import { spawn } from 'node:child_process';
 import { constants } from 'node:fs';
 import { access, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
@@ -5,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { HttpError } from '@/core/auth/guards';
 import { createStorageAdminClient } from '@/core/storage/supabase';
-import { chooseMontageFps, makeFinalVideoArgs, makeMultiClipMontageArgs, parseFfmpegFps, makePhotoFidelityShotArgs, makeShotMontageArgs, normalizeVideoFormat, shouldOverlayLogo, type VideoFormat } from './ffmpeg-args';
+import { chooseMontageFps, makeClipPreviewArgs, makeFinalVideoArgs, makeMultiClipMontageArgs, parseFfmpegFps, makePhotoFidelityShotArgs, makeShotMontageArgs, normalizeVideoFormat, shouldOverlayLogo, type VideoFormat } from './ffmpeg-args';
 import { firstObservedAt, type ProcessingMetrics } from '@/core/versions/processing-metrics';
 import { videoQualityTimestamps } from '@/core/providers/fal-keyframes';
 
@@ -26,6 +29,48 @@ const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
 const logoFile = join(process.cwd(), 'public', 'brand', 'logo-rimco.png');
 
 type AdminClient = ReturnType<typeof createStorageAdminClient>;
+
+/** Temporary 540p preview, cached by the exact ordered active clips. Authorization is checked by the route first. */
+export async function createClipPreview(admin: AdminClient, version: { id: string; video_id: string }, brief: Record<string, unknown>) {
+  const { data: rows, error } = await admin.from('video_shots').select('shot_number,raw_path,duration_seconds,verification_history').eq('version_id', version.id).order('shot_number');
+  const shots = (rows ?? []).filter((shot) => isClipActive(shot.verification_history));
+  if (error || !shots.length || shots.some((shot) => !shot.raw_path)) throw new HttpError(409, 'Les clips actifs doivent être prêts pour cet aperçu.');
+  const hash = createHash('sha256').update(JSON.stringify(shots.map((shot) => [shot.shot_number, shot.raw_path, shot.duration_seconds]))).digest('hex').slice(0, 20);
+  const path = `${version.video_id}/${version.id}/preview-${hash}.mp4`;
+  const previous = brief.clipPreview as { path?: string; createdAt?: string } | undefined;
+  const sign = () => createSignedStorageObjectUrl((path, expiresIn) => admin.storage.from('videos').createSignedUrl(path, expiresIn), 'videos', path);
+  if (previous?.path === path && previous.createdAt && Date.now() - Date.parse(previous.createdAt) < 3_600_000) return { url: await sign() };
+  const directory = await mkdtemp(join(tmpdir(), 'rimco-preview-'));
+  const outputFile = join(directory, 'preview.mp4');
+  try {
+    const files = shots.map((_, i) => join(directory, `clip-${i}.mp4`));
+    const bytes = await Promise.all(shots.map((shot) => downloadAsset(admin, 'videos', shot.raw_path!, MAX_VIDEO_BYTES, 'Le clip')));
+    await Promise.all(files.map((file, i) => writeFile(file, bytes[i])));
+    await runFfmpeg(ffmpegPath, makeClipPreviewArgs({ shotFiles: files, shotDurations: shots.map((shot) => shot.duration_seconds), outputFile, format: normalizeVideoFormat(brief.format) }));
+    const output = await readFile(outputFile); validateMp4(output);
+    if (output.length > MAX_VIDEO_BYTES) throw new HttpError(502, 'L’aperçu dépasse la taille autorisée.');
+    const { error } = await admin.storage.from('videos').upload(path, output, { contentType: 'video/mp4', upsert: true });
+    if (error) throw new HttpError(503, 'Impossible de conserver l’aperçu temporaire.');
+    // Merge the freshest brief: a concurrent validation must never be overwritten by an old snapshot.
+    const { error: saveError } = await admin.rpc('rimco_patch_version_brief', { p_version_id: version.id, p_patch: { clipPreview: { path, createdAt: new Date().toISOString() } } });
+    if (saveError) { await admin.storage.from('videos').remove([path]); throw new HttpError(503, 'Impossible d’enregistrer cet aperçu.'); }
+    if (previous?.path && previous.path !== path) await admin.storage.from('videos').remove([previous.path]);
+    return { url: await sign() };
+  } finally { await rm(directory, { recursive: true, force: true }); }
+}
+
+/** Daily cron: preview files expire after 24 hours. Raw clips and final films are never removed here. */
+export async function cleanupClipPreviews(admin: AdminClient, now = Date.now()) {
+  const { data, error } = await admin.from('video_versions').select('id,video_id,brief_json').lt('brief_json->clipPreview->>createdAt', new Date(now - 86_400_000).toISOString()).limit(20);
+  if (error) return;
+  for (const version of data ?? []) {
+    const brief = version.brief_json as Record<string, unknown>;
+    const preview = brief?.clipPreview as { path?: string } | undefined;
+    if (!preview?.path?.startsWith(`${version.video_id}/${version.id}/preview-`)) continue;
+    const { error } = await admin.storage.from('videos').remove([preview.path]);
+    if (!error) await admin.rpc('rimco_patch_version_brief', { p_version_id: version.id, p_patch: { clipPreview: null } });
+  }
+}
 
 /** Normalize a provider clip to MP4 and optionally mix a user-selected audio track. */
 export async function beginPostproduction(versionId: string) {
@@ -128,15 +173,17 @@ export async function assembleShotMontage(versionId: string) {
   if (versionError || !version) throw new HttpError(404, 'La version à assembler est introuvable.');
   if (version.final_path) return { finalPath: version.final_path as string };
 
-  const { data: shots, error: shotsError } = await admin.from('video_shots')
-    .select('shot_number,duration_seconds,status,raw_path,video_quality_previous_path')
+  const { data: allShots, error: shotsError } = await admin.from('video_shots')
+    .select('shot_number,duration_seconds,status,raw_path,video_quality_previous_path,verification_history')
     .eq('version_id', versionId).order('shot_number');
   const brief = version.brief_json && typeof version.brief_json === 'object' ? version.brief_json as Record<string, unknown> : {};
   const oldMetrics = brief.processingMetrics && typeof brief.processingMetrics === 'object' ? brief.processingMetrics as ProcessingMetrics : {};
   const completedMetrics = firstObservedAt(oldMetrics, 'postproductionCompletedAt', new Date().toISOString());
+  const required = storedClipApproval(brief).required;
+  const shots = allShots ? montageShots(allShots, required) : null;
   const isMultiClip = brief.multiClipMode === true;
   const isStoryboard = isMultiClip || brief.singleStoryboardMode === true;
-  if (shotsError || !shots || (isMultiClip ? shots.length < 2 || shots.length > 6 : isStoryboard ? shots.length < 1 || shots.length > 6 : shots.length !== 2) || shots.some((shot) => shot.status !== 'ready' || !shot.raw_path)) {
+  if (shotsError || !shots || (isMultiClip ? shots.length < 1 || shots.length > 6 : isStoryboard ? shots.length < 1 || shots.length > 6 : shots.length !== 2) || shots.some((shot) => shot.status !== 'ready' || !shot.raw_path)) {
     throw new HttpError(409, 'Tous les plans doivent être prêts avant leur assemblage.');
   }
   const overlayLogo = shouldOverlayLogo(version.brief_json);
@@ -165,11 +212,11 @@ export async function assembleShotMontage(versionId: string) {
   try {
     await Promise.all([...clipFiles.map((path, index) => writeFile(path, clipBytes[index])), ...(audioFile && audioBytes ? [writeFile(audioFile, audioBytes)] : [])]);
     const requestedCuts = Array.isArray(brief.shotOutputDurations) ? brief.shotOutputDurations : null;
-    const cutDurations = requestedCuts?.length === shots.length ? requestedCuts.map(Number) : shots.map((shot) => Number(shot.duration_seconds));
+    const cutDurations = requestedCuts?.length === allShots?.length ? shots.map((shot) => Number(requestedCuts[shot.shot_number - 1])) : shots.map((shot) => Number(shot.duration_seconds));
     const startOffsets = editorialStartOffsets(shots.map((shot) => Number(shot.duration_seconds)), cutDurations);
     const montageFps = isStoryboard ? chooseMontageFps(await Promise.all(clipFiles.map((file) => probeVideoFps(ffmpegPath, file)))) : undefined;
     const args = isStoryboard
-      ? makeMultiClipMontageArgs({ shotFiles: clipFiles, shotDurations: cutDurations, shotStartOffsets: startOffsets, audioFile, logoFile, outputFile, fps: montageFps, finalDurationSeconds: Number(brief.finalDurationSeconds), ...(typeof brief.clipDurationSeconds === 'number' ? { clipDurationSeconds: brief.clipDurationSeconds as 5 | 10 | 15 | 20 } : {}), singleStoryboardMode: brief.singleStoryboardMode === true, format: briefFormat })
+      ? makeMultiClipMontageArgs({ shotFiles: clipFiles, shotDurations: cutDurations, shotStartOffsets: startOffsets, audioFile, logoFile, outputFile, fps: montageFps, finalDurationSeconds: required ? cutDurations.reduce((a,b) => a+b, 0) + 2 : Number(brief.finalDurationSeconds), ...(typeof brief.clipDurationSeconds === 'number' ? { clipDurationSeconds: (required ? cutDurations.reduce((a,b) => a+b, 0) : brief.clipDurationSeconds) as 5 | 10 | 15 | 20 } : {}), singleStoryboardMode: brief.singleStoryboardMode === true, format: briefFormat })
       : makeShotMontageArgs({ shotFiles: clipFiles as [string, string], logoFile, outputFile, overlayLogo, durationSeconds: 6, format: briefFormat });
     await runFfmpeg(ffmpegPath, args);
     const outputStat = await stat(outputFile);

@@ -6,9 +6,23 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import ffmpegPath from 'ffmpeg-static';
 import { hasTransparentPngPixels } from './photo-fidelity';
-import { makeFinalVideoArgs, makeMultiClipMontageArgs, makePhotoFidelityShotArgs, makeShotMontageArgs, shouldOverlayLogo } from './ffmpeg-args';
+import { makeClipPreviewArgs, makeFinalVideoArgs, makeMultiClipMontageArgs, makePhotoFidelityShotArgs, makeShotMontageArgs, shouldOverlayLogo } from './ffmpeg-args';
 
 describe('FFmpeg final video arguments', () => {
+  it('un seul clip validé donne 5 s de film et 2 s de logo, avec musique limitée à 7 s', () => {
+    const args = makeMultiClipMontageArgs({ shotFiles: ['/tmp/active.mp4'], shotDurations: [5], logoFile: '/app/logo.png', outputFile: '/tmp/final.mp4', clipDurationSeconds: 5, finalDurationSeconds: 7, audioFile: '/tmp/music.mp3' }).join(' ');
+    expect(args).toContain('concat=n=1:v=1:a=0');
+    expect(args).toContain('atrim=duration=7');
+    expect(args).toContain('-t 7');
+  });
+  it('prépare un aperçu 540p muet sans logo ni appel fournisseur, normalisé avant concaténation', () => {
+    const args = makeClipPreviewArgs({ shotFiles: ['/tmp/one.mp4', '/tmp/two.mp4'], shotDurations: [5, 5], outputFile: '/tmp/preview.mp4', format: '16:9' });
+    expect(args.join(' ')).toContain('scale=960:540');
+    expect(args.join(' ')).toContain('concat=n=2:v=1:a=0');
+    expect(args).toContain('-an');
+    expect(args).not.toContain('-loop');
+    expect(args).not.toContain('logo');
+  });
   it('joins a variable number of generated clips and reserves a separate animated two-second logo card', () => {
     const args = makeMultiClipMontageArgs({ shotFiles: ['/tmp/a.mp4', '/tmp/b.mp4', '/tmp/c.mp4'], shotDurations: [5, 4, 6], logoFile: '/app/logo.png', outputFile: '/tmp/final.mp4', clipDurationSeconds: 15, finalDurationSeconds: 17 });
     expect(args.filter((value) => value.endsWith('.mp4'))).toEqual(['/tmp/a.mp4', '/tmp/b.mp4', '/tmp/c.mp4', '/tmp/final.mp4']);

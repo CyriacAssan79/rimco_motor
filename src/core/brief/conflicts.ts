@@ -1,6 +1,7 @@
 import type { PlaceTimeOfDay } from '@/core/motion/place-motion';
 import { lightingMismatch } from '@/core/scenes/prompt-values';
 import type { StoryboardShot } from '@/core/storyboard';
+import { mixedPlaceTimes, resolveFilmLighting, requestsTimeTransition, TIME_LABELS } from './film-lighting';
 
 /**
  * Brief conflicts (26/10): what the user asked that the locked rules forbid. The director lists them (French, one
@@ -15,7 +16,7 @@ const plain = (value: string) => value.normalize('NFD').replace(/[̀-ͯ]/g, '').
 const word = (pattern: string) => new RegExp(`(?<![a-z])(?:${pattern})(?![a-z])`);
 
 /** `lighting`: the Studio light chip (26/10, vérification « preambule »). */
-type BriefContext = { placeTimes: Array<PlaceTimeOfDay | null>; hasInteriorPhoto: boolean; lighting?: string };
+type BriefContext = { placeTimes: Array<PlaceTimeOfDay | null>; hasInteriorPhoto: boolean; lighting?: string; timeTransition?: boolean };
 type ConflictRule = { id: string; keywords: RegExp; applies?: (text: string, context: BriefContext) => boolean; message: string };
 
 const NIGHT = word('nuit|nocturne|night|soir|soiree');
@@ -69,6 +70,19 @@ export function detectBriefConflicts(brief: string, context: BriefContext): Arra
   const text = plain(brief);
   const found = RULES.filter((rule) => rule.keywords.test(text) && (rule.applies?.(text, context) ?? true)).map(({ id, message }) => ({ id, message }));
   const lighting = lightingConflict(context);
+  const places = context.placeTimes.map((timeOfDay, index) => ({ id: String(index), timeOfDay }));
+  const policy = resolveFilmLighting(places, brief, context.timeTransition);
+  const times = mixedPlaceTimes(places);
+  if (times.length > 1 && !policy.transition) found.unshift({ id: 'mixed_times', message: `Lieux de ${times.map((time) => TIME_LABELS[time]).join(' et de ')} : la vidéo garde la lumière de ${TIME_LABELS[policy.moment]} ; demandez une transition dans votre description si vous la voulez.` });
+  if (requestsTimeTransition(brief)) {
+    const requested = [
+      ...(/\b(?:du jour|day|daylight|aube)\b/.test(text) ? ['day' as const] : []),
+      ...(/coucher (?:du )?soleil|sunset/.test(text) ? ['golden' as const] : []),
+      ...(/\b(?:nuit|night)\b/.test(text) ? ['night' as const] : []),
+    ];
+    const missing = requested.filter((time) => !times.includes(time));
+    if (missing.length) found.unshift({ id: 'transition', message: `Transition demandée : aucun lieu de ${missing.map((time) => TIME_LABELS[time]).join(' ou de ')} sélectionné ; la transition suit seulement les moments disponibles.` });
+  }
   return lighting ? [...found, lighting] : found;
 }
 

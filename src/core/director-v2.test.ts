@@ -52,8 +52,9 @@ describe('réalisateur v2 · séparation des couches', () => {
     const instruction = buildStoryboardInstruction(input);
     expect(instruction).toContain('Mood: Elegant, modern and reassuring');
     expect(instruction).toContain('The light of each shot follows its place');
-    expect(instruction).toContain('"timeOfDay":"night"');
-    expect(buildStoryboardInstruction({ ...input, places: [{ id: 'x', title: 'Lieu' }] })).not.toContain('timeOfDay');
+    expect(instruction).toContain('ONE time of day for the whole film: day');
+    expect(instruction).not.toContain('"timeOfDay":"night"');
+    expect(buildStoryboardInstruction({ ...input, places: [{ id: 'x', title: 'Lieu' }] })).not.toContain('"timeOfDay":');
   });
 
   it('nettoie le brief réinjecté dans les prompts de secours', () => {

@@ -11,7 +11,7 @@ export type KeyframeApprovalMode = typeof KEYFRAME_APPROVAL_MODES[number];
 export const DEFAULT_KEYFRAME_APPROVAL_MODE: KeyframeApprovalMode = 'always';
 
 export const KEYFRAME_APPROVAL_MODE_LABELS: Record<KeyframeApprovalMode, string> = {
-  off: 'Désactivée : l’animation part dès que les images clés sont prêtes',
+  off: 'Désactivée : animation et montage automatiques après les contrôles',
   optional: 'Proposée : case décochée par défaut dans le Studio',
   premium_default: 'Proposée : case cochée par défaut en Premium',
   always: 'Obligatoire pour toutes les vidéos',
@@ -63,13 +63,14 @@ export type KeyframeApprovalState = {
   /** Measures: seconds between the board and the launch, shots modified on the board. */
   waitSeconds?: number;
   modifiedShots?: number;
+  shotNumbers?: number[];
 };
 
 export function storedApproval(brief: Record<string, unknown>): KeyframeApprovalState {
   const value = brief.keyframeApproval && typeof brief.keyframeApproval === 'object' ? brief.keyframeApproval as Record<string, unknown> : {};
   const text = (key: string) => typeof value[key] === 'string' ? value[key] as string : undefined;
   const number = (key: string) => typeof value[key] === 'number' ? value[key] as number : undefined;
-  return { required: value.required === true, requestedAt: text('requestedAt'), approvedAt: text('approvedAt'), remindedAt: text('remindedAt'), expiredAt: text('expiredAt'), waitSeconds: number('waitSeconds'), modifiedShots: number('modifiedShots') };
+  return { required: value.required === true, requestedAt: text('requestedAt'), approvedAt: text('approvedAt'), remindedAt: text('remindedAt'), expiredAt: text('expiredAt'), waitSeconds: number('waitSeconds'), modifiedShots: number('modifiedShots'), shotNumbers: Array.isArray(value.shotNumbers) ? value.shotNumbers.filter((n): n is number => typeof n === 'number') : undefined };
 }
 
 /** What the board deadline means now: nothing, a reminder to send, or the expiry. */

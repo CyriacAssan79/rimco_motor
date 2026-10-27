@@ -34,3 +34,12 @@ Les clés fal.ai et Supabase de service doivent être remplacées après le test
 Le projet utilise Next.js App Router, TypeScript strict, Tailwind CSS, Supabase et pnpm. Les contrôles automatisés de la PR fusionnée couvrent lint, types, tests unitaires, build et E2E. Pour les commandes de développement local, consulter `package.json` et `AGENTS.md`.
 
 Voir [docs/PROGRESS.md](docs/PROGRESS.md) pour l’état de livraison, [docs/DECISIONS.md](docs/DECISIONS.md) pour les choix d’architecture, et [DESIGN.md](DESIGN.md) pour la référence visuelle.
+# Mise à jour du 27 octobre 2026
+
+Dans GitHub, ouvrir `supabase/migrations/0038_human_review_and_pricing.sql`, copier tout le contenu, puis l’exécuter dans l’éditeur SQL de Supabase. Ce script est idempotent. Pour une installation complète, utiliser `supabase/setup.sql`. Aucune migration n’est appliquée automatiquement à un projet distant par Codex.
+
+Après déploiement Vercel, vérifier dans **Administration → Facturation** les trois tarifs de RIMCO : Standard **460 FCFA/s**, Pro **700 FCFA/s**, Premium **950 FCFA/s** (**19 000 FCFA pour 20 secondes de clips**). Les prix déjà enregistrés restent inchangés. Le niveau Test suit Premium.
+
+Le réglage **Validation humaine (images clés et clips)** commande deux pauses : images clés avant l’animation, clips avant le montage. La seconde planche permet de valider, modifier ou désactiver un clip ; il en faut au moins un actif. Le prix client reste identique si le film est raccourci. Après 48 heures, les clips restent disponibles ; seules les réservations de correction inutilisées sont libérées. Les mesures et les désaccords avec le vérificateur sont consultables dans **Coûts**, avec exports CSV.
+
+Une seule modification humaine est possible par image clé et une par clip. Sans transition explicite dans la description ou dans le choix des lieux, le premier lieu extérieur fixe la lumière du film. Les aperçus d’enchaînement sont muets, sans logo, temporaires et en 540p.

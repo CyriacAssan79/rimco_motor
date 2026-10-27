@@ -1,4 +1,6 @@
 "use client";
+import { ClipBoard } from "@/components/clip-board";
+import type { ClipBoard as ClipBoardData } from "@/core/versions/clip-gate";
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import Link from "next/link";
@@ -29,6 +31,8 @@ import { KeyframeBoard, type Board } from "@/components/keyframe-board";
 import { approvalBoxState, DEFAULT_KEYFRAME_APPROVAL_MODE, normalizeApprovalMode, type KeyframeApprovalMode } from "@/core/versions/keyframe-approval";
 import type { BillingSummary, StudioSettings } from "@/core/versions/outcome";
 import { preparationProgress } from "@/core/versions/progress";
+import { PlaceTimeChoice } from "@/components/place-time-choice";
+import type { PlaceTimeOfDay } from "@/core/motion/place-motion";
 
 type Format = "16:9" | "9:16" | "1:1";
 type Job = TrackedVersion & {
@@ -40,6 +44,7 @@ type Job = TrackedVersion & {
   settings?: StudioSettings | null;
   billing?: BillingSummary | null;
   keyframeApproval?: Board | null;
+  clipApproval?: ClipBoardData | null;
   approvalState?: { expiredAt?: string } | null;
   priceFcfa?: number | null;
   completedShots?: number;
@@ -88,6 +93,7 @@ type PlaceAsset = {
   category?: string;
   previewUrl?: string | null;
   isCurated?: boolean;
+  placeProfile?: { timeOfDay?: PlaceTimeOfDay };
 };
 type CastAsset = { id: string; title?: string; previewUrl?: string | null };
 const MAX_CAST = 2;
@@ -185,6 +191,7 @@ export function StudioComposer({ mode, showPrompt = false }: { mode: "mock" | "l
   const [places, setPlaces] = useState<PlaceAsset[]>([]);
   const [vehicleDossierId, setVehicleDossierId] = useState("");
   const [placeIds, setPlaceIds] = useState<string[]>([]);
+  const [timeTransition, setTimeTransition] = useState(false);
   const [locationAssetId, setLocationAssetId] = useState("");
   const [castAssets, setCastAssets] = useState<CastAsset[]>([]);
   const [castIds, setCastIds] = useState<string[]>([]);
@@ -532,6 +539,7 @@ export function StudioComposer({ mode, showPrompt = false }: { mode: "mock" | "l
           vehicleDossierIds: selectedDossier.dossierIds ?? [selectedDossier.id],
           vehiclePhotoIds: selectedVehiclePhotoIds,
           placeIds: effectivePlaceIds,
+          timeTransition,
           mode: tier,
           durationSeconds: durationS,
           purpose,
@@ -561,6 +569,7 @@ export function StudioComposer({ mode, showPrompt = false }: { mode: "mock" | "l
       const payload: Record<string, unknown> = {
         workflow: workflow === "single" ? "single_storyboard" : "multi_clip",
         description: additionalDirection,
+        timeTransition,
         title,
         assetId: firstPhoto.id,
         vehicleDossierId: selectedDossier.id,
@@ -738,6 +747,7 @@ export function StudioComposer({ mode, showPrompt = false }: { mode: "mock" | "l
                 onSubmitted={() => void tracker.reload()}
               />
             )}
+            {job.clipApproval && jobRunning && <ClipBoard versionId={job.id} board={job.clipApproval} onChanged={() => tracker.resolveReview(job.id)} />}
             {job.keyframeApproval && jobRunning && (
               <KeyframeBoard
                 versionId={job.id}
@@ -1098,6 +1108,7 @@ export function StudioComposer({ mode, showPrompt = false }: { mode: "mock" | "l
                 Aucun lieu validé disponible.
               </p>
             )}
+            <PlaceTimeChoice places={effectivePlaceIds.map((id) => ({ id, timeOfDay: places.find((place) => place.id === id)?.placeProfile?.timeOfDay }))} transition={timeTransition} onTransition={() => { setTimeTransition(true); clearFormError(); }} onKeep={(ids) => { setPlaceIds(ids); setLocationAssetId(ids[0] ?? ''); setTimeTransition(false); clearFormError(); }} />
           </fieldset>
         </section>
 
@@ -1285,7 +1296,7 @@ export function StudioComposer({ mode, showPrompt = false }: { mode: "mock" | "l
                 className="mt-0.5 size-4 accent-[#c51e1c]"
               />
               <span>
-                <span className="font-semibold">Valider les images clés avant la vidéo</span>
+                <span className="font-semibold">Valider les images clés et les clips avant le montage</span>
                 <span className="block text-[#626269]">
                   {approvalBox.locked
                     ? "Demandé par votre marque : les vidéos des plans, l’étape payante, attendent votre validation."

@@ -1,10 +1,12 @@
+import { recordDisagreement } from '@/core/verification/disagreements';
+import { storedClipApproval } from './clip-approval';
 import { z } from 'zod';
 import { HttpError, type Actor } from '@/core/auth/guards';
 import { reserveInternalClipCost, reserveKeyframeCost, settleUsageCost } from '@/core/billing/ledger';
 import { KEYFRAME_QUALITY_RESERVE_USD } from '@/core/providers/fal-keyframes';
 import { storedRenderSettings } from './render-settings';
 import { createStorageAdminClient } from '@/core/storage/supabase';
-import { appendVerification, cleanUserFeedback, MAX_CLIP_RETRIES, HUMAN_REVISIONS_PER_SHOT, humanRevisionsUsed, MAX_KEYFRAME_ATTEMPTS, REVISION_REASON_IDS, storedVerdict, USER_FEEDBACK_MAX_LENGTH } from '@/core/verification/loop';
+import { appendVerification, cleanUserFeedback, MAX_CLIP_RETRIES, HUMAN_REVISIONS_PER_SHOT, HUMAN_CLIP_REVISIONS_PER_SHOT, humanRevisionsUsed, MAX_KEYFRAME_ATTEMPTS, REVISION_REASON_IDS, storedVerdict, USER_FEEDBACK_MAX_LENGTH } from '@/core/verification/loop';
 import { revisionCapCheck, storedCostPlan } from '@/core/billing/video-cap';
 import { env } from '@/env';
 import { warningIssues } from './quality-gate';
@@ -58,7 +60,7 @@ async function engagedCostUsd(admin: ReturnType<typeof createStorageAdminClient>
 export async function reviewShot(actor: Actor, versionId: string, shotNumber: number, input: ShotReviewInput) {
   const decision = input.decision;
   const admin = createStorageAdminClient();
-  const { data: version, error } = await admin.from('video_versions').select('id,status,brief_json,model:ai_models!inner(price_usd_per_second),video:videos!inner(user_id,department)').eq('id', versionId).maybeSingle();
+  const { data: version, error } = await admin.from('video_versions').select('id,video_id,status,brief_json,model:ai_models!inner(price_usd_per_second),video:videos!inner(user_id,department)').eq('id', versionId).maybeSingle();
   const video = Array.isArray(version?.video) ? version.video[0] : version?.video;
   if (error || !version || !video || video.user_id !== actor.id && actor.role !== 'admin') throw new HttpError(404, 'Cette version est introuvable.');
   if (version.status !== 'generating') throw new HttpError(409, 'Cette vidéo n’attend plus de décision.');
@@ -89,7 +91,7 @@ export async function reviewShot(actor: Actor, versionId: string, shotNumber: nu
       return { shotNumber, decision, status: 'accepted' as const };
     }
     const used = humanRevisionsUsed(shot.verification_history);
-    if (used >= HUMAN_REVISIONS_PER_SHOT) throw new HttpError(409, `Les ${HUMAN_REVISIONS_PER_SHOT} modifications prévues pour ce plan sont utilisées. Acceptez-le tel quel ou annulez la vidéo.`);
+    if (used >= HUMAN_REVISIONS_PER_SHOT) throw new HttpError(409, 'Modification utilisée pour cette image clé. Acceptez-la telle quelle ou annulez la vidéo.');
     if (attempt + 1 >= MAX_KEYFRAME_ATTEMPTS) throw new HttpError(409, 'Le nombre maximal de relances est atteint pour ce plan. Acceptez-le ou annulez la vidéo.');
     const brief = version.brief_json && typeof version.brief_json === 'object' ? version.brief_json as Record<string, unknown> : {};
     // The cap is checked before anything is reserved: engaged costs of the video + this correction.
@@ -104,31 +106,40 @@ export async function reviewShot(actor: Actor, versionId: string, shotNumber: nu
     const feedbackConflicts = decision === 'revise' ? detectFeedbackConflicts(feedback, brief, locationPhotoId).map((conflict) => conflict.message) : [];
     const imageIds = ids(shot.keyframe_image_ledger_ids);
     const qualityIds = ids(shot.keyframe_quality_ledger_ids);
-    // The next attempt uses slot attempt + 1; reserve it unless an automatic correction slot is still free.
-    if (imageIds.length <= attempt + 1) {
+    const revisionReservations: string[] = [];
+    // A green image's unused automatic slots were released: always reserve a fresh human correction.
+    {
       const reserve = (estimatedCostUsd: number) => reserveKeyframeCost(admin, { userId: video.user_id, versionId, department: video.department ?? '', estimatedCostUsd, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA });
       const [image, quality] = await Promise.all([reserve(storedRenderSettings(version.brief_json && typeof version.brief_json === 'object' ? version.brief_json as Record<string, unknown> : {}).keyframeImageCostUsd), reserve(KEYFRAME_QUALITY_RESERVE_USD)]);
       if (image.error || !image.data || quality.error || !quality.data) {
         await Promise.all([release(image.data), release(quality.data)]);
         throw new HttpError(503, 'Impossible de réserver le coût de la relance. Aucune image n’a été demandée.');
       }
-      imageIds.push(image.data);
-      qualityIds.push(quality.data);
+      revisionReservations.push(image.data, quality.data);
+      await Promise.all([...imageIds.slice(attempt + 1), ...qualityIds.slice(attempt + 1)].map(release));
+      imageIds.splice(attempt + 1, Infinity, image.data);
+      qualityIds.splice(attempt + 1, Infinity, quality.data);
     }
-    const history = appendVerification(shot.verification_history, decision === 'revise'
+    const priorHistory = recordDisagreement(shot.verification_history, { versionId, videoId: version.video_id, shotNumber, stage: 'keyframe', brief, verdict, at: now, attempt, reasons, feedback });
+    const history = appendVerification(priorHistory, decision === 'revise'
       ? { stage: 'keyframe', attempt, at: now, approved: verdict.approved, issues: verdict.issues, reason: verdict.reason, decision: 'human_revise', by: 'human', feedback, reasons, scope: 'keyframe', conflicts: feedbackConflicts }
       : { stage: 'keyframe', attempt, at: now, approved: verdict.approved, issues: verdict.issues, reason: verdict.reason, decision: 'human_retry', by: 'human' });
     const { data: updated, error: updateError } = await admin.from('video_shots').update({ keyframe_status: 'revising', ...(onBoard ? { end_keyframe_status: 'skipped', end_keyframe_path: null } : {}), keyframe_image_ledger_ids: imageIds, keyframe_quality_ledger_ids: qualityIds, revision_request_id: null, revision_ledger_id: null, verification_history: history, updated_at: now })
       .eq('version_id', versionId).eq('shot_number', shotNumber).eq('keyframe_status', currentStatus).select('shot_number').maybeSingle();
-    if (updateError) throw new HttpError(503, 'Impossible d’enregistrer la relance.');
-    if (!updated) throw new HttpError(409, 'Ce plan a déjà reçu une décision.');
+    if (updateError || !updated) {
+      await Promise.all(revisionReservations.map(release));
+      if (updateError) throw new HttpError(503, 'Impossible d’enregistrer la relance.');
+      throw new HttpError(409, 'Ce plan a déjà reçu une décision.');
+    }
     return { shotNumber, decision, status: 'revising' as const, feedbackConflicts, revisionsLeft: HUMAN_REVISIONS_PER_SHOT - used - 1 };
   }
 
-  if (shot.video_quality_status === 'awaiting_review') {
+  const clipBoard = storedClipApproval(version.brief_json as Record<string, unknown>);
+  const onClipBoard = clipBoard.required && clipBoard.requestedAt && !clipBoard.approvedAt && shot.raw_path && ['passed', 'awaiting_review'].includes(shot.video_quality_status);
+  if (shot.video_quality_status === 'awaiting_review' || onClipBoard) {
     const attempt = Number(shot.video_quality_retry_count ?? 0);
     const verdict = storedVerdict(shot.video_quality) ?? { approved: false, issues: [], reason: '' };
-    if (decision === 'retry') throw new HttpError(409, 'Pour un clip refusé, choisissez « Refaire la vidéo de ce plan » ou « Refaire l’image clé puis la vidéo ».');
+    if (decision === 'retry') return redoClip({ admin, version, video, shot, input: { ...input, decision: 'revise' }, attempt, verdict, now, release, ids });
     if (decision === 'revise') return redoClip({ admin, version, video, shot, input, attempt, verdict, now, release, ids });
     const history = appendVerification(shot.verification_history, { stage: 'video', attempt, at: now, approved: verdict.approved, issues: verdict.issues, reason: verdict.reason, decision: 'human_accept', by: 'human' });
     const quality = { ...verdict, warning: true, warningIssues: [...warningIssues(verdict), HUMAN_ACCEPT_NOTE].slice(-5), humanDecision: { by: actor.id, at: now } };
@@ -144,7 +155,7 @@ export async function reviewShot(actor: Actor, versionId: string, shotNumber: nu
 
 type RedoInput = {
   admin: ReturnType<typeof createStorageAdminClient>;
-  version: { id: string; brief_json: unknown; model: unknown };
+  version: { id: string; video_id?: string; brief_json: unknown; model: unknown };
   video: { user_id: string; department?: string | null };
   shot: Record<string, unknown>;
   input: ShotReviewInput;
@@ -165,8 +176,8 @@ async function redoClip({ admin, version, video, shot, input, attempt, verdict, 
   const scope = input.scope ?? 'clip';
   const versionId = version.id;
   const shotNumber = Number(shot.shot_number);
-  const used = humanRevisionsUsed(shot.verification_history);
-  if (used >= HUMAN_REVISIONS_PER_SHOT) throw new HttpError(409, `Les ${HUMAN_REVISIONS_PER_SHOT} modifications prévues pour ce plan sont utilisées. Acceptez-le tel quel ou annulez la vidéo.`);
+  const used = humanRevisionsUsed(shot.verification_history, 'video');
+  if (used >= HUMAN_CLIP_REVISIONS_PER_SHOT) throw new HttpError(409, 'Modification utilisée pour ce clip. Acceptez-le tel quel ou annulez la vidéo.');
   const keyframeAttempt = Number(shot.keyframe_retry_count ?? 0);
   if (typeof shot.keyframe_path !== 'string' || !shot.keyframe_path) throw new HttpError(409, 'L’image clé de ce plan est introuvable : le clip ne peut pas être refait.');
   if (scope === 'full' && keyframeAttempt + 1 >= MAX_KEYFRAME_ATTEMPTS) throw new HttpError(409, 'Le nombre maximal d’images clés est atteint pour ce plan : choisissez « Refaire la vidéo de ce plan ».');
@@ -195,7 +206,7 @@ async function redoClip({ admin, version, video, shot, input, attempt, verdict, 
   const qualityIds = ids(shot.video_quality_ledger_ids);
   const reserveCheck = () => reserveKeyframeCost(admin, { userId: video.user_id, versionId, department: video.department ?? '', estimatedCostUsd: KEYFRAME_QUALITY_RESERVE_USD, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA });
   // A clip still on its first attempt has kept its unused retry check: it becomes the check of the new clip.
-  if (!(attempt < MAX_CLIP_RETRIES && qualityIds[MAX_CLIP_RETRIES])) {
+  { // Always reserve a fresh check: the previous retry slot may have been released on acceptance.
     const check = await reserveCheck();
     if (check.error || !check.data) return fail();
     reserved.push(check.data);
@@ -215,9 +226,10 @@ async function redoClip({ admin, version, video, shot, input, attempt, verdict, 
     imageIds.splice(keyframeAttempt + 1, Infinity, image.data);
     keyframeQualityIds.splice(keyframeAttempt + 1, Infinity, check.data);
   }
-  const history = appendVerification(shot.verification_history, { stage: 'video', attempt, at: now, approved: verdict.approved, issues: verdict.issues, reason: verdict.reason, decision: 'human_revise', by: 'human', feedback, reasons, scope, conflicts: feedbackConflicts, clipLedgerId: clip.data });
+  const priorHistory = recordDisagreement(shot.verification_history, { versionId, videoId: version.video_id, shotNumber, stage: 'video', brief, verdict, at: now, attempt, reasons, feedback });
+  const history = appendVerification(priorHistory, { stage: 'video', attempt, at: now, approved: verdict.approved, issues: verdict.issues, reason: verdict.reason, decision: 'human_revise', by: 'human', feedback, reasons, scope, conflicts: feedbackConflicts, clipLedgerId: clip.data });
   // The clip already made stays stored (video_quality_previous_path) and its cost stays on the video, as before.
-  const { data: updated, error: updateError } = await admin.from('video_shots').update({
+  const patch = {
     // Both scopes reuse the existing keyframe path through the director step; only "full" reserves and generates a replacement.
     keyframe_status: 'revising', end_keyframe_status: 'skipped', end_keyframe_path: null,
     keyframe_image_ledger_ids: imageIds, keyframe_quality_ledger_ids: keyframeQualityIds, video_quality_ledger_ids: qualityIds,
@@ -225,11 +237,17 @@ async function redoClip({ admin, version, video, shot, input, attempt, verdict, 
     status: 'queued', video_quality_status: 'queued', video_quality_retry_count: MAX_CLIP_RETRIES, video_quality_request_id: null,
     video_quality_previous_path: typeof shot.raw_path === 'string' ? shot.raw_path : null,
     animation_submit_state: 'queued', provider_request_id: null, provider_poll_failure_count: 0, provider_next_poll_at: null, provider_last_poll_error: null, error_message: null, updated_at: now,
-  }).eq('version_id', versionId).eq('shot_number', shotNumber).eq('video_quality_status', 'awaiting_review').select('shot_number').maybeSingle();
+  };
+  const onBoard = storedClipApproval(brief).required && Boolean(storedClipApproval(brief).requestedAt);
+  const result = onBoard
+    ? await admin.rpc('rimco_clip_review', { p_version_id: versionId, p_action: 'revise', p_shot: shotNumber, p_expected_history: shot.verification_history, p_patch: patch })
+    : await admin.from('video_shots').update(patch).eq('version_id', versionId).eq('shot_number', shotNumber).eq('video_quality_status', 'awaiting_review').select('shot_number').maybeSingle();
+  const updated = onBoard ? result.data?.changed : result.data;
+  const updateError = result.error;
   if (updateError || !updated) {
     await Promise.all(reserved.map(release));
     if (updateError) throw new HttpError(503, 'Impossible d’enregistrer la reprise.');
     throw new HttpError(409, 'Ce plan a déjà reçu une décision.');
   }
-  return { shotNumber, decision: 'revise' as const, scope, status: 'revising' as const, feedbackConflicts, revisionsLeft: HUMAN_REVISIONS_PER_SHOT - used - 1 };
+  return { shotNumber, decision: 'revise' as const, scope, status: 'revising' as const, feedbackConflicts, revisionsLeft: HUMAN_CLIP_REVISIONS_PER_SHOT - used - 1 };
 }

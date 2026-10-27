@@ -17,6 +17,13 @@ function createAdminMock(options?: { insertedId?: string; ledger?: Record<string
 }
 
 describe('usage cost ledger', () => {
+  it('conserve le prix et le tarif figés au lancement après une hausse de grille', async () => {
+    const mock = createAdminMock({ ledger: { id: 'entry-1', status: 'reserved', seconds: 20, billable_seconds: 20, price_fcfa: 20 * 700 } });
+    mock.query.maybeSingle.mockResolvedValueOnce({ data: { id: 'entry-1', status: 'reserved', seconds: 20, billable_seconds: 20, price_fcfa: 20 * 700 }, error: null });
+    mock.query.maybeSingle.mockResolvedValueOnce({ data: { id: 'entry-1' }, error: null });
+    await settleUsageCost(mock.admin as never, { entryId: 'entry-1', outcome: 'charged', actualCostUsd: 2, usdToEur: 0.92, eurToFcfa: 655.957 });
+    expect(mock.updates[0]).toMatchObject({ price_fcfa: 20 * 700, applied_fcfa_per_second: 700 });
+  });
   it('reserves generation cost directly in the ledger without an RPC', async () => {
     const mock = createAdminMock();
     const entry = await reserveGenerationCost(mock.admin as never, {

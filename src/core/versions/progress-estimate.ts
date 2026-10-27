@@ -1,13 +1,14 @@
+import { storedClipApproval } from './clip-approval';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { ProcessingMetrics } from './processing-metrics';
 import { storedApproval } from './keyframe-approval';
-import { buildProgress, estimateSteps, humanWaitIntervals, PROGRESS_STEPS, stepDurations, type GenerationProgress, type ProgressEstimate, type ProgressShotRow, type ProgressStep, type StepSeconds } from './progress';
+import { buildProgress, estimateSteps, humanWaitIntervals, mergeIntervals, PROGRESS_STEPS, stepDurations, type GenerationProgress, type ProgressEstimate, type ProgressShotRow, type ProgressStep, type StepSeconds } from './progress';
 
 const HISTORY_SIZE = 20;
 const CACHE_MS = 10 * 60_000;
 const cache = new Map<string, { at: number; samples: StepSeconds[] }>();
 
-type HistoryRow = { metrics: ProcessingMetrics | null; quality: boolean | null; video_shots: ProgressShotRow[] | null };
+type HistoryRow = { clipApproval?: { requestedAt?: string; approvedAt?: string }; keyframeApproval?: { requestedAt?: string; approvedAt?: string }; metrics: ProcessingMetrics | null; quality: boolean | null; video_shots: ProgressShotRow[] | null };
 
 /**
  * Step durations of the last 20 ready videos of the same tier and number of shots (human waits removed).
@@ -18,7 +19,7 @@ async function historySamples(admin: SupabaseClient, tier: string, shotCount: nu
   const cached = cache.get(key);
   if (cached && Date.now() - cached.at < CACHE_MS) return cached.samples;
   const { data, error } = await admin.from('video_versions')
-    .select('metrics:brief_json->processingMetrics,quality:brief_json->videoQualityMode,video_shots(shot_number,verification_history)')
+    .select('clipApproval:brief_json->clipApproval,keyframeApproval:brief_json->keyframeApproval,metrics:brief_json->processingMetrics,quality:brief_json->videoQualityMode,video_shots(shot_number,verification_history)')
     .eq('status', 'ready')
     .eq('brief_json->>generationTier', tier)
     .not('brief_json->processingMetrics->>postproductionCompletedAt', 'is', null)
@@ -30,7 +31,7 @@ async function historySamples(admin: SupabaseClient, tier: string, shotCount: nu
   const samples = ((data ?? []) as unknown as HistoryRow[])
     .filter((row) => (row.video_shots ?? []).length === shotCount && (row.quality === true) === hasQuality && row.metrics)
     .slice(0, HISTORY_SIZE)
-    .map((row) => stepDurations(row.metrics!, { hasQuality, waits: humanWaitIntervals(row.video_shots ?? [], Date.now()) }));
+    .map((row) => stepDurations(row.metrics!, { hasQuality, waits: mergeIntervals([...humanWaitIntervals(row.video_shots ?? [], Date.now()), ...[row.keyframeApproval, row.clipApproval].flatMap((state): [number, number][] => state?.requestedAt && state.approvedAt ? [[Date.parse(state.requestedAt), Date.parse(state.approvedAt)]] : [])]) }));
   cache.set(key, { at: Date.now(), samples });
   return samples;
 }
@@ -46,7 +47,7 @@ export async function versionProgress(admin: SupabaseClient, input: { status: st
   const hasQuality = input.brief.videoQualityMode === true;
   const hasKeyframes = input.brief.keyframeMode === true;
   const now = Date.now();
-  const base = buildProgress({ status: input.status, metrics, hasKeyframes, hasQuality, shots: input.shots, estimate: null, now, approval: storedApproval(input.brief) });
+  const base = buildProgress({ status: input.status, metrics, hasKeyframes, hasQuality, shots: input.shots, estimate: null, now, approval: storedApproval(input.brief), clipApproval: storedClipApproval(input.brief) });
   if (!['queued', 'generating', 'postprocessing'].includes(input.status)) return base;
   const shotCount = input.shots.length || (Array.isArray(input.brief.storyboard) ? input.brief.storyboard.length : 1);
   const tier = typeof input.brief.generationTier === 'string' ? input.brief.generationTier : null;

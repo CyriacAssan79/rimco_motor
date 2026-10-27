@@ -28,7 +28,7 @@ export function relaunchCostText(cost: NonNullable<ReviewRequest["cost"]>) {
  * « Modifier ce plan » (27/10): closed-list reasons and/or a comment (400 characters), the cost in FCFA, then
  * « Lancer la correction ». Shared by the decision panel and the keyframe board.
  */
-export function ReviseShotForm({ versionId, shotNumber, cost, onSent, onCancel }: { versionId: string; shotNumber: number; cost?: ReviewRequest["cost"]; onSent: (conflicts: string[]) => void; onCancel: () => void }) {
+export function ReviseShotForm({ versionId, shotNumber, cost, scope, onSent, onCancel }: { versionId: string; shotNumber: number; cost?: ReviewRequest["cost"]; scope?: 'clip' | 'full'; onSent: (conflicts: string[]) => void; onCancel: () => void }) {
   const [reasons, setReasons] = useState<RevisionReason[]>([]);
   const [feedback, setFeedback] = useState("");
   const [busy, setBusy] = useState(false);
@@ -41,7 +41,7 @@ export function ReviseShotForm({ versionId, shotNumber, cost, onSent, onCancel }
       const response = await fetch(`/api/versions/${versionId}/shots/${shotNumber}/review`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ decision: "revise", feedback: feedback.trim(), reasons }),
+        body: JSON.stringify({ decision: "revise", feedback: feedback.trim(), reasons, ...(scope ? { scope } : {}) }),
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error ?? "La correction n’a pas pu être lancée.");
@@ -285,7 +285,7 @@ export function ShotReviewPanel({
                     />
                   )}
                   {item.stage === "keyframe" && !item.canRetry && item.revisionsLeft === 0 && (
-                    <p className="text-xs leading-5 text-[#55545a]">Les modifications prévues pour ce plan sont utilisées : acceptez-le tel quel ou annulez la vidéo.</p>
+                    <p className="text-xs leading-5 text-[#55545a]">Modification utilisée : acceptez le plan tel quel ou annulez la vidéo.</p>
                   )}
                   {item.lastRevision && (
                     <div className="text-xs leading-5 text-[#55545a]">

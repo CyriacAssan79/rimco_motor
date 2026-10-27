@@ -3,6 +3,7 @@ import { peoplePresets, type PeoplePresetId } from '@/core/people-presets';
 import { isBridgePlace, steeringRule, trafficRule } from '@/core/prompts/rules';
 import { directorMotionTable, motionRefs, type MotionMatrix } from '@/core/motion/place-motion';
 import { lightingMismatch, lightingForPrompt, moodForPrompt } from '@/core/scenes/prompt-values';
+import { placesForFilm, resolveFilmLighting } from '@/core/brief/film-lighting';
 
 export const storyModeSchema = z.enum(['standard', 'pro', 'premium']);
 export type StoryMode = z.infer<typeof storyModeSchema>;
@@ -308,6 +309,8 @@ export function buildDirectorInstruction(input: {
   format?: '16:9' | '9:16' | '1:1' | '4:5';
   lighting?: string;
   mood?: string;
+  direction?: string;
+  timeTransition?: boolean;
   cast?: CastMember[];
   peoplePreset?: PeoplePresetId;
   /** Brand market (`brands.market_location`), e.g. « Abidjan, Côte d’Ivoire »; never hard-coded. */
@@ -319,7 +322,9 @@ export function buildDirectorInstruction(input: {
   motionMatrix?: MotionMatrix;
 }) {
   const limits = DIRECTOR_FIELD_LIMITS;
-  const matrix = input.motionMatrix;
+  const filmLighting = resolveFilmLighting(input.places, input.direction, input.timeTransition);
+  input = { ...input, places: placesForFilm(input.places, filmLighting) };
+  const matrix = input.motionMatrix ? { ...input.motionMatrix, places: Object.fromEntries(Object.entries(input.motionMatrix.places).filter(([id]) => input.places.some((place) => place.id === id))) } : undefined;
   const indoor = matrix ? Object.values(matrix.places).some((place) => place.timeOfDay === 'interior') : input.places.some((place) => place.timeOfDay === 'interior');
   const refs = matrix ? motionRefs(input.places.map((place) => place.id), input.vehiclePhotos.map((photo) => photo.id)) : undefined;
   // 26/10 (vérification « preambule »): without a character the car may be empty, so the steering rule takes its empty-car form.
@@ -331,10 +336,11 @@ export function buildDirectorInstruction(input: {
     `You direct a premium live-action car commercial for RIMCO Motors${input.marketLocation ? ` in ${input.marketLocation}` : ''}, ${input.format ?? '16:9'}. Return only this JSON: ${DIRECTOR_SCHEMA}`,
     `FORMAT: "title" in French (max ${limits.title} characters). scene (${limits.scene}), framing (${limits.framing}), location (${limits.location}), action (${limits.action}) and camera (${limits.camera}) in short English cinematographer language. ${directorShotPlan(input)} A ${STORYBOARD_LOGO_SECONDS} s logo card is added after the edit.`,
     'STORY: one clear idea taken from the user brief. Open on the place with the car already moving, vary shot sizes, end on a calm exterior hero shot (front three-quarter view if available).',
+    filmLighting.transition ? 'TIME: explicit transition requested. Order outdoor shots day → golden → night, never backwards. Interiors are neutral. Use only available places; report any requested time you cannot show in briefConflicts.' : `TIME: ONE time of day for the whole film: ${filmLighting.moment}. Interiors are neutral. Use only the listed places.`,
     `MOTION: ${matrix ? 'at least half the shots move ("rolling" or "establishing") when ALLOWED permits it' : 'at least half the shots are "rolling"'}. Give every shot a travelDirection and a travelSpeed ("static" when stopped). Prefer set-ups where travel reads against the ground: pass-by with a static or panning camera, approach, drive-away, follow from behind. At most one side-tracking shot at the car\'s speed. Keep one lateral direction for the whole film. In "action", name the fixed things the car passes. Normal, legal driving only: the car stays in its lane; no drift, skid, high speed or complex manoeuvre; ${matrix
       ? `travelSpeed never above the maxSpeed of the place. Use only the shotType → travelDirection pairs that ALLOWED lists for the place and the photo of the shot; any other pair is rejected. The car follows the road of its place${bridge ? ' (on a bridge, the deck)' : ''}. A car that arrives and stops is not static: give its direction with travelSpeed slow. One simple camera move per shot; dust only where ALLOWED says dust.${matrix.undescribed.length ? ' A place marked (default) is not described yet: keep its shots simple (hero or detail, a slow arrival at most).' : ''}`
       : 'travelSpeed is slow or cruise in towns, dynamic only on an open road. Match travelDirection to the photo angle: front three-quarter = towards_camera, profile = left_to_right or right_to_left, rear three-quarter = away_from_camera. A car that arrives and stops is not static: give its direction with travelSpeed slow. One simple camera move per shot; dust only on unpaved roads.'}${input.trafficSide ? ` ${trafficRule(input.trafficSide)}` : ''}${input.steeringSide ? ` ${steeringRule(input.steeringSide, occupied)}` : ''}${indoor ? ' In an interior place (showroom) the car never moves: shotType hero or detail, travelDirection static, only the camera moves; the rolling shots are in the outdoor places.' : ''}`,
-    `FIDELITY: use only the photo and place ids listed below. Each shot matches the angle of its photo: a close-up only on a detail visible on the photo of the shot; no interior, rear or profile without a matching photo. Invent nothing: no feature, colour, landmark, sign or text.${input.places.length ? ' Every shot takes its locationPhotoId from the listed places (never null) and shows only that place.' : ''}${input.places.some((place) => place.timeOfDay) ? " The light of each shot follows its place's timeOfDay; prefer places with the same timeOfDay." : ''}`,
+    `FIDELITY: use only the photo and place ids listed below. Each shot matches the angle of its photo: a close-up only on a detail visible on the photo of the shot; no interior, rear or profile without a matching photo. Invent nothing: no feature, colour, landmark, sign or text.${input.places.length ? ' Every shot takes its locationPhotoId from the listed places (never null) and shows only that place.' : ''} The light of each shot follows its place's timeOfDay.`,
     peopleRule(input),
     'TEXT: no text, title, logo, caption or transition; avoid framing signs or billboards; plates unreadable.',
     `Vehicle: ${input.vehicle}. Photos: ${JSON.stringify(input.vehiclePhotos.map((photo) => ({ ...(refs ? { ref: refs.photos[photo.id] } : {}), id: photo.id, angle: photo.angle ?? photo.title, role: photo.role })))}. Places: ${JSON.stringify(input.places.map((place) => ({ ...(refs ? { ref: refs.places[place.id] } : {}), id: place.id, title: place.title, ...(place.description ? { description: place.description } : {}), ...(place.timeOfDay ? { timeOfDay: place.timeOfDay } : {}) })))}. Lighting: ${lighting ?? 'natural light matching each place'}. Mood: ${moodForPrompt(input.mood) || 'premium and confident'}.${matrix ? ` ALLOWED, per place ref (L…): maxSpeed, "dust" when dust is allowed, then per photo ref (P…) the accepted shotType travelDirection/travelDirection: ${directorMotionTable(matrix, refs)}. Refs only shorten this table: vehiclePhotoId and locationPhotoId always take the full id.` : ''}`,

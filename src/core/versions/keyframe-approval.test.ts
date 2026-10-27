@@ -45,6 +45,18 @@ function gate(brief: Row, shots: GateShot[], now: number) {
 const readyShot = (number: number, history: unknown[] = []): GateShot => ({ shot_number: number, title: `Plan ${number}`, keyframe_status: 'ready', keyframe_retry_count: 0, verification_history: history });
 
 describe('keyframe board before the paid animation', () => {
+  it('ne fait pas expirer un retour à l’image clé après des clips déjà payés', async () => {
+    const brief: Row = { keyframeApproval: { required: true, requestedAt: new Date(T0).toISOString(), shotNumbers: [2] }, clipApproval: { required: true, requestedAt: new Date(T0).toISOString() } };
+    const run = gate(brief, [readyShot(1, [approve(new Date(T0).toISOString())]), readyShot(2)], hours(49));
+    expect(await run.run()).toMatchObject({ status: 'generating', processingStage: 'keyframe_approval' });
+    expect(run.writes.some((write) => write.values.status === 'cancelled')).toBe(false);
+  });
+  it('retour depuis un clip : montre seulement l’image clé du plan repris', async () => {
+    const brief: Row = { keyframeApproval: { required: true, requestedAt: new Date(T0).toISOString(), shotNumbers: [2] }, clipApproval: { required: true, requestedAt: new Date(T0).toISOString() } };
+    const result = await gate(brief, [readyShot(1, [approve(new Date(T0).toISOString())]), readyShot(2)], T0).run();
+    expect(result).toMatchObject({ keyframeApproval: { shots: [{ shotNumber: 2 }] } });
+    expect(result && 'keyframeApproval' in result && result.keyframeApproval?.shots).toHaveLength(1);
+  });
   it('does not let the animation start before the validation, and notifies once', async () => {
     const brief: Row = { keyframeApproval: { required: true } };
     const first = gate(brief, [readyShot(1), readyShot(2)], T0);
@@ -77,7 +89,7 @@ describe('keyframe board before the paid animation', () => {
   it('a modified shot must be validated again', async () => {
     const brief: Row = { keyframeApproval: { required: true, requestedAt: new Date(T0).toISOString() } };
     const shots = [readyShot(1, [approve(new Date(hours(0.1)).toISOString()), revise(new Date(hours(0.2)).toISOString()), verifierAccept(new Date(hours(0.3)).toISOString())])];
-    expect(await gate(brief, shots, hours(0.4)).run()).toMatchObject({ keyframeApproval: { shots: [{ state: 'to_approve', revisionsLeft: 1 }] } });
+    expect(await gate(brief, shots, hours(0.4)).run()).toMatchObject({ keyframeApproval: { shots: [{ state: 'to_approve', revisionsLeft: 0 }] } });
   });
 
   it('keeps the previous behaviour when the validation is off', async () => {

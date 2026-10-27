@@ -25,8 +25,8 @@ export function KeyframeApprovalSettings() {
     setNotice('Réglage enregistré : il s’applique aux prochaines vidéos.');
   }
   return <section aria-labelledby="keyframe-approval-title" className="mt-8 border border-[var(--border)] bg-white p-5">
-    <h2 id="keyframe-approval-title" className="text-sm font-semibold">Validation des images clés avant la vidéo</h2>
-    <p className="mt-1 max-w-2xl text-xs leading-5 text-[#626269]">Les vidéos des plans, l’étape payante, attendent que l’utilisateur valide les images clés. Les mesures (attente, plans modifiés) sont dans l’export CSV du suivi de consommation.</p>
+    <h2 id="keyframe-approval-title" className="text-sm font-semibold">Validation humaine (images clés et clips)</h2>
+    <p className="mt-1 max-w-2xl text-xs leading-5 text-[#626269]">L’utilisateur valide les images clés avant l’animation, puis les clips avant le montage. Les attentes, modifications et désactivations figurent dans l’export CSV du suivi de consommation.</p>
     {error && <p role="alert" className="mt-3 text-sm text-[#9d352e]">{error}</p>}
     {notice && <p role="status" className="mt-3 text-sm text-[#315c39]">{notice}</p>}
     <div className="mt-4 space-y-3">{brands.map((brand) => <label key={brand.id} className="grid max-w-xl gap-1 text-xs font-semibold">{brand.name}

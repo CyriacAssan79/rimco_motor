@@ -3,8 +3,8 @@ insert into public.brands(name,primary_color,secondary_color)
 values ('RIMCO Motors','#c51e1c','#831810')
 on conflict(name) do update set primary_color=excluded.primary_color,secondary_color=excluded.secondary_color;
 
-insert into public.pricing_settings(brand_id,grid_fcfa_per_second_standard,grid_fcfa_per_second_premium)
-select id,460,700 from public.brands where name='RIMCO Motors'
+insert into public.pricing_settings(brand_id,grid_fcfa_per_second_standard,grid_fcfa_per_second_pro,grid_fcfa_per_second_premium)
+select id,460,700,950 from public.brands where name='RIMCO Motors'
 on conflict(brand_id) do update set grid_fcfa_per_second_standard=excluded.grid_fcfa_per_second_standard,
   grid_fcfa_per_second_premium=excluded.grid_fcfa_per_second_premium;
 

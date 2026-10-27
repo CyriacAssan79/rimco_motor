@@ -13,16 +13,17 @@ import { shotDraftSchema, type StoryboardShot } from '@/core/storyboard';
  * ni monté sans acceptation. Les vérificateurs ne lancent jamais eux-mêmes de génération : ils rendent un verdict,
  * l'orchestrateur décide.
  */
-export const MAX_KEYFRAME_CORRECTIONS = 2;
+export const MAX_KEYFRAME_CORRECTIONS = 1;
 /** Base constraint (migration 0033): automatic corrections plus the relaunches asked by a human. */
 export const MAX_KEYFRAME_ATTEMPTS = 6;
 export const MAX_CLIP_RETRIES = 1;
 /**
  * « Modifier ce plan » (27/10): corrections asked by a human with a comment, per shot, on top of the automatic ones.
  * The older relaunch without comment (`retry`) counts in the same budget. Beyond it, only « Accepter » and
- * « Annuler la vidéo » remain. Keyframe attempts stay within MAX_KEYFRAME_ATTEMPTS: 1 + 2 automatic + 2 human = 5.
+ * « Annuler la vidéo » remain. The keyframe and clip have independent human budgets.
  */
-export const HUMAN_REVISIONS_PER_SHOT = 2;
+export const HUMAN_REVISIONS_PER_SHOT = 1;
+export const HUMAN_CLIP_REVISIONS_PER_SHOT = 1;
 export const USER_FEEDBACK_MAX_LENGTH = 400;
 
 /** Closed list of reasons the user can tick; the English text goes to the director, the French one to the screen. */
@@ -48,9 +49,9 @@ export function cleanUserFeedback(value: unknown): string {
 }
 
 /** Human corrections already asked for a shot (« Modifier ce plan » and the older relaunch without comment). */
-export function humanRevisionsUsed(history: unknown): number {
-  const entries = Array.isArray(history) ? history as Array<{ by?: unknown; decision?: unknown }> : [];
-  return entries.filter((entry) => entry.by === 'human' && (entry.decision === 'human_revise' || entry.decision === 'human_retry')).length;
+export function humanRevisionsUsed(history: unknown, stage: 'keyframe' | 'video' = 'keyframe'): number {
+  const entries = Array.isArray(history) ? history as Array<{ by?: unknown; decision?: unknown; stage?: unknown }> : [];
+  return entries.filter((entry) => (entry.stage ?? 'keyframe') === stage && entry.by === 'human' && (entry.decision === 'human_revise' || entry.decision === 'human_retry')).length;
 }
 
 /** Feedback of the human correction waiting for the director: the last entry of the history, if it is one. */
@@ -91,9 +92,9 @@ export type Verdict = { approved: boolean; issues: string[]; reason: string; rea
 
 export type KeyframeLoopDecision = 'accept' | 'accept_with_warning' | 'retry_image' | 'revise' | 'review';
 
-/** Automatic corrections still possible for a shot, bounded by its reserved attempts (old versions have 2). */
+/** Read the budget reserved at launch, including the two corrections of versions launched before 27/10. */
 export function keyframeCorrectionsAllowed(reservedAttempts: number): number {
-  return Math.max(0, Math.min(MAX_KEYFRAME_CORRECTIONS, reservedAttempts - 1));
+  return Math.max(0, Math.min(MAX_KEYFRAME_ATTEMPTS - 1, Math.floor(reservedAttempts) - 1));
 }
 
 /**
@@ -201,7 +202,7 @@ export type VerificationEntry = {
   approved: boolean | null;
   issues: string[];
   reason: string;
-  decision: KeyframeLoopDecision | ClipLoopDecision | 'human_accept' | 'human_retry' | 'human_revise' | 'human_approve';
+  decision: KeyframeLoopDecision | ClipLoopDecision | 'human_accept' | 'human_retry' | 'human_revise' | 'human_approve' | 'human_unapprove' | 'human_disable' | 'human_disagree';
   by: 'verifier' | 'human';
   /** « Modifier ce plan »: cleaned comment, ticked reasons, and the rules that adapted the request (French). */
   feedback?: string;
@@ -210,12 +211,14 @@ export type VerificationEntry = {
   conflicts?: string[];
   /** Clip redone by a human: its internal reservation (not billed to the client), settled when the clip arrives. */
   clipLedgerId?: string;
+  disabled?: boolean;
+  disagreement?: import('./disagreements').DisagreementContext;
 };
 
 /** History of every check of a shot (cost study: images, checks and corrections per accepted clip). */
 export function appendVerification(history: unknown, entry: VerificationEntry): VerificationEntry[] {
   const previous = Array.isArray(history) ? history as VerificationEntry[] : [];
-  return [...previous, { ...entry, issues: entry.issues.slice(0, 5), reason: entry.reason.slice(0, 240), ...(entry.feedback !== undefined ? { feedback: cleanUserFeedback(entry.feedback) } : {}) }].slice(-20);
+  return [...previous, { ...entry, issues: entry.issues.slice(0, 5), reason: entry.reason.slice(0, 240), ...(entry.feedback !== undefined ? { feedback: cleanUserFeedback(entry.feedback) } : {}) }];
 }
 
 /**

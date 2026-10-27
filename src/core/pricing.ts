@@ -10,15 +10,16 @@ function assertNonNegative(value:number,label:string):void {
 
 export function estimatePriceFcfa(seconds:number,tier:Tier):number {
   assertPositive(seconds,'La durée');
-  const pricePerSecond=tier==='standard'?460:700;
+  const pricePerSecond=tier==='standard'?460:tier==='pro'?700:950;
   return Math.round(seconds*pricePerSecond);
 }
 
-export function estimateGridPriceFcfa(seconds: number, tier: Tier, grid: { standard: number; premium: number }): number {
+export function estimateGridPriceFcfa(seconds: number, tier: Tier, grid: { standard: number; pro: number; premium: number }): number {
   assertPositive(seconds, 'La durée');
   assertNonNegative(grid.standard, 'Le tarif Standard');
+  assertNonNegative(grid.pro, 'Le tarif Pro');
   assertNonNegative(grid.premium, 'Le tarif Premium');
-  const pricePerSecond = tier === 'standard' ? grid.standard : grid.premium;
+  const pricePerSecond = tier === 'standard' ? grid.standard : tier === 'pro' ? grid.pro : grid.premium;
   return Math.round(seconds * pricePerSecond);
 }
 

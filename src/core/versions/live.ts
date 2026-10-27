@@ -125,10 +125,10 @@ export async function createLiveVersion(actor: Actor, input: CreateVersionInput,
   const initialBrief = options?.reuse?.brief ?? buildBrief(input.description || 'Vidéo automobile réaliste et élégante.', briefOptions);
   if (initialBrief.vehicle_asset_id !== asset.id || initialBrief.format !== input.format) throw new HttpError(422, 'Le brief commun ne correspond pas à la photo ou au format sélectionné.');
   const { data: pricingSettings, error: pricingError } = await admin.from('pricing_settings')
-    .select('grid_fcfa_per_second_standard,grid_fcfa_per_second_premium').eq('brand_id', actor.brandId).maybeSingle();
+    .select('grid_fcfa_per_second_standard,grid_fcfa_per_second_pro,grid_fcfa_per_second_premium').eq('brand_id', actor.brandId).maybeSingle();
   if (pricingError || !pricingSettings) throw new HttpError(503, 'La grille tarifaire de votre marque n’est pas configurée.');
   const priceFcfa = estimateGridPriceFcfa(input.durationS, input.tier, {
-    standard: Number(pricingSettings.grid_fcfa_per_second_standard), premium: Number(pricingSettings.grid_fcfa_per_second_premium),
+    standard: Number(pricingSettings.grid_fcfa_per_second_standard), pro: Number(pricingSettings.grid_fcfa_per_second_pro), premium: Number(pricingSettings.grid_fcfa_per_second_premium),
   });
   const videoTitle = input.title || `${vehicleMake ?? ''} ${vehicleModel ?? 'Véhicule'} · Nouvelle création`.trim();
   const falCredential = await getActiveFalCredential(admin);

@@ -19,6 +19,7 @@ import { signStoryboard, storyboardSigningKey } from '@/core/storyboard-signatur
 import { onlyCatalogLighting, onlyCatalogMood } from '@/core/scenes/prompt-values';
 import { estimateGridPriceFcfa } from '@/core/pricing';
 import { storyboardDirectionSchema } from '@/core/storyboard-direction';
+import { filmLightingIssue, placesForFilm, resolveFilmLighting } from '@/core/brief/film-lighting';
 
 const requestSchema = z.object({
   workflow: z.enum(['single', 'multi_clip']).default('multi_clip'),
@@ -26,6 +27,7 @@ const requestSchema = z.object({
   vehicleDossierIds: z.array(z.string().uuid()).max(20).default([]),
   vehiclePhotoIds: z.array(z.string().uuid()).max(30).default([]),
   placeIds: z.array(z.string().uuid()).max(12).default([]),
+  timeTransition: z.boolean().default(false),
   mode: z.enum(['standard', 'pro', 'premium']),
   durationSeconds: z.union([z.literal(5), z.literal(10), z.literal(15), z.literal(20)]),
   purpose: z.enum(['presentation', 'advertising']),
@@ -107,13 +109,17 @@ export async function POST(request: Request) {
     if (!selectedVehicle.length || input.vehiclePhotoIds.length > 0 && selectedVehicle.length !== input.vehiclePhotoIds.length) {
       throw new HttpError(422, 'Une ou plusieurs photos véhicule sélectionnées ne sont plus disponibles.');
     }
-    const selectedPlaces = places;
+    let selectedPlaces = places;
     // Aucun plan 100 % IA : chaque plan est tourné dans un lieu choisi par l’utilisateur (sinon le moteur invente une ville).
     if (!selectedPlaces.length) throw new HttpError(422, 'Choisissez au moins un lieu dans la médiathèque : chaque plan est tourné dans un lieu sélectionné.');
     // 26/10 motion matrix: what each place and photo allow, given to the director and checked on its answer.
     const uploadedPlaceIds = selectedPlaces.filter((place) => !findSelectableLocation(place.id)).map((place) => place.id);
     const uploadedProfiles = await loadPlaceProfiles(uploadedPlaceIds.length ? supabase.from('assets').select(PLACE_PROFILE_COLUMNS).in('id', uploadedPlaceIds) : Promise.resolve({ data: [], error: null }));
     const motionMatrix = buildMotionMatrix(selectedPlaces.map((place) => ({ id: place.id, ...placeProfileFor({ ...place, place_profile: uploadedProfiles[place.id] }) })), selectedVehicle);
+    const timedPlaces = selectedPlaces.map((place) => ({ ...place, timeOfDay: motionMatrix.places[place.id]?.timeOfDay ?? placeTimeOfDay(place) }));
+    const filmLighting = resolveFilmLighting(timedPlaces, input.direction, input.timeTransition);
+    selectedPlaces = placesForFilm(timedPlaces, filmLighting);
+    const timeIssue = (shots: StoryboardShot[]) => filmLightingIssue(shots, timedPlaces, filmLighting);
     const { marketLocation, trafficSide, steeringSide } = await loadBrandSettings(supabase.from('brands').select(BRAND_SETTINGS_COLUMNS).eq('id', actor.brandId).maybeSingle());
     const instructionInput = {
       durationSeconds: input.durationSeconds,
@@ -121,7 +127,7 @@ export async function POST(request: Request) {
       vehiclePhotos: selectedVehicle.map((photo) => ({ id: photo.id, role: photo.photo_role ?? 'exterior', title: photo.title ?? 'Photo véhicule', angle: photo.angle })),
       places: selectedPlaces.map((place) => ({ id: place.id, title: place.title ?? 'Lieu', category: place.category, timeOfDay: motionMatrix.places[place.id]?.timeOfDay ?? placeTimeOfDay(place), description: placeDescription({ ...place, profile: motionMatrix.places[place.id] }) })),
       purpose: input.purpose, direction: input.direction, format: input.format,
-      character: input.character, lighting: input.lighting, mood: input.mood,
+      character: input.character, lighting: input.lighting, mood: input.mood, timeTransition: input.timeTransition,
       cast,
       peoplePreset: cast.length ? 'none' as const : input.peoplePreset,
       marketLocation,
@@ -157,12 +163,12 @@ export async function POST(request: Request) {
         travelSpeed: 'cruise' as const,
         scene: premiumCreative ? ['Vue large du lieu', 'Suivi extérieur du véhicule', 'Détail extérieur appuyé par les photos', 'Trois-quarts avant en plan héros'][index] : index === 0 ? 'Plan d’ensemble cinématographique' : 'Plan rapproché sur le véhicule',
         framing: premiumCreative ? ['Plan large', 'Plan moyen trois-quarts', 'Gros plan autorisé par la photo', 'Plan héros trois-quarts avant'][index] : 'Plan moyen',
-        location: selectedPlaces[index % Math.max(1, selectedPlaces.length)]?.title ?? 'Abidjan, Côte d’Ivoire',
+        location: selectedPlaces[filmLighting.transition ? Math.min(selectedPlaces.length - 1, Math.floor(index * selectedPlaces.length / durations.length)) : index % selectedPlaces.length]?.title ?? 'Abidjan, Côte d’Ivoire',
         action: premiumCreative ? premiumActions[index] : index === 0 ? 'Le véhicule avance doucement dans son environnement réel.' : 'La caméra révèle les lignes et finitions présentes sur les photos.',
         camera: premiumCreative ? ['Travelling d’établissement lent', 'Suivi latéral stabilisé', 'Mouvement macro doux, sans changement d’angle inventé', 'Travelling avant fluide puis arrêt'][index] : index === 0 ? 'Travelling latéral lent et stable' : 'Mouvement rapproché fluide',
         durationSeconds,
         vehiclePhotoId: selectedVehicle[index % selectedVehicle.length].id,
-        locationPhotoId: selectedPlaces[index % Math.max(1, selectedPlaces.length)]?.id ?? null,
+        locationPhotoId: selectedPlaces[filmLighting.transition ? Math.min(selectedPlaces.length - 1, Math.floor(index * selectedPlaces.length / durations.length)) : index % selectedPlaces.length]?.id ?? null,
       }));
       shots = (input.workflow === 'single' ? singleShotStoryboardSchema.parse(drafts) : storyboardSchema.parse(drafts)).map((shot) => fitShotToMatrix(shot, motionMatrix));
       if (!cast.length && input.peoplePreset !== 'none') {
@@ -177,7 +183,7 @@ export async function POST(request: Request) {
       const falCredential = await getActiveFalCredential(admin);
       falApiKeyForRedaction = falCredential.apiKey;
       const { data: pricing, error: pricingError } = await admin.from('pricing_settings')
-        .select('grid_fcfa_per_second_standard,grid_fcfa_per_second_premium').eq('brand_id', actor.brandId).maybeSingle();
+        .select('grid_fcfa_per_second_standard,grid_fcfa_per_second_pro,grid_fcfa_per_second_premium').eq('brand_id', actor.brandId).maybeSingle();
       if (pricingError || !pricing) throw new HttpError(503, 'La grille tarifaire de votre marque n’est pas configurée.');
       const { data: reservation, error: reservationError } = await reserveLlmCost(admin, {
         userId: actor.id, department: actor.department, maxCostUsd: llmReservationUsd(env.LLM_MAX_COST_USD ?? 0),
@@ -199,14 +205,14 @@ export async function POST(request: Request) {
         const knownIds = (shots: StoryboardShot[]) => shots.some((shot) => !selectedVehicle.some((photo) => photo.id === shot.vehiclePhotoId) || (shot.locationPhotoId && !selectedPlaces.some((place) => place.id === shot.locationPhotoId))) ? 'vehiclePhotoId et locationPhotoId reprennent l’id complet des listes, jamais une référence P1 ou L1.' : null;
         const responseSchema = input.workflow === 'single'
           ? singleShotStoryboardResponseSchema.superRefine(({ shots, castDescription: sheet }, context) => {
-              const issue = [placeIssue(shots), knownIds(shots), interiorShotIssue(shots, interiorPlaceIds), motionMatrixIssue(shots, motionMatrix), forbiddenShotsIssue(shots), peopleSheetIssue(sheet), peopleShots(shots, sheet)].filter(Boolean).join(' ');
+              const issue = [timeIssue(shots), placeIssue(shots), knownIds(shots), interiorShotIssue(shots, interiorPlaceIds), motionMatrixIssue(shots, motionMatrix), forbiddenShotsIssue(shots), peopleSheetIssue(sheet), peopleShots(shots, sheet)].filter(Boolean).join(' ');
               if (issue) context.addIssue({ code: 'custom', path: ['shots'], message: issue });
             })
           // Patch v3.2 (A5): wrong durations make the answer invalid (automatic corrected retry), never silently rewritten.
           : z.object({ briefConflicts: briefConflictsSchema, castDescription: castDescriptionSchema.optional(), shots: storyboardSchema }).strict().superRefine(({ shots, castDescription: sheet }, context) => {
               const issue = [premiumTwentySecond
                 ? shots.length === 4 && shots.every((shot) => shot.durationSeconds === 5) ? null : 'Exactement 4 plans de 5 secondes.'
-                : storyboardDurationIssue(shots, input.durationSeconds, route.adapterFamily), placeIssue(shots), knownIds(shots), interiorShotIssue(shots, interiorPlaceIds), motionMatrixIssue(shots, motionMatrix), forbiddenShotsIssue(shots), peopleSheetIssue(sheet), peopleShots(shots, sheet)].filter(Boolean).join(' ');
+                : storyboardDurationIssue(shots, input.durationSeconds, route.adapterFamily), timeIssue(shots), placeIssue(shots), knownIds(shots), interiorShotIssue(shots, interiorPlaceIds), motionMatrixIssue(shots, motionMatrix), forbiddenShotsIssue(shots), peopleSheetIssue(sheet), peopleShots(shots, sheet)].filter(Boolean).join(' ');
               if (issue) context.addIssue({ code: 'custom', path: ['shots'], message: issue });
             });
         // Layer 1 (locked rules + approved references) goes in the system prompt; layer 2 (user brief) is the only user content.
@@ -216,7 +222,7 @@ export async function POST(request: Request) {
         castDescription = cast.length ? '' : result.fields.castDescription ?? '';
         storyboardCostUsd = result.costUsd ?? (env.LLM_MAX_COST_USD ?? 0) * result.completedRequests;
         totalEstimatedPriceFcfa = estimateGridPriceFcfa(input.durationSeconds, input.mode, {
-          standard: Number(pricing.grid_fcfa_per_second_standard), premium: Number(pricing.grid_fcfa_per_second_premium),
+          standard: Number(pricing.grid_fcfa_per_second_standard), pro: Number(pricing.grid_fcfa_per_second_pro), premium: Number(pricing.grid_fcfa_per_second_premium),
         });
         const { error: settleError } = await settleUsageCost(admin, { entryId: reservation, outcome: 'charged', actualCostUsd: storyboardCostUsd, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA, billable: false });
         if (settleError) throw new HttpError(503, 'Le coût du storyboard n’a pas pu être clôturé.');
@@ -252,7 +258,7 @@ export async function POST(request: Request) {
     }
     // 26/10: what the brief asked that the rules forbid (director + closed list in the code), shown before launch.
     const briefConflicts = mergeBriefConflicts(directorConflicts, detectBriefConflicts(input.direction, {
-      placeTimes: selectedPlaces.map((place) => motionMatrix.places[place.id]?.timeOfDay ?? null),
+      placeTimes: timedPlaces.map((place) => place.timeOfDay), timeTransition: input.timeTransition,
       hasInteriorPhoto: selectedVehicle.some((photo) => vehicleViewOf(photo).angle === 'interior'),
       lighting: input.lighting,
     }));

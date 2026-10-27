@@ -1,5 +1,50 @@
 import { expect, test, type Page } from '@playwright/test';
 
+test('images clés puis clips, désactivation et montage en simulation', async ({ page }) => {
+  test.setTimeout(120_000);
+  if (process.env.E2E_MOCK_NO_SUPABASE !== '1') {
+    const password = process.env.E2E_ADMIN_PASSWORD;
+    if (!password) throw new Error('Le mot de passe du compte E2E local est absent.');
+    await page.goto('/connexion');
+    await page.getByLabel('Adresse e-mail').fill(process.env.E2E_ADMIN_EMAIL ?? 'admin@rimco.test');
+    await page.getByLabel('Mot de passe').fill(password);
+    await page.getByRole('button', { name: 'Se connecter' }).click();
+    await expect(page).toHaveURL('/');
+  }
+  const id = 'e2e-human-review';
+  const version = { id, videoId: 'e2e-human-film', title: 'Film E2E avec validation', status: 'generating', versionStatus: 'generating', createdAt: new Date().toISOString() };
+  let phase: 'keyframes' | 'clips' | 'editing' = 'keyframes';
+  let montageStarts = 0;
+  const clips = [1, 2].map((number) => ({ shotNumber: number, title: `Plan ${number}`, action: 'Voiture qui roule · vers la caméra · 5 s', url: '/mock/mock-video.mp4', stage: 'video', issues: [], colour: 'green', active: true, approved: false, canRevise: true, canRetry: false, revisionsLeft: 1, clipOptions: { clip: { fcfa: 600, minutes: 4 }, full: { fcfa: 800, minutes: 5 } } }));
+  await page.route((url) => url.pathname === '/api/versions', (route) => route.fulfill({ json: { versions: [version] } }));
+  await page.route(`**/api/versions/${id}/refresh`, (route) => {
+    const keyframeApproval = { requestedAt: new Date().toISOString(), remindAt: new Date(Date.now() + 86_400_000).toISOString(), expiresAt: new Date(Date.now() + 172_800_000).toISOString(), shots: [1, 2].map((number) => ({ shotNumber: number, title: `Plan ${number}`, action: 'Voiture qui roule · 5 s', url: null, state: 'to_approve', canRevise: true, revisionsLeft: 1 })) };
+    return route.fulfill({ json: { id, status: phase === 'editing' ? 'postprocessing' : 'generating', processingStage: phase === 'keyframes' ? 'keyframe_approval' : phase === 'clips' ? 'clip_approval' : 'postprocessing', nextPollInSeconds: 120,
+      ...(phase === 'keyframes' ? { keyframeApproval } : phase === 'clips' ? { clipApproval: { requestedAt: new Date().toISOString(), durationSeconds: clips.filter((clip) => clip.active).length * 5 + 2, shots: clips } } : {}) } });
+  });
+  await page.route(`**/api/versions/${id}/keyframes/approve`, (route) => { phase = 'clips'; return route.fulfill({ json: { approved: 2, allApproved: true } }); });
+  await page.route(`**/api/versions/${id}/clips/review`, (route) => {
+    const input = route.request().postDataJSON();
+    if (input.action === 'disable') clips.find((clip) => clip.shotNumber === input.shotNumber)!.active = false;
+    if (input.action === 'approve' && !input.shotNumber) { phase = 'editing'; montageStarts += 1; }
+    return route.fulfill({ json: { changed: true } });
+  });
+  await page.goto('/');
+  await expect(page.getByRole('heading', { name: '2 images clés à valider' })).toBeVisible({ timeout: 45_000 });
+  await page.getByRole('button', { name: 'Tout valider et lancer la vidéo' }).click();
+  const board = page.getByRole('region', { name: 'Validation des clips' });
+  await expect(board.getByRole('heading', { name: '2 clips à valider' })).toBeVisible({ timeout: 30_000 });
+  await expect(board.getByLabel('Clip du plan 1')).toHaveJSProperty('muted', true);
+  await board.getByRole('button', { name: 'Désactiver ce clip', exact: true }).last().click();
+  await expect(board.getByText(/Durée finale : 7 s/)).toBeVisible({ timeout: 30_000 });
+  await expect(board.getByRole('button', { name: 'Désactiver ce clip', exact: true })).toBeDisabled();
+  expect(montageStarts).toBe(0);
+  await board.getByRole('button', { name: 'Tout valider et lancer le montage' }).click();
+  await expect(board).toBeHidden({ timeout: 30_000 });
+  await expect(page.getByRole('link', { name: /1 vidéo en cours · Montage/ })).toBeVisible();
+  expect(montageStarts).toBe(1);
+});
+
 const mockWithoutSupabase = process.env.E2E_MOCK_NO_SUPABASE === '1';
 const adminEmail = process.env.E2E_ADMIN_EMAIL ?? 'admin@rimco.test';
 const adminPassword = process.env.E2E_ADMIN_PASSWORD;
@@ -169,11 +214,11 @@ async function expectReviseShot(page: Page) {
 /** Keyframe board: the Studio box (« always » during the beta), then « Valider » and « Tout valider et lancer la vidéo ». */
 async function expectKeyframeBoard(page: Page) {
   await page.goto('/');
-  const box = page.getByLabel(/Valider les images clés avant la vidéo/);
+  const box = page.getByLabel(/Valider les images clés et les clips avant le montage/);
   await expect(box).toBeChecked({ timeout: 30_000 });
   await expect(box).toBeDisabled();
   const version = { id: 'e2e-board', videoId: 'e2e-board-video', title: 'Vidéo E2E à valider', status: 'generating', versionStatus: 'generating', createdAt: new Date().toISOString() };
-  const shot = (shotNumber: number, title: string) => ({ shotNumber, title, action: 'Voiture qui roule · de gauche à droite · à vitesse normale · 5 s', url: null, state: 'to_approve', canRevise: true, revisionsLeft: 2, lastRevision: null, cost: { fcfa: 181, minutes: 2 } });
+  const shot = (shotNumber: number, title: string) => ({ shotNumber, title, action: 'Voiture qui roule · de gauche à droite · à vitesse normale · 5 s', url: null, state: 'to_approve', canRevise: true, revisionsLeft: 1, lastRevision: null, cost: { fcfa: 181, minutes: 2 } });
   const board = { requestedAt: new Date().toISOString(), remindAt: new Date(Date.now() + 86_400_000).toISOString(), expiresAt: new Date(Date.now() + 172_800_000).toISOString(), shots: [shot(2, 'Arrêt face à la lagune'), shot(1, 'Arrivée sur le pont')] };
   await page.route((url) => url.pathname === '/api/versions', (route) => route.request().method() === 'GET' && !new URL(route.request().url()).searchParams.get('status')
     ? route.fulfill({ json: { versions: [version] } }) : route.continue());

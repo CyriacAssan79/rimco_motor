@@ -17,6 +17,7 @@ export const requestSchema = z.object({
   character: z.string().max(160).default(''),
   // 26/10: only the Studio catalogue values; anything else is ignored without error (cached pages keep working).
   lighting: z.string().max(160).default('').transform(onlyCatalogLighting),
+  timeTransition: z.boolean().default(false),
   cameraMovement: z.string().trim().max(160).default('Travelling trois-quarts avant, stable et sans coupe'),
   vehicleAction: z.string().trim().max(160).default('Le véhicule avance lentement et régulièrement'),
   mood: z.string().trim().max(160).default('').transform(onlyCatalogMood),

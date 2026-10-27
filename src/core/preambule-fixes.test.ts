@@ -118,9 +118,9 @@ describe('B1, B2, C4 · consigne du réalisateur', () => {
   it('une lumière qui n’a le moment d’aucun lieu est signalée et n’est pas envoyée au réalisateur', () => {
     expect(detectBriefConflicts('Une vidéo élégante.', { placeTimes: ['day', 'day'], hasInteriorPhoto: false, lighting: 'Lumière douce de fin de journée' }))
       .toEqual([{ id: 'lighting', message: 'Lumière « fin de journée » demandée : les lieux choisis sont de jour, la lumière suit le lieu.' }]);
-    expect(detectBriefConflicts('', { placeTimes: ['day', 'night'], hasInteriorPhoto: false, lighting: 'Lumière intérieure diffuse et régulière' })[0]?.message)
+    expect(detectBriefConflicts('', { placeTimes: ['day', 'night'], hasInteriorPhoto: false, lighting: 'Lumière intérieure diffuse et régulière' }).find((conflict) => conflict.id === 'lighting')?.message)
       .toBe('Lumière « intérieur » demandée : les lieux choisis sont de jour et de nuit, la lumière suit le lieu.');
-    expect(detectBriefConflicts('', { placeTimes: ['day', 'golden'], hasInteriorPhoto: false, lighting: 'Lumière douce de fin de journée' })).toEqual([]);
+    expect(detectBriefConflicts('', { placeTimes: ['day', 'golden'], hasInteriorPhoto: false, lighting: 'Lumière douce de fin de journée' })).toEqual([expect.objectContaining({ id: 'mixed_times' })]);
     // A place without a known time of day can take the chip: no conflict.
     expect(detectBriefConflicts('', { placeTimes: ['day', null], hasInteriorPhoto: false, lighting: 'Lumière douce de fin de journée' })).toEqual([]);
     expect(buildStoryboardInstruction({ ...base, lighting: 'Lumière douce de fin de journée' })).toContain('Lighting: natural light matching each place.');
@@ -153,7 +153,9 @@ describe('B5 · longueur du réalisateur avec matrice et jetons des juges', () =
     const instruction = buildStoryboardInstruction({ durationSeconds: 20, mode: 'pro', vehicle: 'GWM Tank 300 Gris', vehiclePhotos: photos, places: places.map((place) => ({ id: place.id, title: place.title, timeOfDay: place.profile.timeOfDay, description: placeDescription(place) })), format: '16:9', lighting: 'Lumière naturelle claire du matin', mood: 'Confiant, polyvalent et premium', marketLocation: market, ...driving, motionMatrix: matrix });
     // 26/10: 17 246 characters before (9 715 for the table alone); 10 796 after.
     expect(instruction.length).toBeLessThanOrEqual(11_000);
-    for (const id of [...places.map((place) => place.id), ...photos.map((photo) => photo.id)]) expect(instruction.split(id)).toHaveLength(2);
+    const moment = places.find((place) => place.profile.timeOfDay !== 'interior')!.profile.timeOfDay;
+    for (const place of places) expect(instruction.split(place.id)).toHaveLength(place.profile.timeOfDay === moment || place.profile.timeOfDay === 'interior' ? 2 : 1);
+    for (const photo of photos) expect(instruction.split(photo.id)).toHaveLength(2);
     expect(directorMotionTable(matrix).length).toBeLessThanOrEqual(2_800); // 2 790 (9 715 before)
   });
 

@@ -1,4 +1,5 @@
-'use client';
+"use client";
+import { DisagreementsPanel } from '@/app/admin/DisagreementsPanel';
 
 import { useEffect, useState } from 'react';
 import { formatFcfa, formatSignedFcfa } from '@/core/pricing';
@@ -22,6 +23,9 @@ type CostRow = {
   keyframe_approval_wait_seconds?: number | null;
   keyframe_modified_shots?: number | null;
   keyframe_approval_expired?: boolean;
+  clip_approval_wait_seconds?: number | null;
+  clips_modified?: number | null;
+  clips_disabled?: number | null;
 };
 
 /** Margin of a line: nothing for a released line (not billed, nothing spent), « En cours » while reserved. */
@@ -77,7 +81,7 @@ export function CostDashboard() {
   const billed = selectedChargedRows.reduce((sum, row) => sum + Number(row.price_fcfa ?? 0), 0);
 
   function exportCsv() {
-    const columns: (keyof CostRow)[] = ['title', 'version_id', 'kind', 'seconds', 'price_fcfa', 'cost_real_fcfa', 'cost_eur', 'margin_fcfa', 'nominal_cost_usd', 'worst_case_cost_usd', 'keyframe_approval_wait_seconds', 'keyframe_modified_shots', 'keyframe_approval_expired', 'status', 'created_at'];
+    const columns: (keyof CostRow)[] = ['title', 'version_id', 'kind', 'seconds', 'price_fcfa', 'cost_real_fcfa', 'cost_eur', 'margin_fcfa', 'nominal_cost_usd', 'worst_case_cost_usd', 'keyframe_approval_wait_seconds', 'keyframe_modified_shots', 'keyframe_approval_expired', 'clip_approval_wait_seconds', 'clips_modified', 'clips_disabled', 'status', 'created_at'];
     const csv = [columns.map(csvCell).join(';'), ...selectedRows.map((row) => columns.map((key) => csvCell(row[key])).join(';'))].join('\r\n');
     const blobUrl = URL.createObjectURL(new Blob(['\ufeff', csv], { type: 'text/csv;charset=utf-8' }));
     const link = document.createElement('a');
@@ -88,6 +92,7 @@ export function CostDashboard() {
   }
 
   return <>
+    <DisagreementsPanel />
     <div className="mb-7 flex flex-wrap items-center justify-between gap-3">
       <div className="flex flex-wrap items-center gap-4"><p className="max-w-xl text-xs leading-5 text-[#716d66]">Retrouvez les montants facturés en FCFA et exportez l’historique.</p><label className="flex items-center gap-2 text-xs font-semibold">Mois<select value={month} onChange={(event) => setMonth(event.target.value)} className="rounded-lg border border-[#dedbd5] bg-white px-3 py-2.5 text-xs font-normal"><option value="">Tous les mois</option>{availableMonths.map((key) => <option key={key} value={key}>{new Intl.DateTimeFormat('fr-FR', { month: 'long', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${key}-01T00:00:00Z`))}</option>)}</select></label></div>
       <button onClick={exportCsv} className="rounded-lg border border-[#dedbd5] bg-[var(--surface)] px-4 py-2.5 text-xs font-semibold hover:bg-[#f4f2ee]">Exporter CSV</button>

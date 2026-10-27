@@ -4,6 +4,7 @@ import type { StoryboardShot } from '@/core/storyboard';
 import { HUMAN_REVISIONS_PER_SHOT, humanRevisionsUsed, MAX_KEYFRAME_ATTEMPTS } from '@/core/verification/loop';
 import { approvalDeadline, isShotApproved, shotActionFr, shotsModifiedOnBoard, storedApproval, type KeyframeApprovalState } from './keyframe-approval';
 import { lastHumanRevision } from './shot-feedback';
+import { storedClipApproval } from './clip-approval';
 
 /**
  * 27/10 · validation of the keyframes before the paid animation. Called by storyboard-live when every keyframe is
@@ -59,7 +60,7 @@ export function approvalBoard(input: Pick<GateInput, 'shots' | 'keyframes' | 'dr
     expiresAt: new Date(deadline.expiresAt).toISOString(),
     ...(state.remindedAt ? { remindedAt: state.remindedAt } : {}),
     ...(state.expiredAt ? { expiredAt: state.expiredAt } : {}),
-    shots: [...input.shots].sort((left, right) => left.shot_number - right.shot_number).map((shot) => {
+    shots: [...input.shots].filter((shot) => !state.shotNumbers?.length || state.shotNumbers.includes(shot.shot_number)).sort((left, right) => left.shot_number - right.shot_number).map((shot) => {
       const used = humanRevisionsUsed(shot.verification_history);
       const approved = isShotApproved(shot.verification_history);
       const ready = shot.keyframe_status === 'ready';
@@ -99,6 +100,14 @@ export async function enforceApprovalDeadline(input: GateInput) {
   const now = input.now ?? Date.now();
   const nowIso = new Date(now).toISOString();
   const deadline = approvalDeadline(state.requestedAt, now);
+  // Returning from the clip board: the earlier clips are paid. This image may wait without cancelling the film.
+  if (storedClipApproval(input.brief).requestedAt) {
+    if (deadline.due !== 'none' && !state.remindedAt) {
+      await saveApproval(input, { ...state, remindedAt: nowIso }, {});
+      await notify(input.admin, { userId: input.video.user_id, versionId: input.version.id, type: 'action_required', message: `${await videoTitle(input)}L’image clé corrigée attend votre validation. Les clips déjà payés sont conservés ; la vidéo n’expire pas.`, dedupeKey: `keyframe_return_reminder:${state.requestedAt}` });
+    }
+    return null;
+  }
   if (deadline.due === 'expire') {
     await input.admin.from('usage_ledger').update({ status: 'released' }).eq('version_id', input.version.id).eq('status', 'reserved');
     await Promise.all([

@@ -1,5 +1,57 @@
 # Décisions
 
+## Partie 6 · Vérification finale et mise en service (2026-10-27)
+
+- Livraison locale sur **`preambule`**, conformément au choix du responsable. Aucun appel de génération payant, aucune migration distante et aucune commande Git vers un service distant.
+- Contrôles réussis : lint, TypeScript, **77 fichiers / 524 tests unitaires**, build Next.js en simulation. Le parcours Playwright avec réponses injectées couvre **images clés → clips → désactivation → montage** : durée ramenée à 7 s, dernier clip actif protégé et aucun montage avant validation.
+- La migration 0038 est exécutée deux fois dans un PostgreSQL embarqué local (PGlite), avec un schéma de test reproduisant les colonnes concernées et les rôles Supabase. **Huit groupes de contrôles SQL** couvrent tarifs, idempotence, décisions réversibles, réservation à 48 h, reprise ciblée, départ unique du montage et droits serveur. Ce contrôle ne constitue pas un essai sur un projet Supabase complet. Le banc facultatif `scripts/check-review-migration.mjs` utilise une dépendance de test isolée sous `.generated/sql-check`, sans modifier les dépendances de l’application.
+- Les [prompts générés](PROMPT-EXAMPLES-2026-10-27.md) présentent le réalisateur, l’image clé et les deux juges avec les deux lieux sélectionnés : sans transition, seul le jour est retenu ; avec « du jour à la nuit », l’ordre jour → coucher de soleil est permis et l’absence de lieu de nuit est signalée. Le fichier provient des constructeurs réellement employés, sans appel fal.
+- Le responsable doit, dans son navigateur : **1)** copier la migration `0038_human_review_and_pricing.sql` dans l’éditeur SQL Supabase et l’exécuter avant déploiement ; **2)** déployer cette branche via le parcours GitHub/Vercel habituel ; **3)** vérifier dans Administration les tarifs Standard **460**, Pro **700**, Premium **950 FCFA/s**, et le réglage **Validation humaine (images clés et clips)** ; **4)** ouvrir le Studio pour son essai interne. Aucune nouvelle variable d’environnement n’est nécessaire.
+- Les anciennes vidéos gardent leurs réservations automatiques et leur prix figé. La limite humaine d’une reprise par étape s’applique immédiatement : un plan déjà modifié une fois n’a plus de reprise disponible ; ses actions d’acceptation et de validation restent utilisables. Les clips payés ne sont jamais annulés du fait de l’attente humaine.
+
+## Partie 5 · Premium à 19 000 FCFA, Pro inchangé (2026-10-27)
+
+- La migration **0038** crée `pricing_settings.grid_fcfa_per_second_pro`, la remplit avec le tarif Premium de chaque marque **avant** toute hausse, puis fixe Premium RIMCO à **950 FCFA/s**, soit **19 000 FCFA pour 20 s**. Pro RIMCO reste à **700 FCFA/s**, Standard à **460 FCFA/s**. Le niveau Test suit Premium.
+- Le remplissage Pro ne concerne que les valeurs nulles : relancer la migration ne remplace pas un tarif Pro déjà enregistré. Aucune écriture dans `usage_ledger`, dont chaque ligne garde le tarif appliqué au lancement.
+- L’Administration permet de modifier séparément les trois tarifs par marque. Le Studio lit la grille depuis le serveur ; aucune chaîne de prix Premium à l’ancien montant n’est codée dans son interface. Les tarifs de repli de la simulation suivent aussi la nouvelle grille RIMCO.
+- Tests : quatre niveaux, grille par marque, prix réservé figé ; non-régression de la clôture du journal. Les décisions datées plus anciennes conservent le contexte de l’époque ; cette entrée fait foi pour les prochains lancements.
+
+## Partie 4 · Désaccords avec le vérificateur (2026-10-27)
+
+- Choix retenu : `verification_history`, sans nouvelle table ni vue. Une entrée humaine `human_disagree` précède la modification d’une image clé ou d’un clip accepté par le juge (vert ou orange). La désactivation d’un clip accepté est également enregistrée, dans la même transaction SQL que la désactivation.
+- Chaque entrée fige vidéo/version, plan, étape, niveau, lieu, type de plan, verdict et avertissements du juge, motifs, commentaire nettoyé et date. Un plan rouge modifié ne crée pas de désaccord. La décision du juge reste intacte.
+- Page **Coûts** (admin) : tableau par motif et étape, taux de plans acceptés puis modifiés/désactivés. Dénominateur = plans distincts acceptés par le juge à cette étape ; numérateur = plans distincts concernés, sans double comptage si plusieurs motifs ou actions. L’export CSV détaille les événements et protège contre les formules de tableur.
+- Calcul interne à partir des données Supabase ; aucun envoi de ce relevé à un service tiers. Le relevé et son CSV exigent le rôle admin côté serveur.
+- Tests : vert/orange enregistré, rouge exclu, contexte et nettoyage, regroupement, dénominateurs, taux et CSV.
+
+## Partie 3 · Validation des clips avant le montage (2026-10-27)
+
+- Le réglage existant `brands.keyframe_approval_mode` couvre les images clés et les clips ; il conserve son nom SQL. Quand il est actif, tous les clips contrôlés (y compris ceux refusés après leur relance automatique) passent sur une planche avant le montage. Le mode `off` conserve le parcours automatique existant.
+- La planche affiche le verdict en vert, orange ou rouge, l’action et les avertissements en français. Validation réversible, désactivation réversible (au moins un clip actif), reprise vidéo ou retour à l’image clé. Le retour à l’image rouvre la planche pour ce seul plan ; les autres images restent validées. Les deux reprises consomment le même budget d’une modification du clip. Coût affiché et réservé avant l’appel ; plafond facultatif revérifié.
+- Une seule migration **0038** ajoute les fonctions SQL de décision et de départ du montage : elles prennent le même verrou de version. Les décisions arrivées après le départ sont refusées ; deux onglets ne peuvent pas lancer deux montages. Les fonctions de mutation ne sont exécutables que par le serveur, après vérification du propriétaire ou du rôle admin.
+- Le montage ne prend que les clips actifs et validés, dans l’ordre. Il peut ne rester qu’un clip. Durée du film, musique et carte de logo sont recalculées ; le prix client figé ne change pas. Les clips déjà générés sont comptabilisés avant la pause.
+- Aperçu à la demande : FFmpeg local identique au montage, sans musique ni logo, 540p, stockage privé et URL signée. Cache lié aux fichiers actifs ; l’aperçu est temporaire et renouvelable. Benchmark local reproductible `scripts/benchmark-clip-preview.mjs` : **5,344 s** pour six clips de 5 s, source 1080p/30 i/s, sortie 540p/24 i/s, un fil d’encodage. Cette mesure ne garantit pas les transferts ni les performances Vercel ; un dépassement laisse les clips intacts et permet de réessayer.
+- Notification à l’ouverture, rappels à 24 h et 48 h. À 48 h, seules les réservations de correction inutilisées sont libérées : aucune annulation et aucun effacement des clips payés. Une nouvelle correction réserve de nouveau son coût. Le retour à l’image clé ne peut pas faire expirer les clips déjà payés. Chrono suspendu et attente exclue de l’estimation.
+- Les validations/désactivations restent dans `verification_history` (`video`, `human_approve` / `human_disable`), sans nouvelle table. Attente, nombre de clips modifiés et désactivés sont exportés par vidéo.
+
+## Partie 2 · Une lumière cohérente par film (2026-10-27)
+
+- Le premier lieu extérieur sélectionné fixe le moment du film (`day`, `golden`, `night`). Un intérieur est neutre. Les autres moments ne figurent ni dans la liste des lieux du réalisateur ni dans sa table de mouvements autorisés. Sans choix explicite, le lancement reste possible.
+- Le Studio avertit d’un mélange et permet de garder un moment (avec les intérieurs) ou de demander explicitement une transition. Une transition écrite dans le brief est aussi reconnue : « du jour à la nuit », « jusqu’au coucher du soleil », « la nuit tombe », etc. Elle suit jour → coucher de soleil → nuit, sans retour en arrière, uniquement avec les lieux disponibles.
+- Une réponse du réalisateur qui mélange les moments sans transition ou revient en arrière est invalide : elle passe par sa tentative corrigée existante. Le lancement vérifie aussi cette règle avant toute réservation vidéo. Un moment manquant demandé dans une transition est signalé dans les conflits du brief, sans inventer ni rééclairer un lieu.
+- Le moment est figé avec la vidéo. Le juge de l’image vérifie hauteur/couleur du soleil et ombres ; celui du clip refuse un changement de moment pendant le plan. Nouveau motif français « lumière » dans les avertissements. Les anciennes vidéos gardent leurs lieux et leur lumière.
+- Voiture parallèle aux marquages de voie et au trottoir ; la carrosserie ne se tourne pas vers la caméra sauf si le plan le requiert. La règle est partagée avec le juge, et les plafonds de longueur restent vérifiés en pire cas.
+- Tests : filtrage, transition explicite, ordre monotone, intérieurs, conflits, message et boutons du Studio, consignes des juges, non-régression des prompts.
+
+## Partie 1 · Boucles allégées (2026-10-27)
+
+- Une seule correction automatique de l’image clé : deux images et deux contrôles réservés par plan, une correction du réalisateur. La relance automatique du clip reste unique.
+- Une modification humaine pour l’image clé et, séparément, une pour le clip, quel que soit le bouton de reprise. « Refaire » sans commentaire consomme aussi ce budget. Ces limites s’appliquent aux vidéos déjà lancées : une modification déjà utilisée épuise désormais le budget de l’étape.
+- Compatibilité : le budget automatique est lu dans les réservations de chaque plan, sans le plafonner par la nouvelle constante. Les trois réservations des anciens lancements restent utilisables. Aucun montant historique n’est modifié.
+- Pire cas recalculé hors storyboard et images de fin : Standard 20 s **6,44 USD**, Pro 15 s **5,19 USD**, Premium 20 s **21,68 USD**. Les modifications humaines restent réservées à la demande, hors de ces montants. Le calcul et les réservations partagent les constantes. Ces valeurs remplacent celles du tableau du 26/10 plus bas.
+- Interface : « 1 modification possible » puis « Modification utilisée ». Aucun changement SQL.
+- Vérification : tests de boucle, budgets humains séparés, anciennes réservations et pire cas ; tests des actions et de la planche.
+
 ## Validation des images clés avant la vidéo (P2, 2026-10-27)
 
 - **Constat** : une image clé acceptée par le juge partait en animation automatiquement ; l'humain ne voyait que les images refusées.
@@ -216,9 +268,9 @@ Seulement des corrections d'affichage, sans changement de logique métier, de do
 
   | Vidéo | Nominal | Maximum |
   |---|---|---|
-  | Standard 20 s (4 plans Wan) | 3,12 $ | 7,36 $ |
-  | Pro 15 s (3 plans Kling de 5 s) | 2,52 $ | 5,88 $ |
-  | Premium 20 s (4 plans Seedance, images 2K) | 10,74 $ | 22,76 $ |
+  | Standard 20 s (4 plans Wan) | 3,12 $ | 6,44 $ |
+  | Pro 15 s (3 plans Kling de 5 s) | 2,52 $ | 5,19 $ |
+  | Premium 20 s (4 plans Seedance, images 2K) | 10,74 $ | 21,68 $ |
 
   En mode `worst_case`, un plafond de 15 $ refuserait donc le Premium 20 s, qu’il accepte en mode `nominal`.
 - **Vidéos déjà lancées** : leurs plans gardent leur durée. Les corrections du réalisateur ne peuvent pas changer la durée d’un plan.
@@ -501,7 +553,7 @@ Règles de cadrage et de badge appliquées à tous les niveaux (image de marque)
 
 - **Demande du responsable** : remettre la résolution 2K du Premium (étape 4 du 24/10), sans le reste de cette étape.
 - **Ce qui change** : en Premium, Nano Banana 2 produit les images clés (et les images de fin) en 2K au lieu de 1K. C’est la base de chaque plan : badges, calandre et jantes plus nets avant l’animation. Standard et Pro restent en 1K.
-- **Coût** : 0,12 USD par image au lieu de 0,08 (page fal du 24/10 : « 2K … 1.5 times the standard rate »), soit +0,16 USD par vidéo Premium de 4 plans, jusqu’à +0,48 USD avec les 2 corrections par plan de la boucle. Le prix client ne change pas (14 000 FCFA).
+- **Coût à cette date** : 0,12 USD par image au lieu de 0,08 (page fal du 24/10 : « 2K … 1.5 times the standard rate »), soit +0,16 USD par vidéo Premium de 4 plans, jusqu’à +0,48 USD avec les 2 corrections par plan de la boucle. Le prix client suivait la grille Premium de l’époque, remplacée par la décision du 27/10.
 - **Coûts justes** : la résolution et son prix sont figés dans `brief_json.renderSettings` au lancement (`src/core/versions/render-settings.ts`) et relus pour chaque image, réservation, facturation et relance humaine. Les versions créées avant restent en 1K à 0,08 USD.
 - **Non repris** : clips Seedance en 1080p (+13,80 USD par vidéo, au-dessus du prix de vente ; disponibilité à confirmer chez fal) et juges plus stricts en Premium.
 

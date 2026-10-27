@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { cleanupClipPreviews } from '@/core/postproduction/pipeline';
 import { env } from '@/env';
 import { allVersions, putVersion } from '@/core/versions/store';
 import { mockVideoProvider } from '@/core/providers/mock';
@@ -29,6 +30,7 @@ export async function GET(request: Request) {
     return NextResponse.json({ reconciled: results.length, results });
   }
   const admin = createStorageAdminClient();
+  await cleanupClipPreviews(admin);
   const { data, error } = await admin.from('video_versions').select('id').in('status', ['queued','generating','postprocessing']).order('updated_at', { ascending: true }).limit(10);
   if (error) return NextResponse.json({ error: 'Impossible de charger les générations en cours.' }, { status: 503 });
   const systemActor: Actor = { id: 'cron-reconcile', role: 'admin', department: '', brandId: null };
