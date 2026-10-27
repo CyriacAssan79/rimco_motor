@@ -1,3 +1,4 @@
+import { hasAdminRights } from '@/core/auth/roles';
 import { HttpError, type Actor } from '@/core/auth/guards';
 import { createStorageAdminClient } from '@/core/storage/supabase';
 import { appendVerification } from '@/core/verification/loop';
@@ -11,7 +12,7 @@ export async function approveKeyframes(actor: Actor, versionId: string, shots: '
   const admin = createStorageAdminClient();
   const { data: version, error } = await admin.from('video_versions').select('id,status,brief_json,video:videos!inner(user_id)').eq('id', versionId).maybeSingle();
   const video = Array.isArray(version?.video) ? version.video[0] : version?.video;
-  if (error || !version || !video || video.user_id !== actor.id && actor.role !== 'admin') throw new HttpError(404, 'Cette version est introuvable.');
+  if (error || !version || !video || video.user_id !== actor.id && !hasAdminRights(actor)) throw new HttpError(404, 'Cette version est introuvable.');
   const approval = storedApproval(version.brief_json && typeof version.brief_json === 'object' ? version.brief_json as Record<string, unknown> : {});
   if (version.status !== 'generating' || !approval.required || approval.approvedAt || approval.expiredAt) throw new HttpError(409, 'Ces images clés n’attendent plus de validation.');
   const { data: rows, error: shotsError } = await admin.from('video_shots').select('shot_number,keyframe_status,keyframe_retry_count,keyframe_quality,verification_history').eq('version_id', versionId);

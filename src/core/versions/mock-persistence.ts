@@ -1,4 +1,6 @@
 import type { Actor } from '@/core/auth/guards';
+import { canValidate, hasAdminRights, isOperator } from '@/core/auth/roles';
+import { isInActorClient } from '@/core/auth/client-scope';
 import { HttpError } from '@/core/auth/guards';
 import { briefToPrompt, buildBrief } from '@/core/brief';
 import { createStorageAdminClient } from '@/core/storage/supabase';
@@ -11,7 +13,6 @@ import { calculateClientPriceFcfa } from '@/core/pricing';
 import { getSceneConceptDirection } from '@/core/scenes/concepts';
 import { getScenePreset, inferVehicleCategory } from '@/core/scenes/catalog';
 import { reserveGenerationCost, settleUsageCost } from '@/core/billing/ledger';
-import { approveCompletedAdminVideo } from '@/core/versions/approval';
 import { refreshLivePhotoFidelity } from '@/core/versions/photo-fidelity';
 
 export const MOCK_VIDEO_PATH = 'mock/mock-video.mp4';
@@ -70,14 +71,12 @@ export async function refreshPersistedMockVersion(versionId: string, actor: Acto
   if (error || !version) throw new HttpError(404, 'Cette version est introuvable.');
   const video = Array.isArray(version.video) ? version.video[0] : version.video;
   const owns = video?.user_id === actor.id;
-  const canReview = actor.role === 'valideur' && video?.status === 'review' && video.brand_id === actor.brandId && video.department === actor.department;
-  if (!video || !owns && !canReview && actor.role !== 'admin') throw new HttpError(404, 'Cette version est introuvable.');
+  const inClient = isOperator(actor) || await isInActorClient(admin, actor, video?.brand_id);
+  const canReview = canValidate(actor) && video?.status === 'review' && inClient;
+  if (!video || !owns && !canReview && !(hasAdminRights(actor) && inClient)) throw new HttpError(404, 'Cette version est introuvable.');
   if (version.brief_json && typeof version.brief_json === 'object' && (version.brief_json as Record<string, unknown>).photoFidelityMode === true) return refreshLivePhotoFidelity(versionId, actor);
   if (version.status === 'failed') return { id: versionId, status: 'failed' as const };
   if (version.status === 'ready') {
-    if (actor.role === 'admin' && video.status !== 'approved') {
-      await approveCompletedAdminVideo(admin, actor, { videoId: video.id, versionId });
-    }
     return { id: versionId, status: 'ready' as const, videoUrl: '/mock/mock-video.mp4' };
   }
 
@@ -87,12 +86,9 @@ export async function refreshPersistedMockVersion(versionId: string, actor: Acto
   const { error: updateError } = await admin.from('video_versions').update(updates).eq('id', versionId);
   if (updateError) throw new HttpError(503, 'Impossible d’enregistrer l’état de la simulation.');
   if (status === 'ready' && video.status !== 'ready' && video.status !== 'approved') {
-    if (actor.role === 'admin') {
-      await approveCompletedAdminVideo(admin, actor, { videoId: video.id, versionId });
-    } else {
-      const { error: videoError } = await admin.from('videos').update({ status: 'ready' }).eq('id', video.id);
-      if (videoError) throw new HttpError(503, 'La génération est prête; son état doit être réconcilié.');
-    }
+    // 27/10: no automatic approval, even for an administrator.
+    const { error: videoError } = await admin.from('videos').update({ status: 'ready' }).eq('id', video.id);
+    if (videoError) throw new HttpError(503, 'La génération est prête; son état doit être réconcilié.');
   }
   return { id: versionId, status, ...(status === 'ready' ? { videoUrl: '/mock/mock-video.mp4' } : {}) };
 }

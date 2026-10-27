@@ -1,10 +1,11 @@
+import { hasAdminRights } from '@/core/auth/roles';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { HttpError, type Actor } from '@/core/auth/guards';
 import { notify } from '@/core/notifications/notify';
 import { createSignedStorageObjectUrl } from '@/core/storage/signed-video';
 import { createStorageAdminClient } from '@/core/storage/supabase';
 import { env } from '@/env';
-import { HUMAN_CLIP_REVISIONS_PER_SHOT, humanRevisionsUsed, storedVerdict } from '@/core/verification/loop';
+import { humanRevisionLimit, humanRevisionsUsed, storedVerdict } from '@/core/verification/loop';
 import { shotActionFr, storedApproval } from './keyframe-approval';
 import { clipRedoCostUsd, decorateReviewRequests } from './review-details';
 import { effectiveShotDraft, type ReviewRequest } from '@/core/verification/loop';
@@ -18,7 +19,7 @@ export async function authorizeClipBoard(actor: Actor, versionId: string) {
   const admin = createStorageAdminClient();
   const { data: version, error } = await admin.from('video_versions').select('id,video_id,status,brief_json,model:ai_models!inner(price_usd_per_second),video:videos!inner(user_id)').eq('id', versionId).maybeSingle();
   const video = Array.isArray(version?.video) ? version.video[0] : version?.video;
-  if (error || !version || !video || video.user_id !== actor.id && actor.role !== 'admin') throw new HttpError(404, 'Cette version est introuvable.');
+  if (error || !version || !video || video.user_id !== actor.id && !hasAdminRights(actor)) throw new HttpError(404, 'Cette version est introuvable.');
   const brief = version.brief_json as Record<string, unknown>;
   const state = storedClipApproval(brief);
   if (version.status !== 'generating' || !state.required || !state.requestedAt || state.approvedAt) throw new HttpError(409, 'Ces clips n’attendent plus de validation.');
@@ -75,7 +76,7 @@ export async function buildClipBoard(admin: SupabaseClient, input: { brief: Reco
   const drafts = Array.isArray(input.brief.storyboard) ? input.brief.storyboard as StoryboardShot[] : [];
   const requests = await Promise.all(input.shots.map(async (shot): Promise<ReviewRequest> => {
     const verdict = storedVerdict(shot.video_quality);
-    const remaining = Math.max(0, HUMAN_CLIP_REVISIONS_PER_SHOT - humanRevisionsUsed(shot.verification_history, 'video'));
+    const remaining = Math.max(0, humanRevisionLimit(input.brief, 'video') - humanRevisionsUsed(shot.verification_history, 'video'));
     return { shotNumber: shot.shot_number, title: shot.title ?? `Plan ${shot.shot_number}`, stage: 'video', issues: verdict?.issues ?? [], codes: verdict?.codes, canRetry: false, revisionsLeft: remaining, url: shot.raw_path ? await createSignedStorageObjectUrl((path, expiresIn) => admin.storage.from('videos').createSignedUrl(path, expiresIn), 'videos', shot.raw_path) : null,
       ...(remaining ? { clipRedoUsd: { clip: clipRedoCostUsd({ brief: input.brief, priceUsdPerSecond: input.priceUsdPerSecond, durationS: shot.duration_seconds, scope: 'clip' }), full: clipRedoCostUsd({ brief: input.brief, priceUsdPerSecond: input.priceUsdPerSecond, durationS: shot.duration_seconds, scope: 'full' }) } } : {}) };
   }));

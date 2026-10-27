@@ -29,9 +29,10 @@ export default async function globalSetup() {
   const validatorEmail = process.env.E2E_VALIDATOR_EMAIL ?? 'valideur@rimco.test';
   const creator = await ensureUser(supabase, url, anonKey, creatorEmail, adminPassword, 'Collaborateur E2E');
   const validator = await ensureUser(supabase, url, anonKey, validatorEmail, adminPassword, 'Valideur E2E');
-  for (const [user, role] of [[creator, 'collaborateur'], [validator, 'valideur']] as const) {
-    const { error } = await supabase.from('profiles').update({ role, brand_id: brand.id, department: 'Marketing', is_active: true }).eq('id', user.id);
-    if (error) throw new Error(`Impossible de préparer le profil ${role} pour E2E: ${error.message}`);
+  // 27/10 (migration 0041): validating is a right held by a collaborator, no longer a role of its own.
+  for (const [user, canValidate] of [[creator, false], [validator, true]] as const) {
+    const { error } = await supabase.from('profiles').update({ role: 'collaborateur', can_validate: canValidate, brand_id: brand.id, is_active: true }).eq('id', user.id);
+    if (error) throw new Error(`Impossible de préparer le profil ${canValidate ? 'valideur' : 'collaborateur'} pour E2E: ${error.message}`);
   }
 
   const { data: dossier, error: dossierError } = await supabase.from('vehicle_dossiers').insert({

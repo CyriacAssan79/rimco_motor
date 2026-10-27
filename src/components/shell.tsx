@@ -8,6 +8,7 @@ import {
   GenerationIndicator,
   GenerationTrackerProvider,
 } from "./generation-tracker";
+import { canValidate, hasAdminRights, isOperator, roleLabel } from "@/core/auth/roles";
 import {
   ActionRequiredBanner,
   NotificationBell,
@@ -15,45 +16,29 @@ import {
   useNotifications,
 } from "./notifications";
 
-type Role = "collaborateur" | "valideur" | "admin";
+type Section = "production" | "administration" | "komian";
 type NavItem = {
   label: string;
   href: string;
   icon: string;
-  roles?: Role[];
+  section: Section;
+  /** Shown only when the actor has the right (27/10: navigation built from rights, nothing greyed out). */
+  visible?: (actor: Actor) => boolean;
   badge?: boolean;
 };
 const nav: NavItem[] = [
-  { label: "Accueil", href: "/", icon: "home" },
-  {
-    label: "File de génération",
-    href: "/file-generation",
-    icon: "queue",
-    roles: ["collaborateur", "admin"],
-  },
-  {
-    label: "À valider",
-    href: "/a-valider",
-    icon: "check",
-    roles: ["valideur", "admin"],
-    badge: true,
-  },
-  { label: "Bibliothèque", href: "/bibliotheque", icon: "film" },
-  {
-    label: "Médiathèque",
-    href: "/mediatheque",
-    icon: "image",
-    roles: ["collaborateur", "admin"],
-  },
-  {
-    label: "Suivi de consommation",
-    href: "/couts",
-    icon: "chart",
-    roles: ["admin"],
-  },
-  { label: "Équipe", href: "/equipe", icon: "users", roles: ["admin"] },
-  { label: "Admin", href: "/admin", icon: "settings", roles: ["admin"] },
+  { label: "Accueil", href: "/", icon: "home", section: "production" },
+  { label: "File de génération", href: "/file-generation", icon: "queue", section: "production" },
+  { label: "À valider", href: "/a-valider", icon: "check", section: "production", visible: canValidate, badge: true },
+  { label: "Bibliothèque", href: "/bibliotheque", icon: "film", section: "production" },
+  { label: "Médiathèque", href: "/mediatheque", icon: "image", section: "production" },
+  { label: "Crédits", href: "/credits", icon: "wallet", section: "production" },
+  { label: "Équipe", href: "/equipe", icon: "users", section: "administration", visible: hasAdminRights },
+  { label: "Clients et crédits", href: "/operateur/clients", icon: "wallet", section: "komian", visible: isOperator },
+  { label: "Coûts de production", href: "/couts", icon: "chart", section: "komian", visible: isOperator },
+  { label: "Paramètres", href: "/admin", icon: "settings", section: "komian", visible: isOperator },
 ];
+const SECTION_TITLES: Record<Section, string> = { production: "Production", administration: "Administration", komian: "Espace KÔMIAN" };
 
 const iconPaths: Record<string, string> = {
   home: "M3 10.5 12 3l9 7.5M5.5 9v11h13V9M9 20v-6h6v6",
@@ -69,6 +54,7 @@ const iconPaths: Record<string, string> = {
   check: "M5 12l4 4L19 6",
   users:
     "M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75",
+  wallet: "M3 7h15a3 3 0 0 1 3 3v7a3 3 0 0 1-3 3H3V7Zm0 0V5.5A1.5 1.5 0 0 1 4.5 4H16M16 13.5h.01",
 };
 
 function NavLink({
@@ -111,7 +97,7 @@ function NavLink({
   );
 }
 
-type Actor = { id?: string; role: Role; name?: string; department?: string };
+type Actor = { id?: string; role: string; canValidate?: boolean; name?: string };
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -130,15 +116,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     };
   }, [pathname, actor]);
   if (pathname === "/connexion") return <>{children}</>;
-  const role = actor?.role ?? "collaborateur";
   return (
     <GenerationTrackerProvider
-      enabled={Boolean(actor) && role !== "valideur"}
+      enabled={Boolean(actor)}
       userId={actor?.id}
     >
       <NotificationsProvider
         enabled={Boolean(actor)}
-        countReviews={role === "valideur" || role === "admin"}
+        countReviews={canValidate(actor)}
       >
         <ShellFrame actor={actor} pathname={pathname}>
           {children}
@@ -160,21 +145,16 @@ function ShellFrame({
 }) {
   const { snapshot } = useNotifications();
   const pendingCount = snapshot.pendingReviewCount;
-  const role = actor?.role ?? "collaborateur";
-  const visibleNav = nav.filter(
-    (item) => !item.roles || item.roles.includes(role),
-  );
+  const current: Actor = actor ?? { role: "collaborateur" };
+  const visibleNav = nav.filter((item) => !item.visible || item.visible(current));
   const page =
     visibleNav.find((item) => item.href === pathname)?.label ?? "Accueil";
-  const roleLabel =
-    role === "admin"
-      ? "Administrateur"
-      : role === "valideur"
-        ? "Valideur"
-        : "Collaborateur";
+  const sections = (Object.keys(SECTION_TITLES) as Section[])
+    .map((section) => ({ section, items: visibleNav.filter((item) => item.section === section) }))
+    .filter((group) => group.items.length > 0);
   return (
     <div className="min-h-screen bg-[var(--background)] text-[var(--ink)]">
-      <aside className="fixed inset-y-0 left-0 z-20 hidden w-[232px] flex-col border-r border-[var(--border)] bg-white px-3 py-5 text-[#17171a] lg:flex">
+      <aside className="fixed inset-y-0 left-0 z-20 hidden w-[232px] flex-col overflow-y-auto border-r border-[var(--border)] bg-white px-3 py-5 text-[#17171a] lg:flex">
         <Link
           href="/"
           aria-label="RIMCO Motors, accueil"
@@ -189,46 +169,29 @@ function ShellFrame({
             className="h-auto w-[176px] object-contain object-left"
           />
         </Link>
-        <p className="mb-3 px-3 text-xs font-bold uppercase tracking-[.2em] text-[#626269]">
-          Production
-        </p>
-        <nav className="space-y-1">
-          {visibleNav
-            .filter(
-              (item) => !["/couts", "/equipe", "/admin"].includes(item.href),
-            )
-            .map((item) => (
-              <NavLink
-                key={item.href}
-                item={item}
-                pathname={pathname}
-                badge={item.badge ? pendingCount : undefined}
-              />
-            ))}
-        </nav>
-        {role === "admin" && (
-          <>
-            <p className="mb-3 mt-8 px-3 text-xs font-bold uppercase tracking-[.2em] text-[#626269]">
-              Pilotage
+        {sections.map(({ section, items }, index) => (
+          <div key={section} className={index > 0 ? "mt-8" : undefined}>
+            <p className={`mb-3 px-3 text-xs font-bold uppercase tracking-[.2em] ${section === "komian" ? "text-[#831810]" : "text-[#626269]"}`}>
+              {SECTION_TITLES[section]}
             </p>
-            <nav className="space-y-1">
-              {visibleNav
-                .filter((item) =>
-                  ["/couts", "/equipe", "/admin"].includes(item.href),
-                )
-                .map((item) => (
-                  <NavLink key={item.href} item={item} pathname={pathname} />
-                ))}
+            <nav aria-label={SECTION_TITLES[section]} className="space-y-1">
+              {items.map((item) => (
+                <NavLink
+                  key={item.href}
+                  item={item}
+                  pathname={pathname}
+                  badge={item.badge ? pendingCount : undefined}
+                />
+              ))}
             </nav>
-          </>
-        )}
+          </div>
+        ))}
         <div className="mt-auto border-t border-[var(--border)] pt-4">
           <p className="text-sm font-semibold">
             {actor?.name ?? "Votre espace"}
           </p>
           <p className="mt-1 text-xs text-[#626269]">
-            {roleLabel}
-            {actor?.department ? ` · ${actor.department}` : ""}
+            {actor ? roleLabel(actor) : ""}
           </p>
           <SignOutButton className="mt-3 min-h-11 text-xs text-[#626269] underline underline-offset-4 hover:text-[#242428]" />
         </div>

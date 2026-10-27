@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { relaunchCostText } from '@/components/shot-review-panel';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { RelaunchCost } from '@/components/shot-review-panel';
 import { JUDGE_SYSTEM_PROMPT, parseKeyframeQuality, VISION_MAX_OUTPUT_TOKENS } from '@/core/providers/fal-keyframes';
 import { relaunchCost } from '@/core/versions/review-details';
 import { DEFECT_CODES, DEFECT_LABELS_FR, describeDefects, normalizeDefectCode } from './defects';
@@ -56,20 +58,29 @@ describe('judge answer with codes', () => {
   });
 });
 
-describe('cost of a relaunch shown in the decision panel', () => {
+describe('cost of a relaunch shown in the decision panel (27/10: struck through when not billed)', () => {
   const rates = { usdToEur: 0.92, eurToFcfa: 655.957 };
+  const html = (cost: Parameters<typeof RelaunchCost>[0]['cost']) => renderToStaticMarkup(createElement(RelaunchCost, { cost }));
 
-  it('is in FCFA for a collaborator, with the application markup, and never in dollars', () => {
+  it('is included by default: the indicative FCFA amount is struck through, « (non facturé) », never in dollars', () => {
     const cost = relaunchCost({ brief: {}, role: 'collaborateur', ...rates });
-    // 0,05 $ correction + 0,08 $ image 1K + 0,10 $ check = 0,23 $ → × 603,48 FCFA × 1,30 = 181 FCFA.
-    expect(cost).toEqual({ fcfa: 181, minutes: 2 });
-    expect(relaunchCostText(cost)).toBe('environ 181 FCFA, environ 2 min');
-    expect(relaunchCostText(cost)).not.toContain('$');
+    // 0,05 $ correction + 0,08 $ image 1K + 0,10 $ check = 0,23 $ → × 603,48 FCFA × 1,30 = 181 FCFA (indicatif).
+    expect(cost).toEqual({ fcfa: 181, billed: false, minutes: 2 });
+    expect(html(cost)).toContain('<s');
+    expect(html(cost)).toContain('(non facturé), environ 2 min');
+    expect(html(cost)).not.toContain('$');
   });
 
-  it('adds the dollars for an administrator only', () => {
-    const cost = relaunchCost({ brief: { renderSettings: { keyframeResolution: '2K' } }, role: 'admin', ...rates });
+  it('shows the price set by KÔMIAN, not struck through, when modifications are billed', () => {
+    const cost = relaunchCost({ brief: { humanRevisionLimits: { keyframe: 1, video: 1, priceFcfa: 2500 } }, role: 'admin', ...rates });
+    expect(cost).toEqual({ fcfa: 2500, billed: true, minutes: 2 });
+    expect(html(cost)).toMatch(/^environ 2\u00a0500 FCFA, environ 2 min$/);
+  });
+
+  it('adds the dollars for the KÔMIAN operator only, never for a client administrator', () => {
+    expect(relaunchCost({ brief: {}, role: 'admin', ...rates }).usd).toBeUndefined();
+    const cost = relaunchCost({ brief: { renderSettings: { keyframeResolution: '2K' } }, role: 'operateur', ...rates });
     expect(cost.usd).toBeGreaterThan(0);
-    expect(relaunchCostText(cost)).toMatch(/^environ \d[\d\s]* FCFA \(0,\d\d \$\), environ 2 min$/);
+    expect(html(cost)).toMatch(/coût réel 0,\d\d \$, environ 2 min$/);
   });
 });

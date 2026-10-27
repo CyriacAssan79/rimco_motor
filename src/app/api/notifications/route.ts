@@ -1,3 +1,4 @@
+import { isOperator } from '@/core/auth/roles';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { errorResponse, getActor, HttpError } from '@/core/auth/guards';
@@ -12,7 +13,7 @@ export async function GET() {
     if (env.PROVIDERS_MODE === 'mock' && !env.NEXT_PUBLIC_SUPABASE_URL) return NextResponse.json({ notifications: [], unread: 0 });
     const supabase = await createSupabaseServerClient();
     const { notifications, unread, migrationRequired } = await readNotifications(supabase, actor.id);
-    return NextResponse.json({ notifications, unread, ...(migrationRequired && actor.role === 'admin' ? { setupNotice: NOTIFICATIONS_MIGRATION_NOTICE } : {}) });
+    return NextResponse.json({ notifications, unread, ...(migrationRequired && isOperator(actor) ? { setupNotice: NOTIFICATIONS_MIGRATION_NOTICE } : {}) });
   } catch (error) { return errorResponse(error); }
 }
 

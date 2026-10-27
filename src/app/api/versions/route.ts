@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { briefToPrompt, buildBrief } from '@/core/brief';
-import { errorResponse, getActor, HttpError } from '@/core/auth/guards';
+import { canValidate, errorResponse, getActor, hasAdminRights, HttpError, isOperator } from '@/core/auth/guards';
+import { clientBrandIds } from '@/core/auth/client-scope';
+import { withoutInternalFields } from '@/core/auth/internal-fields';
 import { mockVideoProvider } from '@/core/providers/mock';
 import { putVersion, allVersions } from '@/core/versions/store';
 import { estimatePriceFcfa } from '@/core/pricing';
@@ -85,7 +87,7 @@ export async function GET(request: Request) {
     const requestedStatus = queryParams.get('status');
     const includePreviews = queryParams.get('includePreviews') !== 'false';
     if (env.PROVIDERS_MODE === 'mock' && !env.NEXT_PUBLIC_SUPABASE_URL) {
-      const records = allVersions().filter((item) => item.userId === actor.id || actor.role === 'admin');
+      const records = allVersions().filter((item) => item.userId === actor.id || hasAdminRights(actor));
       const versions = records.map((latest) => {
         const status = latest.reviewStatus === 'approved' ? 'ready' : latest.reviewStatus === 'rejected' ? 'rejected' : latest.reviewStatus === 'pending' ? 'review' : latest.status;
         return { id: latest.id, videoId: latest.videoId, title: latest.title ?? latest.brief.vehicle_description, status, tier: latest.tier ?? null, durationSeconds: latest.brief.duration_s, priceFcfa: latest.priceFcfa, prompt: latest.prompt, inputs: extractGenerationInputs(latest.brief), previewUrl: latest.status === 'ready' ? latest.videoUrl : undefined, videoUrl: latest.status === 'ready' ? latest.videoUrl : undefined, createdAt: latest.createdAt };
@@ -100,10 +102,16 @@ export async function GET(request: Request) {
       'video_versions',
       'number',
     );
-    if (actor.role === 'collaborateur') query = query.eq('user_id', actor.id);
-    if (actor.role === 'valideur') {
-      if (!actor.brandId) return NextResponse.json({ versions: [] });
-      query = query.eq('brand_id', actor.brandId).eq('department', actor.department).eq('status', 'review');
+    // 27/10 · scope: an operator sees everything; an administrator, the videos of their client; a collaborator, their
+    // own videos — plus, when they hold the right to validate and ask for the queue (?status=review), the videos of
+    // their client waiting for validation. No departments.
+    const brandIds = isOperator(actor) ? [] : await clientBrandIds(admin, actor);
+    if (!isOperator(actor) && !brandIds.length && actor.role !== 'collaborateur') return NextResponse.json({ versions: [] });
+    if (actor.role === 'admin') query = query.in('brand_id', brandIds);
+    if (actor.role === 'collaborateur') {
+      query = canValidate(actor) && requestedStatus === 'review' && brandIds.length
+        ? query.eq('status', 'review').in('brand_id', brandIds)
+        : query.eq('user_id', actor.id);
     }
     const { data, error } = await query;
     if (error) throw error;
@@ -132,9 +140,9 @@ export async function GET(request: Request) {
       const validationRows = Array.isArray(latest?.validations) ? latest.validations : [];
       const ledgerRows = Array.isArray(latest?.usage_ledger) ? latest.usage_ledger : [];
       const generationCost = aggregateGenerationCost(ledgerRows, env.USD_TO_EUR_RATE, env.EUR_TO_FCFA);
-      const canPreviewReview = video.status === 'review' && (actor.role === 'admin' || actor.role === 'valideur' && video.brand_id === actor.brandId && video.department === actor.department);
+      const canPreviewReview = video.status === 'review' && (isOperator(actor) || canValidate(actor) && brandIds.includes(String(video.brand_id)));
       const isOwner = video.user_id === actor.id;
-      const canPreviewReady = video.status === 'approved' || video.status === 'ready' && (isOwner || actor.role === 'admin');
+      const canPreviewReady = video.status === 'approved' || video.status === 'ready' && (isOwner || hasAdminRights(actor));
       const canPreview = canPreviewReady || canPreviewReview || video.status === 'review' && isOwner;
       const briefData = latest?.brief_json && typeof latest.brief_json === 'object' ? latest.brief_json as Record<string, unknown> : {};
       const model = Array.isArray(latest?.model) ? latest.model[0] : latest?.model;
@@ -197,7 +205,7 @@ export async function POST(request: Request) {
       if (env.PROVIDERS_MODE === 'mock' && !env.NEXT_PUBLIC_SUPABASE_URL) {
         return NextResponse.json({ id: crypto.randomUUID(), status: 'ready', videoUrl: '/mock/mock-video.mp4', prompt: 'Simulation du montage à partir des photos sources.', estimatedPriceFcfa: 0, fidelityStatus: 'Simulation — aucune image générée par IA n’a été utilisée.' }, { status: 201 });
       }
-      return NextResponse.json(await createLivePhotoFidelity(actor, input), { status: 201 });
+      return NextResponse.json(withoutInternalFields(actor, await createLivePhotoFidelity(actor, input)), { status: 201 });
     }
     if (payload && typeof payload === 'object' && 'workflow' in payload && payload.workflow === 'single_storyboard') {
       const single = singleStoryboardSchema.parse(payload);
@@ -210,7 +218,7 @@ export async function POST(request: Request) {
       if (env.PROVIDERS_MODE === 'mock') {
         return NextResponse.json({ id: crypto.randomUUID(), status: 'ready', videoUrl: '/mock/mock-video.mp4', prompt: 'Simulation du storyboard IA à un seul plan.', completedShots: 1, totalShots: 1, estimatedPriceFcfa: 0 }, { status: 201 });
       }
-      return NextResponse.json(await createLiveStoryboard(actor, { ...single, workflow: 'single' }), { status: 201 });
+      return NextResponse.json(withoutInternalFields(actor, await createLiveStoryboard(actor, { ...single, workflow: 'single' })), { status: 201 });
     }
     if (payload && typeof payload === 'object' && 'workflow' in payload && payload.workflow === 'multi_clip') {
       const multi = multiClipSchema.parse(payload);
@@ -221,7 +229,7 @@ export async function POST(request: Request) {
       if (env.PROVIDERS_MODE === 'mock') {
         return NextResponse.json({ id: crypto.randomUUID(), status: 'ready', videoUrl: '/mock/mock-video.mp4', prompt: 'Simulation du storyboard multi-plans.', completedShots: multi.storyboard.length, totalShots: multi.storyboard.length, estimatedPriceFcfa: 0 }, { status: 201 });
       }
-      return NextResponse.json(await createLiveStoryboard(actor, multi), { status: 201 });
+      return NextResponse.json(withoutInternalFields(actor, await createLiveStoryboard(actor, multi)), { status: 201 });
     }
     const input = requestSchema.parse(payload);
     if (input.tier === 'premium') throw new HttpError(422, 'Les créations Premium passent par le storyboard IA de quatre plans de 5 secondes.');
@@ -229,7 +237,7 @@ export async function POST(request: Request) {
     if (input.scenePresetId && !getScenePreset(input.scenePresetId)) throw new HttpError(422, 'La scène sélectionnée est introuvable.');
     const selectedScene = input.scenePresetId ? getScenePreset(input.scenePresetId) : undefined;
     const userDirection = [getSceneConceptDirection(selectedScene, input.conceptId), input.description].filter(Boolean).join(' ').slice(0, 500);
-    if (env.PROVIDERS_MODE === 'live') return NextResponse.json(await createLiveVersion(actor, input, { modelId: input.modelId }), { status: 201 });
+    if (env.PROVIDERS_MODE === 'live') return NextResponse.json(withoutInternalFields(actor, await createLiveVersion(actor, input, { modelId: input.modelId })), { status: 201 });
     const brief = buildBrief(userDirection || 'Vidéo automobile réaliste et élégante.', { vehicle_asset_id: input.assetId, vehicle_category: input.vehicleCategory, scene_preset_id: input.scenePresetId, vehicle_action: selectedScene?.vehicleAction ?? input.vehicleAction, user_direction: userDirection, camera_movement: selectedScene?.cameraMovement ?? input.cameraMovement, mood: selectedScene?.mood ?? input.mood, location: selectedScene?.location ?? input.location, setting: selectedScene?.setting ?? input.setting, character: input.character || selectedScene?.character || 'Aucun personnage', lighting: selectedScene?.lighting ?? input.lighting, format: input.format, duration_s: input.durationS, complexity: input.complexity });
     if (env.NEXT_PUBLIC_SUPABASE_URL) return NextResponse.json(await createPersistedMockVersion(actor, input), { status: 201 });
     const prompt = briefToPrompt(brief, 'mock');
@@ -244,14 +252,13 @@ export async function POST(request: Request) {
 export async function DELETE(request: Request) {
   try {
     const actor = await getActor();
-    if (actor.role === 'valideur') throw new HttpError(403, 'Les valideurs ne peuvent pas supprimer de vidéos.');
     const parsed = deleteSchema.safeParse(await request.json());
     if (!parsed.success) throw new HttpError(422, 'Sélection de vidéos invalide. Choisissez jusqu’à 50 vidéos.');
     const { videoIds } = parsed.data;
 
     if (env.PROVIDERS_MODE === 'mock' && !env.NEXT_PUBLIC_SUPABASE_URL) {
       const selectedRecords = allVersions().filter((record) => videoIds.includes(record.videoId));
-      if (selectedRecords.length !== videoIds.length || selectedRecords.some((record) => actor.role !== 'admin' && record.userId !== actor.id)) {
+      if (selectedRecords.length !== videoIds.length || selectedRecords.some((record) => !hasAdminRights(actor) && record.userId !== actor.id)) {
         throw new HttpError(404, 'Certaines vidéos sélectionnées sont introuvables. Actualisez la Bibliothèque.');
       }
       if (selectedRecords.some((record) => ['queued', 'generating', 'postprocessing'].includes(record.status))) {
@@ -264,6 +271,7 @@ export async function DELETE(request: Request) {
     const admin = createStorageAdminClient();
     let query = admin.from('videos').select('id,user_id,status,video_versions(id,status,raw_path,final_path)').in('id', videoIds);
     if (actor.role === 'collaborateur') query = query.eq('user_id', actor.id);
+    if (actor.role === 'admin') query = query.in('brand_id', await clientBrandIds(admin, actor));
     const { data: videos, error: queryError } = await query;
     if (queryError) throw queryError;
     if (!videos || videos.length !== videoIds.length) {

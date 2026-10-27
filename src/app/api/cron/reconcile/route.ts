@@ -7,15 +7,17 @@ import { createStorageAdminClient } from '@/core/storage/supabase';
 import { refreshLiveVersion } from '@/core/versions/live';
 import { refreshPersistedMockVersion } from '@/core/versions/mock-persistence';
 import type { Actor } from '@/core/auth/guards';
+import { runCreditMaintenance } from '@/core/notifications/credit-alerts';
 export const maxDuration = 60;
 export async function GET(request: Request) {
   if (!env.CRON_SECRET || request.headers.get('authorization') !== `Bearer ${env.CRON_SECRET}`) return NextResponse.json({ error: 'Accès refusé.' }, { status: 401 });
   if (env.PROVIDERS_MODE !== 'live') {
     if (env.NEXT_PUBLIC_SUPABASE_URL) {
       const admin = createStorageAdminClient();
+      await runCreditMaintenance(admin).catch(() => undefined);
       const { data, error } = await admin.from('video_versions').select('id').like('provider_request_id', 'mock:%').in('status', ['queued','generating','postprocessing']).order('updated_at', { ascending: true }).limit(10);
       if (error) return NextResponse.json({ error: 'Impossible de charger les simulations en cours.' }, { status: 503 });
-      const systemActor: Actor = { id: 'cron-reconcile', role: 'admin', department: '', brandId: null };
+      const systemActor: Actor = { id: 'cron-reconcile', role: 'operateur', department: '', brandId: null };
       const results = await Promise.all((data ?? []).map(async ({ id }) => {
         try { const result = await refreshPersistedMockVersion(id, systemActor); return { id, status: result.status }; }
         catch { return { id, status: 'reconcile_failed' }; }
@@ -31,12 +33,14 @@ export async function GET(request: Request) {
   }
   const admin = createStorageAdminClient();
   await cleanupClipPreviews(admin);
+  // 27/10 · crédits : lots échus expirés (tracé dans le journal), alertes d'expiration et de solde bas.
+  const credits = await runCreditMaintenance(admin).catch(() => ({ expiredLots: 0, warnings: 0, available: false }));
   const { data, error } = await admin.from('video_versions').select('id').in('status', ['queued','generating','postprocessing']).order('updated_at', { ascending: true }).limit(10);
   if (error) return NextResponse.json({ error: 'Impossible de charger les générations en cours.' }, { status: 503 });
-  const systemActor: Actor = { id: 'cron-reconcile', role: 'admin', department: '', brandId: null };
+  const systemActor: Actor = { id: 'cron-reconcile', role: 'operateur', department: '', brandId: null };
   const results = await Promise.all((data ?? []).map(async ({ id }) => {
     try { const result = await refreshLiveVersion(id, systemActor); return { id, status: result.status }; }
     catch { return { id, status: 'reconcile_failed' }; }
   }));
-  return NextResponse.json({ reconciled: results.filter((row) => row.status !== 'reconcile_failed').length, failed: results.filter((row) => row.status === 'reconcile_failed').length, results });
+  return NextResponse.json({ credits, reconciled: results.filter((row) => row.status !== 'reconcile_failed').length, failed: results.filter((row) => row.status === 'reconcile_failed').length, results });
 }

@@ -1,3 +1,4 @@
+import { isOperator } from '@/core/auth/roles';
 import { storedClipApproval } from '@/core/versions/clip-approval';
 import { storedApproval } from '@/core/versions/keyframe-approval';
 import { NextResponse } from 'next/server';
@@ -5,7 +6,6 @@ import { errorResponse, getActor, HttpError } from '@/core/auth/guards';
 import { env } from '@/env';
 import { allVersions } from '@/core/versions/store';
 import { createStorageAdminClient } from '@/core/storage/supabase';
-import { createSupabaseServerClient } from '@/core/supabase/server';
 import { aggregateGenerationCost } from '@/core/billing/aggregate';
 import { storedCostPlan } from '@/core/billing/video-cap';
 
@@ -17,17 +17,12 @@ const plannedCost = (brief: unknown) => {
 export async function GET() {
   try {
     const actor = await getActor();
-    if (actor.role !== 'admin') throw new HttpError(403, 'Le suivi de consommation est réservé à l’administration.');
-    const role = actor.role as string;
-    if (env.PROVIDERS_MODE === 'mock' && !env.NEXT_PUBLIC_SUPABASE_URL) return NextResponse.json({ rows: allVersions().filter((v) => actor.role === 'admin' || v.userId === actor.id).map((v) => ({ version_id: v.id, video_id: v.videoId, title: v.title ?? v.brief.vehicle_description, kind: 'generation', price_fcfa: v.priceFcfa, cost_real_fcfa: 0, cost_eur: 0, department: actor.department, model_name: 'Simulation', seconds: 5, status: v.status, created_at: v.createdAt })) });
+    // 27/10: production costs (provider cost, real cost, margin) are for the KÔMIAN operator only.
+    if (!isOperator(actor)) throw new HttpError(403, 'Les coûts de production sont réservés à l’équipe KÔMIAN.');
+    if (env.PROVIDERS_MODE === 'mock' && !env.NEXT_PUBLIC_SUPABASE_URL) return NextResponse.json({ rows: allVersions().map((v) => ({ version_id: v.id, video_id: v.videoId, title: v.title ?? v.brief.vehicle_description, kind: 'generation', price_fcfa: v.priceFcfa, cost_real_fcfa: 0, cost_eur: 0, department: actor.department, model_name: 'Simulation', seconds: 5, status: v.status, created_at: v.createdAt })) });
     if (env.PROVIDERS_MODE === 'mock' && env.NEXT_PUBLIC_SUPABASE_URL) {
       const admin = createStorageAdminClient();
-      let mockQuery = admin.from('videos').select('id,user_id,title,status,department,created_at,video_versions(id,number,status,brief_json,created_at,usage_ledger(kind,ai_model_id,seconds,cost_usd,billable_cost_usd,cost_eur,cost_real_fcfa,price_fcfa,status))').order('created_at', { ascending: false });
-      if (role === 'collaborateur') mockQuery = mockQuery.eq('user_id', actor.id);
-      if (role === 'valideur') {
-        if (!actor.brandId) return NextResponse.json({ rows: [] });
-        mockQuery = mockQuery.eq('brand_id', actor.brandId).eq('department', actor.department).eq('status', 'review');
-      }
+      const mockQuery = admin.from('videos').select('id,user_id,title,status,department,created_at,video_versions(id,number,status,brief_json,created_at,usage_ledger(kind,ai_model_id,seconds,cost_usd,billable_cost_usd,cost_eur,cost_real_fcfa,price_fcfa,status))').order('created_at', { ascending: false });
       const { data, error } = await mockQuery;
       if (error) throw new HttpError(503, 'Impossible de charger les coûts simulés.');
       const rows = (data ?? []).flatMap((video) => {
@@ -41,25 +36,8 @@ export async function GET() {
       });
       return NextResponse.json({ rows });
     }
-    const authenticated = await createSupabaseServerClient();
-    let versionIds: string[] | null = null;
-    if (role === 'valideur') {
-      if (!actor.brandId) return NextResponse.json({ rows: [] });
-      const { data, error } = await authenticated.from('videos').select('id').eq('brand_id', actor.brandId).eq('department', actor.department).eq('status', 'review');
-      if (error) throw new HttpError(503, 'Impossible de charger les vidéos en validation.');
-      versionIds = (data ?? []).map((v) => v.id);
-    }
     const admin = createStorageAdminClient();
-    let query = admin.from('usage_ledger').select('id,version_id,user_id,kind,ai_model_id,seconds,cost_usd,billable_cost_usd,cost_eur,cost_real_fcfa,price_fcfa,status,created_at,video_versions(video_id,created_at,brief_json,videos(title))').in('kind', ['generation', 'keyframe']).order('created_at', { ascending: false });
-    if (role === 'collaborateur') query = query.eq('user_id', actor.id);
-    if (versionIds) {
-      if (!versionIds.length) return NextResponse.json({ rows: [] });
-      const { data: versions, error } = await admin.from('video_versions').select('id').in('video_id', versionIds);
-      if (error) throw new HttpError(503, 'Impossible de charger les coûts facturés.');
-      const ids = (versions ?? []).map((v) => v.id);
-      if (!ids.length) return NextResponse.json({ rows: [] });
-      query = query.in('version_id', ids);
-    }
+    const query = admin.from('usage_ledger').select('id,version_id,user_id,kind,ai_model_id,seconds,cost_usd,billable_cost_usd,cost_eur,cost_real_fcfa,price_fcfa,status,created_at,video_versions(video_id,created_at,brief_json,videos(title))').in('kind', ['generation', 'keyframe']).order('created_at', { ascending: false });
     const { data, error } = await query;
     if (error) throw error;
     const grouped = new Map<string, NonNullable<typeof data>>();

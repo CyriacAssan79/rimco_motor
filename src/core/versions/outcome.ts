@@ -1,4 +1,3 @@
-import { formatFcfa } from '@/core/pricing';
 
 /**
  * What the Studio shows when a video ends (26/10): the settings to start again, the cause of a failure in French and
@@ -83,9 +82,11 @@ export function billingSummary(rows: Array<{ kind?: string | null; status?: stri
 }
 
 /** « Rien ne vous est facturé pour cette vidéo. », or the amount billed, or the cost being checked. */
-export function failureBillingText(billing: BillingSummary | null | undefined) {
-  if (!billing) return 'Le montant facturé sera visible dans la Bibliothèque.';
-  if (billing.pending) return 'Un coût est en cours de vérification auprès du fournisseur : il ne sera facturé que s’il a réellement été consommé.';
-  if (billing.chargedFcfa > 0) return `${formatFcfa(billing.chargedFcfa)} facturés : le fournisseur a déjà produit une partie de la vidéo.`;
-  return 'Rien ne vous est facturé pour cette vidéo.';
+/**
+ * 27/10 · one rule for failures (feedback « parfois facturé, parfois non ») : a video that fails or is cancelled is
+ * never billed to the client; its credits are released. Provider costs already spent stay a KÔMIAN internal cost.
+ */
+export function failureBillingText(_billing?: BillingSummary | null) {
+  void _billing;
+  return 'Rien ne vous est facturé pour cette vidéo : le montant réservé a été libéré.';
 }

@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { notify } from '@/core/notifications/notify';
 import type { StoryboardShot } from '@/core/storyboard';
-import { HUMAN_REVISIONS_PER_SHOT, humanRevisionsUsed, MAX_KEYFRAME_ATTEMPTS } from '@/core/verification/loop';
+import { humanRevisionLimit, humanRevisionsUsed, MAX_KEYFRAME_ATTEMPTS } from '@/core/verification/loop';
 import { approvalDeadline, isShotApproved, shotActionFr, shotsModifiedOnBoard, storedApproval, type KeyframeApprovalState } from './keyframe-approval';
 import { lastHumanRevision } from './shot-feedback';
 import { storedClipApproval } from './clip-approval';
@@ -51,7 +51,7 @@ type GateInput = {
   now?: number;
 };
 
-export function approvalBoard(input: Pick<GateInput, 'shots' | 'keyframes' | 'draftFor'>, state: KeyframeApprovalState): KeyframeBoard | null {
+export function approvalBoard(input: Pick<GateInput, 'shots' | 'keyframes' | 'draftFor'> & { brief?: Record<string, unknown> }, state: KeyframeApprovalState): KeyframeBoard | null {
   if (!state.requestedAt) return null;
   const deadline = approvalDeadline(state.requestedAt, Date.parse(state.requestedAt));
   return {
@@ -71,8 +71,8 @@ export function approvalBoard(input: Pick<GateInput, 'shots' | 'keyframes' | 'dr
         action: draft ? shotActionFr(draft) : '',
         url: input.keyframes.find((keyframe) => keyframe.number === shot.shot_number)?.url ?? null,
         state: approved ? 'approved' : ready ? 'to_approve' : shot.keyframe_status === 'awaiting_review' ? 'decision' : 'correcting',
-        canRevise: ready && !approved && used < HUMAN_REVISIONS_PER_SHOT && Number(shot.keyframe_retry_count ?? 0) + 1 < MAX_KEYFRAME_ATTEMPTS,
-        revisionsLeft: Math.max(0, HUMAN_REVISIONS_PER_SHOT - used),
+        canRevise: ready && !approved && used < humanRevisionLimit(input.brief, 'keyframe') && Number(shot.keyframe_retry_count ?? 0) + 1 < MAX_KEYFRAME_ATTEMPTS,
+        revisionsLeft: Math.max(0, humanRevisionLimit(input.brief, 'keyframe') - used),
         lastRevision: lastHumanRevision(shot.verification_history),
       };
     }),
@@ -110,6 +110,8 @@ export async function enforceApprovalDeadline(input: GateInput) {
   }
   if (deadline.due === 'expire') {
     await input.admin.from('usage_ledger').update({ status: 'released' }).eq('version_id', input.version.id).eq('status', 'reserved');
+    // 27/10: an expired (cancelled) video is never billed to the client.
+    await input.admin.from('usage_ledger').update({ price_fcfa: 0, applied_fcfa_per_second: 0 }).eq('version_id', input.version.id).eq('kind', 'generation');
     await Promise.all([
       input.admin.from('video_versions').update({ status: 'cancelled', error_message: EXPIRED_MESSAGE, updated_at: nowIso }).eq('id', input.version.id).eq('status', 'generating'),
       input.admin.from('videos').update({ status: 'cancelled', updated_at: nowIso }).eq('id', input.version.video_id),

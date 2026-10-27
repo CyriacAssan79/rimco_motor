@@ -1,3 +1,4 @@
+import { hasAdminRights } from '@/core/auth/roles';
 import { NextResponse } from 'next/server';
 import { errorResponse, getActor, HttpError } from '@/core/auth/guards';
 import { mockVideoProvider } from '@/core/providers/mock';
@@ -42,10 +43,10 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
     }
     if (env.NEXT_PUBLIC_SUPABASE_URL) return NextResponse.json(await refreshPersistedMockVersion(id, actor));
     const current = getVersion(id);
-    if (!current || current.userId !== actor.id && actor.role !== 'admin') throw new HttpError(404, 'Cette version est introuvable.');
+    if (!current || current.userId !== actor.id && !hasAdminRights(actor)) throw new HttpError(404, 'Cette version est introuvable.');
     if (current.status === 'ready' || current.status === 'failed') return NextResponse.json({ id, status: current.status, videoUrl: current.status === 'ready' ? current.videoUrl : undefined, error: current.error });
     const result = await mockVideoProvider.status(current.requestId);
-    const updated = putVersion({ ...current, status: result.status, ...(result.status === 'ready' && actor.role === 'admin' ? { reviewStatus: 'approved' as const } : {}), ...(result.videoUrl ? { videoUrl: result.videoUrl } : {}), ...(result.error ? { error: result.error } : {}) });
+    const updated = putVersion({ ...current, status: result.status, ...(result.status === 'ready' && hasAdminRights(actor) ? { reviewStatus: 'approved' as const } : {}), ...(result.videoUrl ? { videoUrl: result.videoUrl } : {}), ...(result.error ? { error: result.error } : {}) });
     return NextResponse.json({ id, status: updated.status, videoUrl: updated.status === 'ready' ? updated.videoUrl : undefined, error: updated.error });
   } catch (error) { return errorResponse(error); }
 }
@@ -61,7 +62,7 @@ export async function POST(_request: Request, context: { params: Promise<{ id: s
       .select('id,status,video:videos!inner(user_id)')
       .eq('id', id).maybeSingle();
     const video = Array.isArray(version?.video) ? version.video[0] : version?.video;
-    if (error || !version || !video || actor.role !== 'admin' && video.user_id !== actor.id) throw new HttpError(404, 'Cette version est introuvable.');
+    if (error || !version || !video || !hasAdminRights(actor) && video.user_id !== actor.id) throw new HttpError(404, 'Cette version est introuvable.');
     if (!['queued', 'generating'].includes(version.status)) throw new HttpError(409, 'Cette génération ne peut plus reprendre son suivi.');
     const { data: shots, error: shotsError } = await admin.from('video_shots')
       .select('shot_number,status,keyframe_status,provider_poll_failure_count,provider_reconciliation_required')

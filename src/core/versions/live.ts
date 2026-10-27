@@ -1,4 +1,6 @@
 import type { Actor } from '@/core/auth/guards';
+import { canValidate, hasAdminRights, isOperator } from '@/core/auth/roles';
+import { isInActorClient } from '@/core/auth/client-scope';
 import { briefToPrompt, buildBrief } from '@/core/brief';
 import type { Brief } from '@/core/brief';
 import { klingVideoProvider, KLING_ENDPOINT } from '@/core/providers/fal-kling';
@@ -14,10 +16,10 @@ import { HttpError } from '@/core/auth/guards';
 import type { z } from 'zod';
 import { requestSchema } from './request-schema';
 import { beginPostproduction, retryPostproduction } from '@/core/postproduction/pipeline';
-import { approveCompletedAdminVideo } from '@/core/versions/approval';
 import { refreshLivePhotoFidelity } from '@/core/versions/photo-fidelity';
 import { getScenePreset, inferVehicleCategory } from '@/core/scenes/catalog';
 import { estimateGridPriceFcfa } from '@/core/pricing';
+import { assertCreditsCover, creditContext, holdCredits } from '@/core/billing/credits';
 import { refreshLiveStoryboard } from './storyboard-live';
 import { getSceneConceptDirection } from '@/core/scenes/concepts';
 import { reserveGenerationCost, reserveLlmCost, settleUsageCost } from '@/core/billing/ledger';
@@ -36,7 +38,7 @@ import { notify } from '@/core/notifications/notify';
 export type CreateVersionInput = z.infer<typeof requestSchema>;
 
 export async function createLiveVersion(actor: Actor, input: CreateVersionInput, options?: { modelId?: string; reuse?: { brief: Brief; prompt: string } }) {
-  if (input.tier === 'test' && actor.role !== 'admin') throw new HttpError(403, 'Le niveau Test est réservé à l’administrateur.');
+  if (input.tier === 'test' && !isOperator(actor)) throw new HttpError(403, 'Le niveau Test est réservé à l’équipe KÔMIAN.');
   if (!actor.brandId) throw new HttpError(403, 'Aucune marque n’est associée à votre profil.');
 
   const authenticated = await createSupabaseServerClient();
@@ -131,6 +133,8 @@ export async function createLiveVersion(actor: Actor, input: CreateVersionInput,
     standard: Number(pricingSettings.grid_fcfa_per_second_standard), pro: Number(pricingSettings.grid_fcfa_per_second_pro), premium: Number(pricingSettings.grid_fcfa_per_second_premium),
   });
   const videoTitle = input.title || `${vehicleMake ?? ''} ${vehicleModel ?? 'Véhicule'} · Nouvelle création`.trim();
+  const credits = await creditContext(admin, actor);
+  await assertCreditsCover(admin, actor, credits, priceFcfa);
   const falCredential = await getActiveFalCredential(admin);
   const { data: video, error: videoError } = await admin.from('videos').insert({ user_id: actor.id, brand_id: actor.brandId, title: videoTitle, department: actor.department, status: 'generating' }).select('id').single();
   if (videoError || !video) throw new HttpError(500, 'Impossible de créer la vidéo. Réessayez.');
@@ -139,6 +143,12 @@ export async function createLiveVersion(actor: Actor, input: CreateVersionInput,
   if (versionError || !version) {
     await admin.from('videos').delete().eq('id', video.id);
     throw new HttpError(500, 'Impossible de créer la version de la vidéo. Réessayez.');
+  }
+  try {
+    await holdCredits(admin, actor, credits, { videoId: video.id, versionId: version.id, kind: 'video', amountFcfa: priceFcfa, key: `video:${version.id}` });
+  } catch (holdError) {
+    await Promise.all([admin.from('video_versions').delete().eq('id', version.id), admin.from('videos').delete().eq('id', video.id)]);
+    throw holdError;
   }
   const { data: ledgerId, error: reserveError } = await reserveGenerationCost(admin, {
     userId: actor.id, versionId: version.id, modelId: model.id, seconds: sourceDurationS,
@@ -271,25 +281,22 @@ export async function refreshLiveVersion(versionId: string, actor: Actor) {
   if (error || !version) throw new HttpError(404, 'Cette version est introuvable.');
   const video = Array.isArray(version.video) ? version.video[0] : version.video;
   const ownsVideo = video?.user_id === actor.id;
-  const canReview = actor.role === 'valideur' && video?.status === 'review' && video.brand_id === actor.brandId && video.department === actor.department;
-  if (!video || !ownsVideo && !canReview && actor.role !== 'admin') throw new HttpError(404, 'Cette version est introuvable.');
+  const inClient = isOperator(actor) || await isInActorClient(admin, actor, video?.brand_id);
+  const canReview = canValidate(actor) && video?.status === 'review' && inClient;
+  if (!video || !ownsVideo && !canReview && !(hasAdminRights(actor) && inClient)) throw new HttpError(404, 'Cette version est introuvable.');
   if (version.brief_json && typeof version.brief_json === 'object' && (version.brief_json as Record<string, unknown>).photoFidelityMode === true) return refreshLivePhotoFidelity(versionId, actor);
   if (version.brief_json && typeof version.brief_json === 'object' && 'storyboard' in version.brief_json) return refreshLiveStoryboard(versionId, actor);
   if (version.status === 'failed') return { id: versionId, status: version.status };
   if (version.status === 'ready') {
     if (video.status === 'generating' && version.final_path) {
-      if (actor.role === 'admin') {
-        await approveCompletedAdminVideo(admin, actor, { videoId: version.video_id, versionId });
-        video.status = 'approved';
-      } else {
-        const { error: readyError } = await admin.from('videos').update({ status: 'ready' }).eq('id', version.video_id);
-        if (readyError) throw new HttpError(503, 'Le fichier final est prêt; son état doit être réconcilié.');
-        video.status = 'ready';
-      }
+      // 27/10: no automatic approval, even for an administrator — every video goes through « Envoyer en validation ».
+      const { error: readyError } = await admin.from('videos').update({ status: 'ready' }).eq('id', version.video_id);
+      if (readyError) throw new HttpError(503, 'Le fichier final est prêt; son état doit être réconcilié.');
+      video.status = 'ready';
       await notifyVersion(admin, video.user_id, versionId, 'ready', 'Votre vidéo est prête à être consultée.');
     }
     const approvedFinal = (video?.status === 'approved' || video?.status === 'ready' && ownsVideo) && version.final_path;
-    const validatorPreview = video?.status === 'review' && (actor.role === 'admin' || actor.role === 'valideur' && video.brand_id === actor.brandId && video.department === actor.department);
+    const validatorPreview = video?.status === 'review' && canReview;
     const path = approvedFinal || validatorPreview ? approvedFinal || version.final_path : null;
     return { id: versionId, status: version.status, videoUrl: path ? await signedVideoUrl(admin, path) : undefined };
   }
@@ -378,10 +385,7 @@ export async function refreshLiveVersion(versionId: string, actor: Actor) {
     if (!claimedVersion) return { id: versionId, status: 'postprocessing' as const };
     try {
       const processed = await beginPostproduction(versionId);
-      if (processed.status === 'ready' && actor.role === 'admin') {
-        await approveCompletedAdminVideo(admin, actor, { videoId: version.video_id, versionId });
-      }
-      const canDownload = ownsVideo || actor.role === 'admin';
+      const canDownload = ownsVideo || hasAdminRights(actor);
       if (processed.status === 'ready' || processed.status === 'failed') await pruneRetiredFalCredentials(admin);
       return { id: versionId, status: processed.status, videoUrl: canDownload ? await signedVideoUrl(admin, processed.finalPath) : undefined };
     } catch (postprodError) {

@@ -181,7 +181,7 @@ async function expectFailedVideoMessage(page: Page) {
   const failure = page.getByRole('alert').filter({ hasText: 'La vidéo n’a pas pu être produite.' });
   await expect(failure).toBeVisible({ timeout: 30_000 });
   await expect(failure).toContainText('Le fournisseur a refusé le contenu demandé (filtre de sécurité).');
-  await expect(failure).toContainText('Rien ne vous est facturé pour cette vidéo.');
+  await expect(failure).toContainText('Rien ne vous est facturé pour cette vidéo : le montant réservé a été libéré.');
   await expect(failure.getByRole('button', { name: 'Relancer avec les mêmes réglages' })).toBeVisible();
   await expect(failure).not.toContainText('Content policy violation', { useInnerText: true });
 }
@@ -241,7 +241,8 @@ async function expectReviseShot(page: Page) {
   await page.getByRole('button', { name: 'Modifier ce plan' }).click({ timeout: 30_000 });
   const launch = page.getByRole('button', { name: 'Lancer la correction' });
   await expect(launch).toBeDisabled();
-  await expect(page.getByText('Coût de la correction : environ 181 FCFA, environ 2 min.')).toBeVisible();
+  // 27/10: a modification included in the price is shown struck through, « (non facturé) ».
+  await expect(page.getByText(/Coût de la correction : 181\s?FCFA \(non facturé\), environ 2 min\./)).toBeVisible();
   await page.getByLabel('Voiture coupée ou mal cadrée').check();
   await page.getByLabel('Précisez ce que vous voulez').fill('Je la veux entière, avec le logo RIMCO peint sur la porte.');
   const sent = page.waitForRequest((call) => call.url().endsWith(`/api/versions/${version.id}/shots/2/review`) && call.method() === 'POST');

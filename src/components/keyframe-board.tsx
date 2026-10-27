@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { formatFcfa } from '@/core/pricing';
 import type { ReviewRequest } from '@/core/verification/loop';
-import { AdaptedRequests, FullScreen, relaunchCostText, ReviseShotForm, Thumbnail, type Viewed } from './shot-review-panel';
+import { AdaptedRequests, FullScreen, RelaunchCost, ReviseShotForm, Thumbnail, type Viewed } from './shot-review-panel';
 
 export type BoardShot = {
   shotNumber: number;
@@ -124,7 +124,7 @@ export function KeyframeBoard({ versionId, board, priceFcfa, onChanged }: { vers
               )}
               {shot.state === 'to_approve' && editing !== shot.shotNumber && shot.canRevise && (
                 <p className="mt-1 text-xs leading-5 text-[#55545a]">
-                  Modifier : nouvelle image clé et nouveau contrôle{shot.cost ? ` ; ${relaunchCostText(shot.cost)}` : ''}. {shot.revisionsLeft} modification{shot.revisionsLeft > 1 ? 's' : ''} possible{shot.revisionsLeft > 1 ? 's' : ''}.
+                  Modifier : nouvelle image clé et nouveau contrôle{shot.cost ? <> ; <RelaunchCost cost={shot.cost} /></> : null}. {shot.revisionsLeft} modification{shot.revisionsLeft > 1 ? 's' : ''} possible{shot.revisionsLeft > 1 ? 's' : ''}.
                 </p>
               )}
               {shot.state === 'to_approve' && !shot.canRevise && shot.revisionsLeft === 0 && (

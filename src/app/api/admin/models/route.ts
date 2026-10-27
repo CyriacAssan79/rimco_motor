@@ -6,7 +6,7 @@ import { env } from '@/env';
 const patchSchema = z.object({ id: z.string().uuid(), isActive: z.boolean().optional(), isDefault: z.boolean().optional() }).refine((v) => v.isActive !== undefined || v.isDefault !== undefined, { message: 'Aucune modification fournie.' });
 export async function GET() {
   try {
-    await requireRole('admin');
+    await requireRole('operateur');
     if (env.PROVIDERS_MODE === 'mock' && !env.NEXT_PUBLIC_SUPABASE_URL) return NextResponse.json({ models: [
       { id: '00000000-0000-4000-8000-000000000002', tier: 'pro', comparisonCompatible: true, priceUsdPerSecond: 0.112, allowedDurations: [5,10,15], allowedFormats: ['16:9','9:16','1:1'], isActive: true, isDefault: true },
       { id: '00000000-0000-4000-8000-000000000006', tier: 'premium', comparisonCompatible: false, priceUsdPerSecond: 0.473, allowedDurations: [20], allowedFormats: ['16:9','9:16','1:1'], isActive: true, isDefault: true },
@@ -21,7 +21,7 @@ export async function GET() {
 }
 export async function PATCH(request: Request) {
   try {
-    await requireRole('admin');
+    await requireRole('operateur');
     const input = patchSchema.parse(await request.json());
     if (env.PROVIDERS_MODE === 'mock' && !env.NEXT_PUBLIC_SUPABASE_URL) return NextResponse.json({ model: input });
     const admin = createStorageAdminClient();

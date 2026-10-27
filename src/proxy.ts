@@ -1,10 +1,13 @@
 import { createServerClient } from '@supabase/ssr';
 import { NextResponse, type NextRequest } from 'next/server';
+/** Pages reachable without a session: sign-in and « Mot de passe oublié » (its link sits on the sign-in page). */
+export const PUBLIC_PATHS = new Set(['/connexion', '/mot-de-passe-oublie']);
+
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
   // Les ressources de marque sont publiques : elles doivent rester disponibles
   // sur la page de connexion, avant toute session Supabase.
-  if (pathname === '/connexion' || pathname.startsWith('/api/') || pathname.startsWith('/brand/')) return NextResponse.next();
+  if (PUBLIC_PATHS.has(pathname) || pathname.startsWith('/api/') || pathname.startsWith('/brand/')) return NextResponse.next();
 
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;

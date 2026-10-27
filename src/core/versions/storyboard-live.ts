@@ -1,3 +1,4 @@
+import { hasAdminRights } from '@/core/auth/roles';
 import { buildClipBoard, clipApprovalGate } from './clip-gate';
 import { filmLightingIssue, resolveFilmLighting } from '@/core/brief/film-lighting';
 import type { Actor } from '@/core/auth/guards';
@@ -14,6 +15,8 @@ import { keyframeImageUploadTarget } from '@/core/storage/keyframe-image';
 import { createSupabaseServerClient } from '@/core/supabase/server';
 import { env } from '@/env';
 import { estimateGridPriceFcfa } from '@/core/pricing';
+import { assertCreditsCover, creditContext, holdCredits } from '@/core/billing/credits';
+import { frozenRevisionLimits } from '@/core/billing/settings';
 import { notifyStoryboardState } from '@/core/notifications/storyboard';
 import { feedbackConflictMessages, lastHumanRevision, withFeedbackConflicts } from './shot-feedback';
 import { approvalBoard, enforceApprovalDeadline, keyframeApprovalGate } from './keyframe-gate';
@@ -27,7 +30,7 @@ import { MAX_MONTAGE_ATTEMPTS, montageFailureDecision } from '@/core/postproduct
 import { peopleForShot, storedCast, withCastReferences, type StoredCastMember } from './casting';
 import { loadDefaultDriver } from './moving-driver';
 import { collectQualityWarnings, storedQualityWarnings, warningIssues } from './quality-gate';
-import { appendVerification, applyShotRevision, clipRedoReservations, clipRedosDone, pendingClipRedo, pendingHumanFeedback, HUMAN_REVISIONS_PER_SHOT, humanRevisionsUsed, buildShotRevisionInstruction, buildShotRevisionPrompt, clipLoopDecision, defectsAsData, effectiveShotDraft, keyframeCorrectionsAllowed, keyframeLoopDecision, MAX_CLIP_RETRIES, MAX_KEYFRAME_ATTEMPTS, MAX_KEYFRAME_CORRECTIONS, storedVerdict, UNREADABLE_VERDICT, type ReviewRequest } from '@/core/verification/loop';
+import { appendVerification, applyShotRevision, clipRedoReservations, clipRedosDone, pendingClipRedo, pendingHumanFeedback, humanRevisionLimit, humanRevisionsUsed, buildShotRevisionInstruction, buildShotRevisionPrompt, clipLoopDecision, defectsAsData, effectiveShotDraft, keyframeCorrectionsAllowed, keyframeLoopDecision, MAX_CLIP_RETRIES, MAX_KEYFRAME_ATTEMPTS, MAX_KEYFRAME_CORRECTIONS, storedVerdict, UNREADABLE_VERDICT, type ReviewRequest } from '@/core/verification/loop';
 import { readShotRevision, SHOT_REVISION_RESERVE_USD, submitShotRevision } from '@/core/providers/fal-shot-revision';
 import type { CreateVersionInput } from './live';
 import { animationSubmitStateAfterFailure, canSubmitAnimation, type AnimationSubmitState } from './animation-submit-state';
@@ -279,6 +282,9 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
   const costPlan: CostPlanUsd = { nominal: nominalVideoCostUsd(costInput), worstCase: worstCaseVideoCostUsd(costInput), capMode: env.VIDEO_COST_CAP_MODE, capUsd: env.VIDEO_COST_CAP_USD ?? null };
   const capCheck = videoCostCapCheck(costPlan, env.VIDEO_COST_CAP_USD, env.VIDEO_COST_CAP_MODE);
   if (!capCheck.ok) throw new HttpError(422, capCheck.message);
+  // 27/10 · crédits : refus rapide avant toute écriture si le solde ne couvre pas le prix (le blocage atomique suit).
+  const credits = await creditContext(admin, actor);
+  await assertCreditsCover(admin, actor, credits, priceFcfa);
 
   const falCredential = await getActiveFalCredential(admin);
   const { data: video, error: videoError } = await admin.from('videos').insert({
@@ -289,7 +295,7 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
   if (videoError || !video) throw new HttpError(500, 'Impossible de créer la vidéo. Réessayez.');
   // 27/10: validation of the keyframes before the animation, frozen at launch; the brand setting has the last word.
   const keyframeApproval = { required: keyframeMode && resolveKeyframeApproval(await loadBrandApprovalMode(admin, actor.brandId), input.keyframeApproval, input.storyMode) };
-  const storedBrief = { ...brief, filmLighting, timeTransition: input.timeTransition, keyframeApproval, storyboard: generationShots, approvedStoryboard: input.storyboard, generationTier: input.storyMode, overlayLogo: input.overlayLogo, audioAssetId: input.audioAssetId ?? null, multiClipMode: !isSingleShot, singleStoryboardMode: isSingleShot, storyMode: input.storyMode, clipDurationSeconds: input.clipDurationSeconds, finalDurationSeconds: finalVideoSeconds(input.clipDurationSeconds), purpose: input.purpose, vehicleDossierId: input.vehicleDossierId, vehiclePhotoIds: selectedVehiclePhotos.map((photo) => photo.id), keyframeReferencesByShot, placeIds: input.placeIds,  castAssets, castDescription, movingDriver, placeDescriptions, interiorPlaceIds, renderSettings: render, ...(marketLocation ? { marketLocation } : {}), ...(steeringSide ? { steeringSide } : {}), ...(trafficSide ? { trafficSide } : {}), motionMatrix, framingRules: true, frameChecks: 2, endFrameMode: endFrameCount > 0, promptRules: 'v3.2', ...(pricingWarning ? { pricingWarning } : {}), ...(premiumQualityMode ? { videoQualityMode: true } : {}), costPlanUsd: costPlanForBrief(costPlan), shotLighting, processingMetrics: { requestedAt: new Date().toISOString() }, shotProcessingMetrics: {}, ...(input.comparisonCampaignId ? { comparisonCampaignId: input.comparisonCampaignId } : {}) };
+  const storedBrief = { ...brief, humanRevisionLimits: frozenRevisionLimits(credits.settings), ...(credits.internal ? { internalVideo: true } : {}), filmLighting, timeTransition: input.timeTransition, keyframeApproval, storyboard: generationShots, approvedStoryboard: input.storyboard, generationTier: input.storyMode, overlayLogo: input.overlayLogo, audioAssetId: input.audioAssetId ?? null, multiClipMode: !isSingleShot, singleStoryboardMode: isSingleShot, storyMode: input.storyMode, clipDurationSeconds: input.clipDurationSeconds, finalDurationSeconds: finalVideoSeconds(input.clipDurationSeconds), purpose: input.purpose, vehicleDossierId: input.vehicleDossierId, vehiclePhotoIds: selectedVehiclePhotos.map((photo) => photo.id), keyframeReferencesByShot, placeIds: input.placeIds,  castAssets, castDescription, movingDriver, placeDescriptions, interiorPlaceIds, renderSettings: render, ...(marketLocation ? { marketLocation } : {}), ...(steeringSide ? { steeringSide } : {}), ...(trafficSide ? { trafficSide } : {}), motionMatrix, framingRules: true, frameChecks: 2, endFrameMode: endFrameCount > 0, promptRules: 'v3.2', ...(pricingWarning ? { pricingWarning } : {}), ...(premiumQualityMode ? { videoQualityMode: true } : {}), costPlanUsd: costPlanForBrief(costPlan), shotLighting, processingMetrics: { requestedAt: new Date().toISOString() }, shotProcessingMetrics: {}, ...(input.comparisonCampaignId ? { comparisonCampaignId: input.comparisonCampaignId } : {}) };
   const { data: version, error: versionError } = await admin.from('video_versions').insert({
     video_id: video.id, number: 1, brief_json: storedBrief, generated_prompt: displayPrompts.join('\n\n--- Plan suivant ---\n\n'),
     ai_model_id: videoModel.id, fal_credential_id: falCredential.id, status: 'queued', generation_seconds: finalVideoSeconds(input.clipDurationSeconds),
@@ -297,6 +303,14 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
   if (versionError || !version) {
     await admin.from('videos').delete().eq('id', video.id);
     throw new HttpError(500, 'Impossible de créer la version de la vidéo. Réessayez.');
+  }
+  // Blocage du prix sur le solde, avant toute réservation de coût et tout appel fal. Une suppression de la vidéo
+  // plus bas libère automatiquement le montant (déclencheur videos_release_credits_on_delete).
+  try {
+    await holdCredits(admin, actor, credits, { videoId: video.id, versionId: version.id, kind: 'video', amountFcfa: priceFcfa, key: `video:${version.id}` });
+  } catch (holdError) {
+    await Promise.all([admin.from('video_versions').delete().eq('id', version.id), admin.from('videos').delete().eq('id', video.id)]);
+    throw holdError;
   }
 
   let storyboardCostUsd = 0;
@@ -950,7 +964,7 @@ async function refreshKeyframes(input: {
   // Shots stopped by the verifier: the Studio shows the image and its defects, a human accepts, relaunches or cancels.
   const reviewRequired: ReviewRequest[] = refreshedShots.filter((shot) => shot.keyframe_status === 'awaiting_review').map((shot) => {
     const verdict = storedVerdict(shot.keyframe_quality);
-    return { shotNumber: shot.shot_number, title: shot.title, stage: 'keyframe' as const, issues: verdict ? (verdict.issues.length ? verdict.issues : [verdict.reason]) : [], codes: verdict?.issues.length ? verdict.codes : undefined, url: keyframePreviews.find((preview) => preview.number === shot.shot_number)?.url ?? null, canRetry: Number(shot.keyframe_retry_count ?? 0) + 1 < MAX_KEYFRAME_ATTEMPTS && humanRevisionsUsed(shot.verification_history) < HUMAN_REVISIONS_PER_SHOT, revisionsLeft: Math.max(0, HUMAN_REVISIONS_PER_SHOT - humanRevisionsUsed(shot.verification_history)), lastRevision: lastHumanRevision(shot.verification_history) };
+    return { shotNumber: shot.shot_number, title: shot.title, stage: 'keyframe' as const, issues: verdict ? (verdict.issues.length ? verdict.issues : [verdict.reason]) : [], codes: verdict?.issues.length ? verdict.codes : undefined, url: keyframePreviews.find((preview) => preview.number === shot.shot_number)?.url ?? null, canRetry: Number(shot.keyframe_retry_count ?? 0) + 1 < MAX_KEYFRAME_ATTEMPTS && humanRevisionsUsed(shot.verification_history) < humanRevisionLimit(brief, 'keyframe'), revisionsLeft: Math.max(0, humanRevisionLimit(brief, 'keyframe') - humanRevisionsUsed(shot.verification_history)), lastRevision: lastHumanRevision(shot.verification_history) };
   });
   // A rolling shot waits for its optional end frame (ready or failed) before animation; failure only drops the end frame.
   const pendingKeyframes = refreshedShots.some((shot) => ['queued','generating','checking','revising'].includes(shot.keyframe_status)
@@ -1056,7 +1070,7 @@ async function refreshStoryboardState(versionId: string, actor: Actor) {
     .eq('id', versionId).single();
   if (error || !version) throw new HttpError(404, 'Cette version est introuvable.');
   const video = Array.isArray(version.video) ? version.video[0] : version.video;
-  if (!video || video.user_id !== actor.id && actor.role !== 'admin') throw new HttpError(404, 'Cette version est introuvable.');
+  if (!video || video.user_id !== actor.id && !hasAdminRights(actor)) throw new HttpError(404, 'Cette version est introuvable.');
   if (version.status === 'ready' && version.final_path) return { id: versionId, status: 'ready' as const, qualityWarnings: storedQualityWarnings(version.brief_json), videoUrl: await signedUrl(admin, version.final_path) };
   if (version.status === 'cancelled') return { id: versionId, status: 'cancelled' as const, error: 'La génération a été annulée.' };
   if (version.status === 'failed') { await pruneRetiredFalCredentials(admin); return { id: versionId, status: 'failed' as const, error: version.error_message ?? 'Un plan n’a pas pu être généré.' }; }

@@ -14,7 +14,7 @@ const replaceSchema = z.object({
 
 export async function GET() {
   try {
-    await requireRole('admin');
+    await requireRole('operateur');
     if (env.PROVIDERS_MODE === 'mock' && !env.NEXT_PUBLIC_SUPABASE_URL) {
       return NextResponse.json({ configured: Boolean(env.FAL_KEY), source: env.FAL_KEY ? 'vercel' : 'none', updatedAt: null, encryptionReady: Boolean(env.FAL_CREDENTIALS_ENCRYPTION_KEY) });
     }
@@ -26,7 +26,7 @@ export async function GET() {
 
 export async function PUT(request: Request) {
   try {
-    const actor = await requireRole('admin');
+    const actor = await requireRole('operateur');
     const input = replaceSchema.parse(await request.json());
     const result = await replaceFalCredential(input.apiKey, actor.id, createStorageAdminClient());
     return NextResponse.json({ configured: true, source: 'admin', updatedAt: result.updatedAt });

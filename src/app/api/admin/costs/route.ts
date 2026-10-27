@@ -4,7 +4,7 @@ import { createStorageAdminClient } from '@/core/storage/supabase';
 
 export async function GET() {
   try {
-    await requireRole('admin');
+    await requireRole('operateur');
     const admin = createStorageAdminClient();
     const { data, error } = await admin.from('usage_ledger')
       .select('version_id,kind,seconds,price_fcfa,status,created_at,video_versions(video_id,videos(title))')

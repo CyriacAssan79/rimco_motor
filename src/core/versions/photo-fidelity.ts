@@ -1,3 +1,4 @@
+import { hasAdminRights } from '@/core/auth/roles';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Actor } from '@/core/auth/guards';
@@ -95,7 +96,7 @@ export async function refreshLivePhotoFidelity(versionId: string, actor: Actor) 
     .eq('id', versionId).single();
   if (error || !version) throw new HttpError(404, 'Cette version est introuvable.');
   const video = Array.isArray(version.video) ? version.video[0] : version.video;
-  if (!video || video.user_id !== actor.id && actor.role !== 'admin') throw new HttpError(404, 'Cette version est introuvable.');
+  if (!video || video.user_id !== actor.id && !hasAdminRights(actor)) throw new HttpError(404, 'Cette version est introuvable.');
   if (version.status === 'ready' && version.final_path) return { id: versionId, status: 'ready' as const, videoUrl: await signedUrl(admin, version.final_path) };
   if (version.status === 'failed') return { id: versionId, status: 'failed' as const, error: 'Le montage Fidélité photo a échoué.' };
   if (version.status === 'postprocessing' && actor.id !== 'cron-reconcile' && Date.now() - new Date(version.updated_at).getTime() < 60_000) return { id: versionId, status: 'postprocessing' as const };

@@ -1,8 +1,13 @@
 import { requirePageRole } from '@/core/auth/guards';
 import { PageHeading } from '@/components/shell';
-import { AdminCenter } from '@/app/admin/AdminCenter';
+import { KeyframeApprovalSettings } from '@/app/admin/KeyframeApprovalSettings';
+import { TeamManager } from './TeamManager';
 
 export default async function TeamPage() {
   await requirePageRole('admin');
-  return <><PageHeading eyebrow="Organisation" title="Équipe" description="Gérez les utilisateurs, leurs rôles et leurs départements." /><AdminCenter /></>;
+  return <>
+    <PageHeading eyebrow="Administration" title="Équipe" description="Ajoutez les membres, choisissez leur rôle et qui peut valider les vidéos." />
+    <TeamManager />
+    <KeyframeApprovalSettings />
+  </>;
 }

@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { StatusPill } from '@/components/shell';
-import type { Role } from '@/core/auth/guards';
 import { preservePreviewUrl } from '@/core/storage/preview-cache';
 import { generationTierLabel } from '@/core/versions/generation-tier';
 import { useGenerationTracker, useNow } from '@/components/generation-tracker';
@@ -16,7 +15,8 @@ type Video = { progress?: GenerationProgress | null; billing?: BillingSummary | 
 
 function formatVideoPrice(video: Video) {
   if (video.photoFidelity) return 'Sans appel vidéo IA';
-  if (video.status === 'failed' || video.status === 'cancelled') return video.billing?.chargedFcfa ? `${new Intl.NumberFormat('fr-FR').format(video.billing.chargedFcfa)} FCFA` : 'Non facturée';
+  // 27/10: a failed or cancelled video is never billed (its credits are released).
+  if (video.status === 'failed' || video.status === 'cancelled') return 'Non facturée';
   const amount = [video.priceFcfa, video.estimatedPriceFcfa, video.price_fcfa].find((value): value is number => typeof value === 'number');
   return amount === undefined ? 'Montant indisponible' : `${new Intl.NumberFormat('fr-FR').format(amount)} FCFA`;
 }
@@ -60,7 +60,8 @@ function GenerationInputsDetails({ video }: { video: Video }) {
   </details>;
 }
 
-export function VideoLibrary({ role }: { role: Role }) {
+/** `currentUserId`: only the author of a video sends it for validation. */
+export function VideoLibrary({ currentUserId }: { currentUserId?: string }) {
   const [videos, setVideos] = useState<Video[]>([]);
   const [filter, setFilter] = useState('all');
   const [query, setQuery] = useState('');
@@ -240,7 +241,10 @@ export function VideoLibrary({ role }: { role: Role }) {
         {(!video.previewUrl || unavailablePreviewIds.includes(video.id)) && ['ready', 'review'].includes(video.status) && <p className="border-t border-[#ead9b4] bg-[#fff9ed] px-4 py-2 text-xs text-[#77591f]">Aperçu indisponible après renouvellement : le MP4 est absent ou inaccessible dans le stockage.</p>}
         <div className="p-4"><div className="flex items-center justify-between gap-3"><StatusPill status={LIBRARY_STATUS_LABELS[libraryStatus(video)]} /><span className="text-xs font-semibold tabular-nums">{formatVideoPrice(video)}</span></div><h3 className="mt-3 truncate text-sm font-semibold">{video.title ?? `${video.make ?? 'Nouvelle'} ${video.model ?? 'vidéo'}`}</h3><p className="mt-1 text-xs text-[#626269]">{formatVideoDate(video.createdAt ?? video.created_at)} · {video.durationSeconds ?? 5} s · <span className="font-medium text-[#4b4b50]">{videoMethodLabel(video)}</span></p>
           {libraryStatus(video) === 'failed' && <p className="mt-3 text-xs leading-5 text-[#9d352e]">{failureExplanation(video.errorMessage).cause}</p>}
-          {video.status === 'ready' && video.videoUrl ? <div className="mt-4 flex flex-wrap gap-2"><a href={video.videoUrl} download onClick={(event) => event.stopPropagation()} className="inline-flex min-h-11 items-center rounded-sm bg-[#c51e1c] px-3.5 py-2.5 text-xs font-semibold text-white hover:bg-[#a71715] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#c51e1c]">Télécharger le MP4</a>{role === 'collaborateur' && <button type="button" onClick={(event) => { event.stopPropagation(); void submitForValidation(video); }} className="inline-flex min-h-11 items-center rounded-sm border border-[#e2e2e5] px-3.5 py-2.5 text-xs font-semibold">Envoyer en validation</button>}</div> : video.status === 'generating' ? <LibraryProgressLine version={tracker.snapshot.versions.find((version) => version.id === video.id) ?? video} now={now} /> : null}
+          {/* 27/10: download after approval only; « Envoyer en validation » for the author of a video that is ready. */}
+          {libraryStatus(video) === 'approved' && video.videoUrl ? <div className="mt-4 flex flex-wrap gap-2"><a href={video.videoUrl} download onClick={(event) => event.stopPropagation()} className="inline-flex min-h-11 items-center rounded-sm bg-[#c51e1c] px-3.5 py-2.5 text-xs font-semibold text-white hover:bg-[#a71715] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#c51e1c]">Télécharger le MP4</a></div>
+            : libraryStatus(video) === 'ready' && (!currentUserId || video.userId === currentUserId) ? <div className="mt-4 flex flex-wrap items-center gap-2"><button type="button" onClick={(event) => { event.stopPropagation(); void submitForValidation(video); }} className="inline-flex min-h-11 items-center rounded-sm border border-[#e2e2e5] px-3.5 py-2.5 text-xs font-semibold hover:bg-[#f7f7f8] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#c51e1c]">Envoyer en validation</button><span className="text-xs text-[#626269]">Téléchargement après validation.</span></div>
+            : video.status === 'generating' ? <LibraryProgressLine version={tracker.snapshot.versions.find((version) => version.id === video.id) ?? video} now={now} /> : null}
           {video.status !== 'generating' && video.progress && formatStepDurations(video.progress.durations) && <p className="mt-3 text-xs text-[#626269]">Durées : {formatStepDurations(video.progress.durations)}</p>}
           <GenerationInputsDetails video={video} />
         </div>

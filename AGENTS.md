@@ -1,5 +1,14 @@
 # AGENTS.md — RIMCO Studio (bêta interne)
 
+
+## Décisions du 27/10/2026 (prioritaires sur le reste de ce fichier)
+Détail : docs/specs/ROLES-CREDITS-2026-10-27.md et docs/DECISIONS.md (entrée « Rôles, tarifs et crédits »).
+- Rôles : collaborateur, admin (administrateur du client), operateur (KÔMIAN, rôle à part entière). Valider est un droit (profiles.can_validate). Pas de départements pour l'instant. Le premier compte d'une base vide devient operateur. Code : src/core/auth/roles.ts (hasAdminRights, isOperator, canValidate) — ne plus tester `role === 'admin'` directement.
+- Coûts de production (coût fal, coût réel, marge, dollars, prompts générés) : visibles par l'operateur seulement, filtrés côté serveur. Tarifs, modèles, clé fal, crédits et réglages de facturation : modifiés par l'operateur seulement.
+- Crédits clients en FCFA, sans découvert : prix bloqué au lancement, débité à la livraison, libéré en cas d'échec, d'annulation ou de suppression (déclencheur SQL videos_settle_credits). Quand les crédits sont appliqués, un solde insuffisant BLOQUE le lancement : cette règle remplace « ne jamais bloquer sur un plafond applicatif ». Un échec n'est jamais facturé au client.
+- Pas de service d'envoi d'e-mails : alertes dans l'application uniquement ; mot de passe provisoire généré par le serveur et changé à la première connexion.
+- Git : un agent peut pousser sa propre branche de travail (jamais main) pour ouvrir une PR ; la fusion reste faite par le responsable sur GitHub.
+
 ## Rôle attendu
 Lead développeur full-stack senior Next.js (App Router), TypeScript, Tailwind CSS et Supabase, expérimenté sur la génération vidéo IA via fal.ai et la maîtrise des coûts d'API. Tu tranches seul, tu livres simple, testé et sécurisé par défaut, et tu documentes chaque décision pour un responsable non développeur.
 

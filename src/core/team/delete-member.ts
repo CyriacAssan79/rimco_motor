@@ -20,7 +20,7 @@ export type DeleteMemberResult = { id: string; mode: 'deleted' | 'archived' };
  * - No history: the account is deleted (login and profile; their notifications go with it).
  * - With history: the cost journal must never change, so the profile stays as the author of its videos and costs,
  *   but the member is archived: hidden from the team, inactive, login blocked for good, e-mail freed for a new account.
- * Never the actor's own account, never the last active administrator.
+ * Never the actor's own account, never the last active KÔMIAN operator.
  */
 export async function deleteMember(admin: SupabaseClient, actor: Actor, id: string): Promise<DeleteMemberResult> {
   if (actor.id === id) throw new HttpError(409, 'Vous ne pouvez pas supprimer votre propre compte.');
@@ -28,10 +28,11 @@ export async function deleteMember(admin: SupabaseClient, actor: Actor, id: stri
   const { data: target, error: targetError } = await admin.from('profiles').select('id,role,is_active,deleted_at').eq('id', id).maybeSingle();
   if (targetError) throw new HttpError(503, 'La suppression n’est pas encore disponible : appliquez la migration 0040 (supabase/setup.sql) dans Supabase.');
   if (!target || target.deleted_at) throw new HttpError(404, 'Compte introuvable.');
-  if (target.role === 'admin' && target.is_active) {
-    const { count, error } = await admin.from('profiles').select('id', { count: 'exact', head: true }).eq('role', 'admin').eq('is_active', true);
-    if (error) throw new HttpError(503, 'Impossible de vérifier les comptes administrateurs.');
-    if ((count ?? 0) <= 1) throw new HttpError(409, 'Le dernier administrateur actif ne peut pas être supprimé.');
+  // 27/10: the protected account is the last active KÔMIAN operator (also guarded in the database, migration 0041).
+  if (target.role === 'operateur' && target.is_active) {
+    const { count, error } = await admin.from('profiles').select('id', { count: 'exact', head: true }).eq('role', 'operateur').eq('is_active', true);
+    if (error) throw new HttpError(503, 'Impossible de vérifier les comptes KÔMIAN.');
+    if ((count ?? 0) <= 1) throw new HttpError(409, 'Le dernier opérateur KÔMIAN actif ne peut pas être supprimé.');
   }
 
   const counts = await Promise.all(HISTORY.map(async ({ table, column }) => {

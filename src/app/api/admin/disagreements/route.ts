@@ -1,3 +1,4 @@
+import { isOperator } from '@/core/auth/roles';
 import { NextResponse } from 'next/server';
 import { errorResponse, getActor, HttpError } from '@/core/auth/guards';
 import { createStorageAdminClient } from '@/core/storage/supabase';
@@ -7,7 +8,7 @@ import { env } from '@/env';
 export async function GET(request: Request) {
   try {
     const actor = await getActor();
-    if (actor.role !== 'admin') throw new HttpError(403, 'Ce relevé est réservé à l’administration.');
+    if (!isOperator(actor)) throw new HttpError(403, 'Ce relevé est réservé à l’équipe KÔMIAN.');
     const admin = env.PROVIDERS_MODE === 'mock' && !env.NEXT_PUBLIC_SUPABASE_URL ? null : createStorageAdminClient();
     const shots = [];
     // PostgREST caps a response; paginate so the rate is never based on a silent first-page sample.

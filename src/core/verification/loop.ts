@@ -24,6 +24,17 @@ export const MAX_CLIP_RETRIES = 1;
  */
 export const HUMAN_REVISIONS_PER_SHOT = 1;
 export const HUMAN_CLIP_REVISIONS_PER_SHOT = 1;
+
+/**
+ * 27/10 · the number of human modifications per shot is a KÔMIAN setting (client_billing_settings), frozen in each
+ * video at launch (brief_json.humanRevisionLimits). A video launched before keeps the defaults above.
+ */
+export function humanRevisionLimit(brief: Record<string, unknown> | null | undefined, stage: 'keyframe' | 'video'): number {
+  const stored = brief?.humanRevisionLimits;
+  const value = stored && typeof stored === 'object' ? (stored as Record<string, unknown>)[stage] : undefined;
+  if (typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 5) return value;
+  return stage === 'keyframe' ? HUMAN_REVISIONS_PER_SHOT : HUMAN_CLIP_REVISIONS_PER_SHOT;
+}
 export const USER_FEEDBACK_MAX_LENGTH = 400;
 
 /** Closed list of reasons the user can tick; the English text goes to the director, the French one to the screen. */
@@ -240,7 +251,8 @@ export function appendVerification(history: unknown, entry: VerificationEntry): 
 export type ReviewRequest = {
   shotNumber: number; title: string; stage: 'keyframe' | 'video'; issues: string[]; url: string | null; canRetry: boolean;
   codes?: string[];
-  cost?: { fcfa: number; usd?: number; minutes: number };
+  /** billed false = included in the video price: shown struck through, « (non facturé) ». */
+  cost?: { fcfa: number; usd?: number; minutes: number; billed?: boolean };
   references?: { vehicleUrl: string | null; placeUrl: string | null };
   /** « Modifier ce plan »: corrections still allowed, and the last one (comment, reasons, adapted requests). */
   revisionsLeft?: number;
@@ -248,5 +260,5 @@ export type ReviewRequest = {
   /** Refused clip: provider cost of each redo (USD, converted by decorateReviewRequests), null when not possible. */
   clipRedoUsd?: { clip: number | null; full: number | null };
   /** Refused clip: « Refaire la vidéo de ce plan » (a) and « Refaire l’image clé puis la vidéo » (b), internal cost. */
-  clipOptions?: { clip: { fcfa: number; usd?: number; minutes: number } | null; full: { fcfa: number; usd?: number; minutes: number } | null };
+  clipOptions?: { clip: { fcfa: number; usd?: number; minutes: number; billed?: boolean } | null; full: { fcfa: number; usd?: number; minutes: number; billed?: boolean } | null };
 };

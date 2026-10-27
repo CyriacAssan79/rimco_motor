@@ -1,3 +1,4 @@
+import { hasAdminRights } from '@/core/auth/roles';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getActor, errorResponse, HttpError } from '@/core/auth/guards';
@@ -34,7 +35,7 @@ export async function GET(request: Request) {
     const requestedStatus = search.get('status');
     if (requestedKind) query = query.eq('kind', requestedKind);
     if (requestedStatus) query = query.eq('status', requestedStatus);
-    if (actor.role !== 'admin') {
+    if (!hasAdminRights(actor)) {
       if (!actor.brandId) return NextResponse.json({ assets: [] });
       query = query.or(`and(brand_id.eq.${actor.brandId},status.eq.validée),created_by.eq.${actor.id}`);
     }
@@ -43,7 +44,7 @@ export async function GET(request: Request) {
     // 26/10: sheet of each uploaded place (prudent default until validated), and for an admin the proposed sheet.
     // Read apart and tolerant: before migrations 0034/0035 the media library keeps working.
     const placeIds = (data ?? []).filter((asset) => asset.kind === 'place').map((asset) => asset.id);
-    const sheets = await loadPlaceSheets(supabase, placeIds, actor.role === 'admin');
+    const sheets = await loadPlaceSheets(supabase, placeIds, hasAdminRights(actor));
     const assets = await Promise.all((data ?? []).map(async (asset) => {
       const bucket = asset.kind === 'audio' ? 'audio' : asset.kind === 'logo' ? 'brand' : 'assets';
       const previewUrl = await createSignedStoragePreviewUrl((path, expiresIn) => supabase.storage.from(bucket).createSignedUrl(path, expiresIn), bucket, asset.path);
@@ -52,7 +53,7 @@ export async function GET(request: Request) {
       const proposal = placeProfileSchema.safeParse(sheet?.place_profile_proposal);
       const profile = asset.kind === 'place' ? {
         placeProfile: resolved.profile, placeProfileDescribed: resolved.described,
-        ...(actor.role === 'admin' ? { placeProfileProposal: proposal.success ? proposal.data : null, placeProposalStatus: sheet?.place_profile_proposal_status ?? null } : {}),
+        ...(hasAdminRights(actor) ? { placeProfileProposal: proposal.success ? proposal.data : null, placeProposalStatus: sheet?.place_profile_proposal_status ?? null } : {}),
       } : {};
       return { ...asset, previewUrl, ...profile };
     }));

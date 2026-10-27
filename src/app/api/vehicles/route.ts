@@ -1,3 +1,4 @@
+import { hasAdminRights } from '@/core/auth/roles';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { errorResponse, getActor, HttpError, requireRole } from '@/core/auth/guards';
@@ -56,7 +57,7 @@ export async function GET() {
     let legacyQuery = supabase.from('assets').select('id,make,model,color,variant,angle,title,photo_role,path,created_at')
       .eq('brand_id', actor.brandId ?? '00000000-0000-0000-0000-000000000000').eq('kind', 'vehicle').eq('status', 'validée').is('vehicle_dossier_id', null)
       .order('created_at', { ascending: true });
-    if (actor.role !== 'admin') legacyQuery = legacyQuery.or(`and(brand_id.eq.${actor.brandId},status.eq.validée),created_by.eq.${actor.id}`);
+    if (!hasAdminRights(actor)) legacyQuery = legacyQuery.or(`and(brand_id.eq.${actor.brandId},status.eq.validée),created_by.eq.${actor.id}`);
     const { data: looseAssets, error: legacyError } = await legacyQuery;
     if (legacyError) throw new HttpError(503, 'Impossible de charger les photos véhicule non classées.');
     const legacyGroups = new Map<string, NonNullable<typeof looseAssets>>();

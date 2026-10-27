@@ -7,6 +7,9 @@ import { SHOT_REVISION_RESERVE_USD } from '@/core/providers/fal-shot-revision';
 import { createSignedStorageObjectUrl } from '@/core/storage/signed-video';
 import type { ReviewRequest } from '@/core/verification/loop';
 import { storedRenderSettings } from './render-settings';
+import { revisionPriceFcfa } from '@/core/billing/settings';
+
+export { revisionPriceFcfa };
 
 /** A relaunch: the director's correction, a new keyframe and its check (≈ 20 s + 40 s + 30 s in the trials). */
 export const RELAUNCH_MINUTES = 2;
@@ -17,12 +20,23 @@ export function relaunchCostUsd(brief: Record<string, unknown>) {
 }
 
 /**
- * Cost of a keyframe correction (« Modifier ce plan »), reserved when the user clicks: in FCFA with the same conversion
- * and markup as every price of the application; in USD for an administrator only (AGENTS.md: provider costs are for the admin).
+ * What the user sees for a modification (27/10): when it is included, the indicative cost is shown struck through
+ * with « (non facturé) » (billed: false); when KÔMIAN has set a price, that price (billed: true). Dollars go to the
+ * KÔMIAN operator only — the filter is here, on the server.
  */
+export function modificationCost(input: { usd: number; brief: Record<string, unknown>; role: Role; usdToEur: number; eurToFcfa: number; minutes: number }) {
+  const price = revisionPriceFcfa(input.brief);
+  return {
+    fcfa: price > 0 ? price : calculateClientPriceFcfa(input.usd, input.usdToEur, input.eurToFcfa),
+    billed: price > 0,
+    minutes: input.minutes,
+    ...(input.role === 'operateur' ? { usd: input.usd } : {}),
+  };
+}
+
+/** Cost of a keyframe correction (« Modifier ce plan »). */
 export function relaunchCost(input: { brief: Record<string, unknown>; role: Role; usdToEur: number; eurToFcfa: number }) {
-  const usd = relaunchCostUsd(input.brief);
-  return { fcfa: calculateClientPriceFcfa(usd, input.usdToEur, input.eurToFcfa), minutes: RELAUNCH_MINUTES, ...(input.role === 'admin' ? { usd } : {}) };
+  return modificationCost({ ...input, usd: relaunchCostUsd(input.brief), minutes: RELAUNCH_MINUTES });
 }
 
 /** A redone clip: director ≈ 20 s, clip ≈ 2-3 min, check ≈ 30 s; with a new keyframe first, ≈ 1 min more. */
@@ -62,7 +76,7 @@ export async function decorateReviewRequests(admin: SupabaseClient, input: { ite
   const sorted = [...input.items].sort((left, right) => left.shotNumber - right.shotNumber || (left.stage === 'keyframe' ? -1 : 1));
   const references = await reviewReferences(admin, input.brief, sorted.map((item) => item.shotNumber)).catch(() => new Map());
   const cost = relaunchCost(input);
-  const inFcfa = (usd: number | null, minutes: number) => usd === null ? null : { fcfa: calculateClientPriceFcfa(usd, input.usdToEur, input.eurToFcfa), minutes, ...(input.role === 'admin' ? { usd } : {}) };
+  const inFcfa = (usd: number | null, minutes: number) => usd === null ? null : modificationCost({ usd, brief: input.brief, role: input.role, usdToEur: input.usdToEur, eurToFcfa: input.eurToFcfa, minutes });
   return sorted.map(({ clipRedoUsd, ...item }) => ({
     ...item,
     ...(item.canRetry && item.stage === 'keyframe' ? { cost } : {}),
@@ -71,7 +85,7 @@ export async function decorateReviewRequests(admin: SupabaseClient, input: { ite
   }));
 }
 
-/** Keyframe board: the reference photos of each shot, and the cost of « Modifier ce plan » (FCFA; USD for the admin). */
+/** Keyframe board: the reference photos of each shot, and the cost of « Modifier ce plan » (FCFA; USD for the KÔMIAN operator). */
 export async function decorateKeyframeBoard<T extends { shots: Array<{ shotNumber: number; canRevise: boolean }> }>(admin: SupabaseClient, input: { board: T; brief: Record<string, unknown>; role: Role; usdToEur: number; eurToFcfa: number }) {
   const references = await reviewReferences(admin, input.brief, input.board.shots.map((shot) => shot.shotNumber)).catch(() => new Map());
   const cost = relaunchCost(input);

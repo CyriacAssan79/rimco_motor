@@ -11,7 +11,7 @@ export const maxDuration = 60;
 
 export async function POST() {
   try {
-    const actor = await requireRole('admin');
+    const actor = await requireRole('operateur');
     if (!actor.brandId) throw new HttpError(400, 'Aucune marque n’est associée à votre compte.');
     if (env.PROVIDERS_MODE === 'mock' && !env.NEXT_PUBLIC_SUPABASE_URL) {
       throw new HttpError(503, 'L’import du kit nécessite une base Supabase connectée.');

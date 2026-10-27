@@ -97,7 +97,7 @@ export function MediaLibrary() {
   }, [pendingKey, load]);
 
   useEffect(() => {
-    void fetch('/api/me').then((response) => response.ok ? response.json() : null).then((data) => setIsAdmin(data?.actor?.role === 'admin')).catch(() => setIsAdmin(false));
+    void fetch('/api/me').then((response) => response.ok ? response.json() : null).then((data) => setIsAdmin(data?.actor?.role === 'admin' || data?.actor?.role === 'operateur')).catch(() => setIsAdmin(false));
   }, []);
   const loadVehicleFolders = useCallback(async () => {
     const response = await fetch('/api/vehicles');

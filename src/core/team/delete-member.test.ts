@@ -74,9 +74,9 @@ describe('« Supprimer un membre » (admin)', () => {
     expect(state.profileUpdates).toHaveLength(0);
   });
 
-  it('never deletes the admin’s own account, nor the last active administrator', async () => {
+  it('never deletes the admin’s own account, nor the last active KÔMIAN operator', async () => {
     await expect(deleteMember(fakeAdmin(), admin, admin.id)).rejects.toMatchObject({ status: 409 });
-    state.target = { id: member, role: 'admin', is_active: true, deleted_at: null };
+    state.target = { id: member, role: 'operateur', is_active: true, deleted_at: null };
     state.activeAdmins = 1;
     await expect(deleteMember(fakeAdmin(), admin, member)).rejects.toMatchObject({ status: 409 });
     expect(state.calls).toHaveLength(0);

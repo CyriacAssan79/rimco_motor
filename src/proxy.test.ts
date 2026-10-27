@@ -31,3 +31,23 @@ describe('proxy local simulation access', () => {
     expect(response.headers.get('location')).toContain('/connexion?configuration=supabase');
   });
 });
+
+describe('pages publiques (27/10)', () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it('laisse ouvrir « Mot de passe oublié » sans session', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', '');
+    vi.stubEnv('NEXT_PUBLIC_SUPABASE_ANON_KEY', '');
+    const response = await proxy(new NextRequest('https://rimco.example/mot-de-passe-oublie'));
+    expect(response.headers.get('location')).toBeNull();
+  });
+
+  it('protège toujours les autres pages', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', '');
+    vi.stubEnv('NEXT_PUBLIC_SUPABASE_ANON_KEY', '');
+    const response = await proxy(new NextRequest('https://rimco.example/credits'));
+    expect(response.headers.get('location')).toContain('/connexion');
+  });
+});

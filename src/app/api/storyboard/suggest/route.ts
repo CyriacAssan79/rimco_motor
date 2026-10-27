@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { errorResponse, getActor, HttpError } from '@/core/auth/guards';
+import { withoutInternalFields } from '@/core/auth/internal-fields';
+import { assertCreditsCover, creditContext } from '@/core/billing/credits';
 import { createSupabaseServerClient } from '@/core/supabase/server';
 import { createStorageAdminClient } from '@/core/storage/supabase';
 import { env } from '@/env';
@@ -185,6 +187,11 @@ export async function POST(request: Request) {
       const { data: pricing, error: pricingError } = await admin.from('pricing_settings')
         .select('grid_fcfa_per_second_standard,grid_fcfa_per_second_pro,grid_fcfa_per_second_premium').eq('brand_id', actor.brandId).maybeSingle();
       if (pricingError || !pricing) throw new HttpError(503, 'La grille tarifaire de votre marque n’est pas configurée.');
+      // 27/10 · « bloquer avant l'effort » : sans solde pour cette vidéo, le storyboard n'est ni préparé ni payé.
+      const plannedPriceFcfa = estimateGridPriceFcfa(input.durationSeconds, input.mode, {
+        standard: Number(pricing.grid_fcfa_per_second_standard), pro: Number(pricing.grid_fcfa_per_second_pro), premium: Number(pricing.grid_fcfa_per_second_premium),
+      });
+      await assertCreditsCover(admin, actor, await creditContext(admin, actor), plannedPriceFcfa);
       const { data: reservation, error: reservationError } = await reserveLlmCost(admin, {
         userId: actor.id, department: actor.department, maxCostUsd: llmReservationUsd(env.LLM_MAX_COST_USD ?? 0),
         usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA,
@@ -264,7 +271,7 @@ export async function POST(request: Request) {
     }));
     // The launch route accepts only this exact storyboard (and people sheet), for this user and these choices.
     const storyboardSignature = signStoryboard({ storyboard: shots, castDescription, context: { userId: actor.id, vehicleDossierId: input.vehicleDossierId, workflow: input.workflow, mode: input.mode, durationSeconds: input.durationSeconds, format: input.format } }, signingKey);
-    return NextResponse.json({ storyboard: shots, castDescription, briefConflicts, storyboardSignature, prompt: `${directorSystemPrompt}\n\n${directorUserPrompt}`, mode: input.mode, durationSeconds: input.durationSeconds, finalVideoSeconds: input.durationSeconds + 2, storyboardLedgerId, storyboardCostUsd, storyboardCostFcfa: Math.round(storyboardCostUsd * env.USD_TO_EUR_RATE * env.EUR_TO_FCFA * 1.3), totalEstimatedPriceFcfa });
+    return NextResponse.json(withoutInternalFields(actor, { storyboard: shots, castDescription, briefConflicts, storyboardSignature, prompt: `${directorSystemPrompt}\n\n${directorUserPrompt}`, mode: input.mode, durationSeconds: input.durationSeconds, finalVideoSeconds: input.durationSeconds + 2, storyboardLedgerId, storyboardCostUsd, storyboardCostFcfa: Math.round(storyboardCostUsd * env.USD_TO_EUR_RATE * env.EUR_TO_FCFA * 1.3), totalEstimatedPriceFcfa }));
   } catch (error) {
     if (error instanceof HttpError) return errorResponse(error);
     if (error instanceof z.ZodError) {

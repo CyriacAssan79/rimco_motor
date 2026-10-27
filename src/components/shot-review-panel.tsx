@@ -18,10 +18,22 @@ export function AdaptedRequests({ conflicts, title = "Votre demande a été adap
 
 export type Viewed = { src: string; kind: "image" | "video"; label: string };
 
-/** Relaunch cost: FCFA for everyone, dollars added for an administrator only (sent by the server by role). */
-export function relaunchCostText(cost: NonNullable<ReviewRequest["cost"]>) {
-  const usd = cost.usd != null ? ` (${cost.usd.toFixed(2).replace(".", ",")} $)` : "";
-  return `environ ${formatFcfa(cost.fcfa)}${usd}, environ ${cost.minutes} min`;
+type ModificationCost = { fcfa: number; usd?: number; minutes: number; billed?: boolean };
+
+/**
+ * Cost of a modification (27/10): included in the video price → the indicative amount struck through, « (non facturé) »;
+ * priced by KÔMIAN → « environ X FCFA ». Dollars only arrive for the KÔMIAN operator (filtered by the server).
+ */
+export function RelaunchCost({ cost, withMinutes = true }: { cost: ModificationCost; withMinutes?: boolean }) {
+  const usd = cost.usd != null ? ` · coût réel ${cost.usd.toFixed(2).replace(".", ",")} $` : "";
+  return (
+    <>
+      {cost.billed
+        ? <>environ {formatFcfa(cost.fcfa)}</>
+        : <><s className="text-[#8a8990]" aria-label={`${formatFcfa(cost.fcfa)}, non facturé`}>{formatFcfa(cost.fcfa)}</s> (non facturé)</>}
+      {usd}{withMinutes ? `, environ ${cost.minutes} min` : ""}
+    </>
+  );
 }
 
 /**
@@ -70,7 +82,7 @@ export function ReviseShotForm({ versionId, shotNumber, cost, scope, onSent, onC
         <textarea value={feedback} onChange={(event) => setFeedback(event.target.value)} maxLength={USER_FEEDBACK_MAX_LENGTH} rows={3} placeholder="Ex. la voiture est coupée à gauche : je la veux entière, arrivant de la droite vers la caméra." className="rounded-md border border-[#d2cec6] bg-white p-2 text-xs font-normal outline-none focus:border-[#c51e1c]" />
         <span className="text-xs font-normal text-[#626269]">{feedback.length}/{USER_FEEDBACK_MAX_LENGTH} caractères · les règles de la marque restent appliquées.</span>
       </label>
-      {cost && <p className="text-xs text-[#55545a]">Coût de la correction : {relaunchCostText(cost)}.</p>}
+      {cost && <p className="text-xs text-[#55545a]">Coût de la correction : <RelaunchCost cost={cost} />.</p>}
       {error && <p role="alert" className="text-xs text-[#9d352e]">{error}</p>}
       <div className="flex flex-wrap gap-2">
         <button type="submit" disabled={busy || (!reasons.length && !feedback.trim())} className="min-h-11 rounded-full bg-[#c51e1c] px-4 text-xs font-semibold text-white disabled:opacity-50">
@@ -266,7 +278,7 @@ export function ShotReviewPanel({
                         Modifier ce plan
                       </button>
                       <p className="mt-1 text-xs leading-5 text-[#55545a]">
-                        Le réalisateur corrige le plan selon vos indications : nouvelle image clé et nouveau contrôle, puis la vidéo du plan{item.cost ? ` ; ${relaunchCostText(item.cost)}` : ""}.
+                        Le réalisateur corrige le plan selon vos indications : nouvelle image clé et nouveau contrôle, puis la vidéo du plan{item.cost ? <> ; <RelaunchCost cost={item.cost} /></> : null}.
                         {item.revisionsLeft != null ? ` ${item.revisionsLeft} modification${item.revisionsLeft > 1 ? "s" : ""} possible${item.revisionsLeft > 1 ? "s" : ""} pour ce plan.` : ""}
                       </p>
                     </div>

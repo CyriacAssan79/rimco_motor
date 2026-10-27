@@ -33,7 +33,7 @@ function comparisonStatus(results: Array<{ status: string }>, allModelsStarted: 
 }
 export async function GET() {
   try {
-    await requireRole('admin');
+    await requireRole('operateur');
     if (env.PROVIDERS_MODE === 'mock' && !env.NEXT_PUBLIC_SUPABASE_URL) return NextResponse.json({ comparisons: publicComparisons(listComparisons()) });
     const admin = createStorageAdminClient();
     const { data, error } = await admin.from('comparisons').select('id,user_id,brief_json,created_at').order('created_at', { ascending: false });
@@ -79,7 +79,7 @@ export async function GET() {
 }
 export async function POST(request: Request) {
   try {
-    const actor = await requireRole('admin');
+    const actor = await requireRole('operateur');
     const input = schema.parse(await request.json());
     if (env.PROVIDERS_MODE === 'mock' && !env.NEXT_PUBLIC_SUPABASE_URL) {
       const comparison = saveComparison({ id: crypto.randomUUID(), user_id: actor.id, created_at: new Date().toISOString(), brief_json: {

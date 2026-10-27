@@ -1139,3 +1139,446 @@ alter table public.profiles add column if not exists deleted_at timestamptz;
 create index if not exists profiles_active_members_idx on public.profiles(created_at) where deleted_at is null;
 
 notify pgrst, 'reload schema';
+
+-- 0041_roles_operator.sql
+-- 0041_roles_operator.sql
+-- Idempotent: safe to run several times in the Supabase SQL editor.
+-- Rôles du 27/10 (docs/specs/ROLES-CREDITS-2026-10-27.md) :
+--   collaborateur · admin (administrateur du client) · operateur (KÔMIAN, rôle à part entière).
+--   Valider devient un droit (profiles.can_validate). Plus aucun filtrage par département.
+-- Hypothèse de la bêta, confirmée par l'équipe : les administrateurs actuels sont des membres KÔMIAN ;
+-- ils deviennent opérateurs (une seule fois). L'opérateur repasse ensuite le référent RIMCO en Administrateur.
+
+-- 1. Clients : un client (RIMCO Motors) possède ses marques et, plus tard, un solde de crédits unique.
+create table if not exists public.clients (
+  id uuid primary key default gen_random_uuid(),
+  name text not null unique,
+  is_active boolean not null default true,
+  created_at timestamptz not null default now()
+);
+insert into public.clients(name) values ('RIMCO Motors') on conflict (name) do nothing;
+alter table public.brands add column if not exists client_id uuid references public.clients(id);
+update public.brands set client_id = (select id from public.clients where name = 'RIMCO Motors') where client_id is null;
+
+-- 2. Droit de valider.
+alter table public.profiles add column if not exists can_validate boolean not null default false;
+
+-- 3. Le garde-fou protège le dernier OPÉRATEUR actif. Remplacé avant les changements de rôle ci-dessous.
+create or replace function public.guard_last_active_admin() returns trigger language plpgsql security definer set search_path = '' as $$
+declare active_operators integer;
+begin
+  if tg_op = 'DELETE' then
+    if old.role = 'operateur' and old.is_active then
+      perform pg_advisory_xact_lock(hashtext('rimco_active_admin_roster'));
+      select count(*) into active_operators from public.profiles p where p.role = 'operateur' and p.is_active and p.id <> old.id;
+      if active_operators = 0 then raise exception using errcode = 'P0001', message = 'Impossible de supprimer le dernier opérateur KÔMIAN actif'; end if;
+    end if;
+    return old;
+  end if;
+  if old.role = 'operateur' and old.is_active and (new.role <> 'operateur' or not new.is_active) then
+    perform pg_advisory_xact_lock(hashtext('rimco_active_admin_roster'));
+    select count(*) into active_operators from public.profiles p where p.role = 'operateur' and p.is_active and p.id <> old.id;
+    if active_operators = 0 then raise exception using errcode = 'P0001', message = 'Impossible de désactiver ou rétrograder le dernier opérateur KÔMIAN actif'; end if;
+  end if;
+  return new;
+end $$;
+revoke all on function public.guard_last_active_admin() from public, anon, authenticated;
+
+-- 4. Conversion des rôles (une seule fois pour les admins : seulement s'il n'existe encore aucun opérateur).
+alter table public.profiles drop constraint if exists profiles_role_check;
+update public.profiles set can_validate = true, role = 'collaborateur' where role = 'valideur';
+update public.profiles set role = 'operateur'
+  where role = 'admin' and not exists (select 1 from public.profiles where role = 'operateur');
+alter table public.profiles add constraint profiles_role_check check (role in ('collaborateur','admin','operateur'));
+
+-- 5. Fonctions d'accès. L'opérateur hérite de toutes les règles « admin » existantes.
+create or replace function public.is_admin() returns boolean language sql stable security definer set search_path = '' as $$
+  select exists(select 1 from public.profiles p where p.id = auth.uid() and p.role in ('admin','operateur') and p.is_active)
+$$;
+create or replace function public.is_operator() returns boolean language sql stable security definer set search_path = '' as $$
+  select exists(select 1 from public.profiles p where p.id = auth.uid() and p.role = 'operateur' and p.is_active)
+$$;
+create or replace function public.my_client_id() returns uuid language sql stable security definer set search_path = '' as $$
+  select b.client_id from public.profiles p join public.brands b on b.id = p.brand_id where p.id = auth.uid() and p.is_active
+$$;
+-- Une marque appartient-elle au client de la personne connectée ? (sa propre marque, ou une marque du même client)
+create or replace function public.in_my_client(p_brand uuid) returns boolean language sql stable security definer set search_path = '' as $$
+  select p_brand is not null and exists(
+    select 1 from public.profiles p
+    join public.brands mine on mine.id = p.brand_id
+    join public.brands target on target.id = p_brand
+    where p.id = auth.uid() and p.is_active
+      and (target.id = mine.id or (target.client_id is not null and target.client_id = mine.client_id)))
+$$;
+-- Peut-elle valider des vidéos ? (administrateur, opérateur, ou collaborateur avec le droit)
+create or replace function public.can_validate_videos() returns boolean language sql stable security definer set search_path = '' as $$
+  select exists(select 1 from public.profiles p where p.id = auth.uid() and p.is_active and (p.role in ('admin','operateur') or p.can_validate))
+$$;
+revoke all on function public.is_operator() from public, anon;
+revoke all on function public.my_client_id() from public, anon;
+revoke all on function public.in_my_client(uuid) from public, anon;
+revoke all on function public.can_validate_videos() from public, anon;
+grant execute on function public.is_operator() to authenticated, service_role;
+grant execute on function public.my_client_id() to authenticated, service_role;
+grant execute on function public.in_my_client(uuid) to authenticated, service_role;
+grant execute on function public.can_validate_videos() to authenticated, service_role;
+
+-- 6. Base vide : le premier compte devient opérateur KÔMIAN.
+create or replace function public.create_profile_for_new_user() returns trigger language plpgsql security definer set search_path = '' as $$
+declare first_brand uuid; new_role text;
+begin
+  perform pg_advisory_xact_lock(hashtext('rimco_first_admin'));
+  select b.id into first_brand from public.brands b order by b.created_at limit 1;
+  new_role := case when exists(select 1 from public.profiles p where p.role = 'operateur') then 'collaborateur' else 'operateur' end;
+  insert into public.profiles(id,name,role,brand_id) values(new.id,coalesce(new.raw_user_meta_data->>'name',''),new_role,first_brand);
+  return new;
+end $$;
+revoke all on function public.create_profile_for_new_user() from public, anon, authenticated;
+
+-- 7. Profils : un administrateur client ne voit ni ne crée, modifie ou promeut un compte opérateur.
+drop policy if exists profiles_read_self_or_admin on public.profiles;
+create policy profiles_read_self_or_admin on public.profiles for select to authenticated
+  using (id = auth.uid() or public.is_operator() or (public.is_admin() and role <> 'operateur' and public.in_my_client(brand_id)));
+drop policy if exists profiles_admin_manage on public.profiles;
+create policy profiles_admin_manage on public.profiles for all to authenticated
+  using (public.is_operator() or (public.is_admin() and role <> 'operateur' and public.in_my_client(brand_id)))
+  with check (public.is_operator() or (public.is_admin() and role <> 'operateur' and public.in_my_client(brand_id)));
+
+-- 8. Vidéos, versions, validations : sans département ; le valideur et l'administrateur restent dans leur client.
+drop policy if exists videos_read on public.videos;
+create policy videos_read on public.videos for select to authenticated using (
+  user_id = auth.uid() or public.is_operator()
+  or (public.is_admin() and public.in_my_client(brand_id))
+  or (status = 'review' and public.can_validate_videos() and public.in_my_client(brand_id)));
+drop policy if exists versions_read on public.video_versions;
+create policy versions_read on public.video_versions for select to authenticated using (exists(
+  select 1 from public.videos v where v.id = video_id and (
+    v.user_id = auth.uid() or public.is_operator()
+    or (public.is_admin() and public.in_my_client(v.brand_id))
+    or (v.status = 'review' and public.can_validate_videos() and public.in_my_client(v.brand_id)))));
+drop policy if exists validations_read on public.validations;
+create policy validations_read on public.validations for select to authenticated using (
+  public.is_operator() or submitted_by = auth.uid() or exists(
+    select 1 from public.videos v where v.id = validations.video_id and public.in_my_client(v.brand_id)
+      and (public.is_admin() or (validations.status = 'pending' and public.can_validate_videos()))));
+drop policy if exists validations_validator_review on public.validations;
+create policy validations_validator_review on public.validations for update to authenticated
+  using (status = 'pending' and public.can_validate_videos() and exists(select 1 from public.videos v where v.id = validations.video_id and public.in_my_client(v.brand_id)))
+  with check (reviewed_by = auth.uid() and status in ('approved','rejected') and reviewed_at is not null);
+
+-- 9. Coûts de production, modèles, comparaisons, tarifs : opérateur KÔMIAN uniquement (lecture des tarifs : tout le monde).
+drop policy if exists ledger_admin_read on public.usage_ledger;
+create policy ledger_admin_read on public.usage_ledger for select to authenticated using (public.is_operator());
+drop policy if exists models_admin_read on public.ai_models;
+create policy models_admin_read on public.ai_models for select to authenticated using (public.is_operator());
+drop policy if exists models_admin_manage on public.ai_models;
+create policy models_admin_manage on public.ai_models for all to authenticated using (public.is_operator()) with check (public.is_operator());
+drop policy if exists comparisons_admin_all on public.comparisons;
+create policy comparisons_admin_all on public.comparisons for all to authenticated using (public.is_operator()) with check (public.is_operator());
+drop policy if exists pricing_admin_manage on public.pricing_settings;
+create policy pricing_admin_manage on public.pricing_settings for all to authenticated using (public.is_operator()) with check (public.is_operator());
+alter table public.clients enable row level security;
+drop policy if exists clients_read on public.clients;
+create policy clients_read on public.clients for select to authenticated using (id = public.my_client_id() or public.is_operator());
+
+-- 10. Fichiers vidéo : l'aperçu « en validation » suit le droit de valider, dans le client, sans département.
+drop policy if exists rimco_storage_read on storage.objects;
+create policy rimco_storage_read on storage.objects for select to authenticated using(
+  public.is_admin() or
+  (bucket_id='brand' and (storage.foldername(name))[1]=auth.uid()::text) or
+  (bucket_id='brand' and exists(select 1 from public.assets a join public.profiles p on p.id=auth.uid() and p.brand_id=a.brand_id and p.is_active where a.path=name and a.kind='logo' and a.status='validée')) or
+  (bucket_id in ('assets','audio') and (storage.foldername(name))[1]=auth.uid()::text) or
+  (bucket_id='assets' and exists(select 1 from public.assets a where a.path=name and a.status='validée')) or
+  (bucket_id='audio' and exists(select 1 from public.assets a where a.path=name and a.kind='audio' and a.status='validée')) or
+  (bucket_id='videos' and exists(select 1 from public.videos v join public.video_versions vv on vv.video_id=v.id where v.user_id=auth.uid() and v.status in ('approved','review') and vv.final_path=name)) or
+  (bucket_id='videos' and public.can_validate_videos() and exists(select 1 from public.videos v join public.video_versions vv on vv.video_id=v.id where v.status='review' and public.in_my_client(v.brand_id) and vv.final_path=name))
+);
+
+notify pgrst, 'reload schema';
+
+-- 0042_billing_and_credits.sql
+-- 0042_billing_and_credits.sql
+-- Idempotent: safe to run several times in the Supabase SQL editor. Requires 0041_roles_operator.sql.
+-- Décisions du 27/10 (docs/specs/ROLES-CREDITS-2026-10-27.md) :
+-- - réglages de facturation par client, modifiables par l'opérateur KÔMIAN seulement ;
+-- - journal des changements de tarifs et de réglages ;
+-- - crédits clients en FCFA, sans découvert : prix bloqué au lancement, débité à la livraison, libéré en cas
+--   d'échec, d'annulation ou de suppression ; expiration par lot ; consommation du lot qui expire le plus tôt.
+-- Mise en service : crédits_enforced = false par défaut (montants tracés, aucun blocage). L'opérateur fait une
+-- première recharge, puis active « Appliquer les crédits » dans Espace KÔMIAN · Paramètres.
+
+-- Réglages de facturation (un par client)
+create table if not exists public.client_billing_settings (
+  client_id uuid primary key references public.clients(id) on delete cascade,
+  credits_enforced boolean not null default false,
+  low_balance_threshold_fcfa numeric(14,0) not null default 50000 check (low_balance_threshold_fcfa >= 0),
+  expiry_warning_days int not null default 30 check (expiry_warning_days between 0 and 365),
+  purchase_validity_months int not null default 12 check (purchase_validity_months between 1 and 60),
+  gift_validity_months int not null default 3 check (gift_validity_months between 1 and 60),
+  human_revisions_per_shot int not null default 1 check (human_revisions_per_shot between 0 and 5),
+  human_clip_revisions_per_shot int not null default 1 check (human_clip_revisions_per_shot between 0 and 5),
+  revision_price_fcfa numeric(14,0) not null default 0 check (revision_price_fcfa >= 0),
+  updated_by uuid references public.profiles(id) on delete set null,
+  updated_at timestamptz not null default now()
+);
+alter table public.client_billing_settings add column if not exists human_clip_revisions_per_shot int not null default 1;
+insert into public.client_billing_settings(client_id) select id from public.clients on conflict do nothing;
+
+-- Journal des changements de tarifs et de réglages (qui, quand, ancienne et nouvelle valeur)
+create table if not exists public.pricing_change_log (
+  id bigint generated always as identity primary key,
+  scope text not null check (scope in ('pricing','billing_settings')),
+  brand_id uuid references public.brands(id) on delete set null,
+  client_id uuid references public.clients(id) on delete set null,
+  field text not null,
+  old_value text,
+  new_value text,
+  changed_by uuid references public.profiles(id) on delete set null,
+  changed_at timestamptz not null default now()
+);
+create index if not exists pricing_change_log_recent_idx on public.pricing_change_log(changed_at desc);
+
+-- Lots, blocages, journal
+create table if not exists public.credit_lots (
+  id uuid primary key default gen_random_uuid(),
+  client_id uuid not null references public.clients(id),
+  kind text not null check (kind in ('purchase','gift')),
+  amount_fcfa numeric(14,0) not null check (amount_fcfa > 0),
+  remaining_fcfa numeric(14,0) not null check (remaining_fcfa >= 0),
+  expires_at timestamptz not null,
+  invoice_ref text, payment_ref text, note text,
+  created_by uuid not null references public.profiles(id),
+  created_at timestamptz not null default now(),
+  check (remaining_fcfa <= amount_fcfa)
+);
+create index if not exists credit_lots_fifo_idx on public.credit_lots(client_id, expires_at, created_at) where remaining_fcfa > 0;
+
+create table if not exists public.credit_holds (
+  id uuid primary key default gen_random_uuid(),
+  client_id uuid not null references public.clients(id),
+  video_id uuid references public.videos(id) on delete set null,
+  version_id uuid references public.video_versions(id) on delete set null,
+  user_id uuid not null references public.profiles(id),
+  kind text not null check (kind in ('video','revision')),
+  amount_fcfa numeric(14,0) not null check (amount_fcfa > 0),
+  enforced boolean not null,
+  status text not null default 'held' check (status in ('held','captured','released')),
+  idempotency_key text not null unique,
+  created_at timestamptz not null default now(),
+  settled_at timestamptz
+);
+create index if not exists credit_holds_video_idx on public.credit_holds(video_id) where status = 'held';
+
+create table if not exists public.credit_hold_allocations (
+  hold_id uuid not null references public.credit_holds(id) on delete cascade,
+  lot_id uuid not null references public.credit_lots(id),
+  amount_fcfa numeric(14,0) not null check (amount_fcfa > 0),
+  primary key (hold_id, lot_id)
+);
+
+create table if not exists public.credit_movements (
+  id bigint generated always as identity primary key,
+  client_id uuid not null references public.clients(id),
+  type text not null check (type in ('topup','gift','hold','capture','release','expiry','adjustment','extension')),
+  amount_fcfa numeric(14,0) not null,            -- effet signé sur le solde disponible
+  available_after_fcfa numeric(14,0) not null,
+  lot_id uuid references public.credit_lots(id),
+  hold_id uuid references public.credit_holds(id),
+  user_id uuid references public.profiles(id), video_id uuid, version_id uuid,
+  note text, created_by uuid references public.profiles(id),
+  created_at timestamptz not null default now()
+);
+create index if not exists credit_movements_client_idx on public.credit_movements(client_id, created_at desc);
+
+-- Fonctions (service_role uniquement ; les routes vérifient le rôle avant l'appel)
+create or replace function public.credit_available(p_client uuid) returns numeric language sql stable security definer set search_path = '' as $$
+  select coalesce(sum(remaining_fcfa), 0) from public.credit_lots where client_id = p_client and expires_at > now()
+$$;
+
+create or replace function public.credit_expire_due(p_client uuid default null) returns int language plpgsql security definer set search_path = '' as $$
+declare lot record; n int := 0;
+begin
+  for lot in select id, client_id, remaining_fcfa from public.credit_lots
+             where (p_client is null or client_id = p_client) and expires_at <= now() and remaining_fcfa > 0 for update loop
+    update public.credit_lots set remaining_fcfa = 0 where id = lot.id;
+    insert into public.credit_movements(client_id, type, amount_fcfa, available_after_fcfa, lot_id, note)
+    values (lot.client_id, 'expiry', -lot.remaining_fcfa, public.credit_available(lot.client_id), lot.id, 'Crédits expirés');
+    n := n + 1;
+  end loop;
+  return n;
+end $$;
+
+create or replace function public.credit_hold(p_client uuid, p_user uuid, p_video uuid, p_version uuid, p_kind text, p_amount numeric, p_key text)
+returns uuid language plpgsql security definer set search_path = '' as $$
+declare v_hold uuid; v_left numeric := p_amount; v_take numeric; lot record; v_avail numeric; v_enforced boolean;
+begin
+  if p_amount is null or p_amount <= 0 or p_key is null then
+    raise exception using errcode = '22023', message = 'Réservation de crédits invalide';
+  end if;
+  perform pg_advisory_xact_lock(hashtext('rimco_credits:' || p_client::text));
+  select id into v_hold from public.credit_holds where idempotency_key = p_key;
+  if found then return v_hold; end if;
+  perform public.credit_expire_due(p_client);
+  select coalesce(credits_enforced, false) into v_enforced from public.client_billing_settings where client_id = p_client;
+  v_enforced := coalesce(v_enforced, false);
+  v_avail := public.credit_available(p_client);
+  if v_enforced and v_avail < p_amount then
+    raise exception using errcode = 'P0001', message = 'CREDIT_INSUFFICIENT:' || (p_amount - v_avail)::text;
+  end if;
+  insert into public.credit_holds(client_id, video_id, version_id, user_id, kind, amount_fcfa, enforced, idempotency_key)
+  values (p_client, p_video, p_version, p_user, p_kind, p_amount, v_enforced, p_key) returning id into v_hold;
+  if v_enforced then
+    for lot in select id, remaining_fcfa from public.credit_lots
+               where client_id = p_client and expires_at > now() and remaining_fcfa > 0
+               order by expires_at, created_at for update loop
+      exit when v_left <= 0;
+      v_take := least(lot.remaining_fcfa, v_left);
+      update public.credit_lots set remaining_fcfa = remaining_fcfa - v_take where id = lot.id;
+      insert into public.credit_hold_allocations(hold_id, lot_id, amount_fcfa) values (v_hold, lot.id, v_take);
+      v_left := v_left - v_take;
+    end loop;
+  end if;
+  insert into public.credit_movements(client_id, type, amount_fcfa, available_after_fcfa, hold_id, user_id, video_id, version_id, note)
+  values (p_client, 'hold', case when v_enforced then -p_amount else 0 end, public.credit_available(p_client), v_hold, p_user, p_video, p_version,
+          case when v_enforced then null else 'Crédits non appliqués : montant tracé sans débit' end);
+  return v_hold;
+end $$;
+
+create or replace function public.credit_capture(p_hold uuid) returns void language plpgsql security definer set search_path = '' as $$
+declare h public.credit_holds%rowtype;
+begin
+  update public.credit_holds set status = 'captured', settled_at = now() where id = p_hold and status = 'held' returning * into h;
+  if not found then return; end if;  -- idempotent
+  insert into public.credit_movements(client_id, type, amount_fcfa, available_after_fcfa, hold_id, user_id, video_id, version_id, note)
+  values (h.client_id, 'capture', 0, public.credit_available(h.client_id), h.id, h.user_id, h.video_id, h.version_id,
+          case when h.kind = 'revision' then 'Modification débitée' else 'Vidéo livrée : débitée' end);
+end $$;
+
+create or replace function public.credit_release(p_hold uuid, p_note text default null) returns void language plpgsql security definer set search_path = '' as $$
+declare h public.credit_holds%rowtype; a record;
+begin
+  update public.credit_holds set status = 'released', settled_at = now() where id = p_hold and status = 'held' returning * into h;
+  if not found then return; end if;
+  perform pg_advisory_xact_lock(hashtext('rimco_credits:' || h.client_id::text));
+  for a in select lot_id, amount_fcfa from public.credit_hold_allocations where hold_id = h.id loop
+    update public.credit_lots set remaining_fcfa = remaining_fcfa + a.amount_fcfa where id = a.lot_id;
+  end loop;
+  insert into public.credit_movements(client_id, type, amount_fcfa, available_after_fcfa, hold_id, user_id, video_id, version_id, note)
+  values (h.client_id, 'release', case when h.enforced then h.amount_fcfa else 0 end, public.credit_available(h.client_id), h.id, h.user_id, h.video_id, h.version_id, coalesce(p_note, 'Montant libéré'));
+  perform public.credit_expire_due(h.client_id);  -- un montant rendu à un lot expiré expire aussitôt (tracé)
+end $$;
+
+create or replace function public.credit_topup(p_client uuid, p_kind text, p_amount numeric, p_expires_at timestamptz,
+  p_invoice_ref text, p_payment_ref text, p_note text, p_actor uuid) returns uuid language plpgsql security definer set search_path = '' as $$
+declare v_lot uuid; v_exp timestamptz; s public.client_billing_settings%rowtype;
+begin
+  if p_kind not in ('purchase','gift') or p_amount is null or p_amount <= 0 then
+    raise exception using errcode = '22023', message = 'Recharge invalide';
+  end if;
+  if not exists(select 1 from public.profiles where id = p_actor and role = 'operateur' and is_active) then
+    raise exception using errcode = '42501', message = 'Recharge réservée à KÔMIAN';
+  end if;
+  select * into s from public.client_billing_settings where client_id = p_client;
+  v_exp := coalesce(p_expires_at, now() + make_interval(months => case when p_kind = 'gift' then coalesce(s.gift_validity_months, 3) else coalesce(s.purchase_validity_months, 12) end));
+  if v_exp <= now() then raise exception using errcode = '22023', message = 'La date d’expiration doit être dans le futur'; end if;
+  perform pg_advisory_xact_lock(hashtext('rimco_credits:' || p_client::text));
+  insert into public.credit_lots(client_id, kind, amount_fcfa, remaining_fcfa, expires_at, invoice_ref, payment_ref, note, created_by)
+  values (p_client, p_kind, p_amount, p_amount, v_exp, nullif(trim(p_invoice_ref), ''), nullif(trim(p_payment_ref), ''), nullif(trim(p_note), ''), p_actor)
+  returning id into v_lot;
+  insert into public.credit_movements(client_id, type, amount_fcfa, available_after_fcfa, lot_id, note, created_by)
+  values (p_client, case when p_kind = 'gift' then 'gift' else 'topup' end, p_amount, public.credit_available(p_client), v_lot, nullif(trim(p_note), ''), p_actor);
+  return v_lot;
+end $$;
+
+-- Correction (toujours à la baisse ; une correction à la hausse = un crédit offert) et prolongation
+create or replace function public.credit_adjust(p_lot uuid, p_amount numeric, p_note text, p_actor uuid) returns void language plpgsql security definer set search_path = '' as $$
+declare lot public.credit_lots%rowtype;
+begin
+  if p_amount is null or p_amount <= 0 or length(trim(coalesce(p_note, ''))) = 0 then
+    raise exception using errcode = '22023', message = 'Correction invalide : montant positif et motif obligatoires';
+  end if;
+  if not exists(select 1 from public.profiles where id = p_actor and role = 'operateur' and is_active) then
+    raise exception using errcode = '42501', message = 'Correction réservée à KÔMIAN';
+  end if;
+  select * into lot from public.credit_lots where id = p_lot for update;
+  if not found or lot.remaining_fcfa < p_amount then raise exception using errcode = '22023', message = 'Montant supérieur au reste du lot'; end if;
+  update public.credit_lots set remaining_fcfa = remaining_fcfa - p_amount where id = p_lot;
+  insert into public.credit_movements(client_id, type, amount_fcfa, available_after_fcfa, lot_id, note, created_by)
+  values (lot.client_id, 'adjustment', -p_amount, public.credit_available(lot.client_id), p_lot, p_note, p_actor);
+end $$;
+
+create or replace function public.credit_extend(p_lot uuid, p_expires_at timestamptz, p_note text, p_actor uuid) returns void language plpgsql security definer set search_path = '' as $$
+declare lot public.credit_lots%rowtype;
+begin
+  if not exists(select 1 from public.profiles where id = p_actor and role = 'operateur' and is_active) then
+    raise exception using errcode = '42501', message = 'Prolongation réservée à KÔMIAN';
+  end if;
+  select * into lot from public.credit_lots where id = p_lot for update;
+  if not found or lot.expires_at <= now() or p_expires_at <= lot.expires_at then
+    raise exception using errcode = '22023', message = 'Seul un lot non expiré peut être prolongé, vers une date plus lointaine';
+  end if;
+  update public.credit_lots set expires_at = p_expires_at where id = p_lot;
+  insert into public.credit_movements(client_id, type, amount_fcfa, available_after_fcfa, lot_id, note, created_by)
+  values (lot.client_id, 'extension', 0, public.credit_available(lot.client_id), p_lot,
+          coalesce(nullif(trim(p_note), ''), 'Expiration prolongée au ' || to_char(p_expires_at, 'DD/MM/YYYY')), p_actor);
+end $$;
+
+-- Règlement automatique, quel que soit le parcours qui change l'état de la vidéo
+create or replace function public.settle_video_credits() returns trigger language plpgsql security definer set search_path = '' as $$
+declare h record;
+begin
+  if tg_op = 'DELETE' then
+    for h in select id from public.credit_holds where video_id = old.id and status = 'held' loop
+      perform public.credit_release(h.id, 'Lancement interrompu : montant libéré');
+    end loop;
+    return old;
+  end if;
+  if new.status is not distinct from old.status then return new; end if;
+  if new.status in ('ready','approved') then
+    for h in select id from public.credit_holds where video_id = new.id and status = 'held' loop perform public.credit_capture(h.id); end loop;
+  elsif new.status in ('failed','cancelled') then
+    for h in select id from public.credit_holds where video_id = new.id and status = 'held' loop
+      perform public.credit_release(h.id, case when new.status = 'failed' then 'Vidéo en échec : montant libéré' else 'Vidéo annulée : montant libéré' end);
+    end loop;
+  end if;
+  return new;
+end $$;
+drop trigger if exists videos_settle_credits on public.videos;
+create trigger videos_settle_credits after update of status on public.videos for each row execute function public.settle_video_credits();
+drop trigger if exists videos_release_credits_on_delete on public.videos;
+create trigger videos_release_credits_on_delete before delete on public.videos for each row execute function public.settle_video_credits();
+
+do $$ declare f text; begin
+  foreach f in array array[
+    'credit_hold(uuid,uuid,uuid,uuid,text,numeric,text)','credit_capture(uuid)','credit_release(uuid,text)',
+    'credit_topup(uuid,text,numeric,timestamptz,text,text,text,uuid)','credit_adjust(uuid,numeric,text,uuid)',
+    'credit_extend(uuid,timestamptz,text,uuid)','credit_expire_due(uuid)','credit_available(uuid)'] loop
+    execute format('revoke all on function public.%s from public, anon, authenticated', f);
+    execute format('grant execute on function public.%s to service_role', f);
+  end loop;
+end $$;
+
+-- Lecture seule depuis le navigateur ; toute écriture passe par les routes serveur (service_role).
+alter table public.client_billing_settings enable row level security;
+alter table public.pricing_change_log enable row level security;
+alter table public.credit_lots enable row level security;
+alter table public.credit_holds enable row level security;
+alter table public.credit_hold_allocations enable row level security;
+alter table public.credit_movements enable row level security;
+drop policy if exists billing_settings_read on public.client_billing_settings;
+create policy billing_settings_read on public.client_billing_settings for select to authenticated using (client_id = public.my_client_id() or public.is_operator());
+drop policy if exists pricing_change_log_read on public.pricing_change_log;
+create policy pricing_change_log_read on public.pricing_change_log for select to authenticated using (public.is_operator());
+drop policy if exists credit_lots_read on public.credit_lots;
+create policy credit_lots_read on public.credit_lots for select to authenticated using (public.is_operator() or (public.is_admin() and client_id = public.my_client_id()));
+drop policy if exists credit_holds_read on public.credit_holds;
+create policy credit_holds_read on public.credit_holds for select to authenticated using (public.is_operator() or (client_id = public.my_client_id() and (public.is_admin() or user_id = auth.uid())));
+drop policy if exists credit_movements_read on public.credit_movements;
+create policy credit_movements_read on public.credit_movements for select to authenticated using (public.is_operator() or (client_id = public.my_client_id() and (public.is_admin() or user_id = auth.uid())));
+
+-- Nouvelles notifications : solde bas et crédits qui expirent (liste de 0036/0037 étendue).
+alter table public.notifications drop constraint if exists notifications_type_check;
+alter table public.notifications add constraint notifications_type_check
+  check (type in ('ready','failed','cancelled','validation','action_required','review_requested','approved','rejected','expired','credit_low','credit_expiring'));
+
+notify pgrst, 'reload schema';

@@ -13,7 +13,7 @@ const schema = z.object({
 
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
-    await requireRole('admin');
+    await requireRole('operateur');
     const { id } = await context.params;
     const input = schema.parse(await request.json());
     if (env.PROVIDERS_MODE === 'mock' && !env.NEXT_PUBLIC_SUPABASE_URL) {

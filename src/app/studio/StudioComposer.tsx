@@ -278,6 +278,22 @@ export function StudioComposer({ mode, showPrompt = false, canRetryMontage = fal
   }, [job, jobStatus, tracker]);
   const otherRunning = runningMine.filter((version) => version.id !== job?.id).length;
   const launchBlocked = runningMine.length >= MAX_ACTIVE_VIDEOS;
+  // 27/10 · crédits : le prix et le solde au moment de lancer ; refus avant l'effort quand le solde ne suffit pas.
+  const [credit, setCredit] = useState<{ enforced: boolean; availableFcfa: number; operator: boolean; admin: boolean } | null>(null);
+  useEffect(() => {
+    if (mode !== "live") return;
+    let active = true;
+    fetch("/api/credits?history=false", { cache: "no-store" })
+      .then(async (response) => (response.ok ? response.json() : null))
+      .then((data) => { if (active && data?.summary) setCredit({ enforced: Boolean(data.summary.enforced), availableFcfa: Number(data.summary.availableFcfa ?? 0), operator: Boolean(data.scope?.operator), admin: Boolean(data.scope?.seesAll) }); })
+      .catch(() => undefined);
+    return () => { active = false; };
+  }, [mode, jobStatus]);
+  const creditsApply = Boolean(credit?.enforced && !credit.operator);
+  const missingFcfa = creditsApply && estimatedPriceFcfa != null ? Math.max(0, estimatedPriceFcfa - credit!.availableFcfa) : 0;
+  const creditBlocked = missingFcfa > 0;
+  const noCreditLeft = creditsApply && credit!.availableFcfa <= 0;
+  const creditContact = credit?.admin ? "contactez KÔMIAN pour recharger vos crédits" : "contactez votre administrateur RIMCO Studio";
   const lightingChoices = Array.from(
     new Map(
       sceneChoices.map((scene) => [getLightingLabel(scene.lighting), scene]),
@@ -639,6 +655,11 @@ export function StudioComposer({ mode, showPrompt = false, canRetryMontage = fal
       className="grid min-w-0 items-start gap-5 xl:grid-cols-[minmax(0,1fr)_300px]"
     >
       <div className="min-w-0 space-y-5">
+        {noCreditLeft && (
+          <p role="status" className="border border-[#f0c9c6] bg-[#fae9e7] p-4 text-sm leading-6 text-[#9d352e]">
+            <strong>Solde épuisé :</strong> aucune vidéo ne peut être lancée pour l’instant. Vous pouvez préparer votre demande ; pour la lancer, {creditContact}.
+          </p>
+        )}
         <section className="overflow-hidden rounded-md border border-black/[.055] bg-white">
           <div className="border-t border-[#eeeae4] p-4 md:p-5">
             <textarea
@@ -1339,7 +1360,9 @@ export function StudioComposer({ mode, showPrompt = false, canRetryMontage = fal
           )}
           {mode === "live" && estimatedPriceFcfa != null && (
             <p className="mt-4 border-t border-[#eeeae4] pt-4 text-xs text-[#626269]">
-              Estimation vidéo · environ {formatFcfa(estimatedPriceFcfa)}
+              Prix de la vidéo · <span className="font-semibold tabular-nums text-[#242428]">{formatFcfa(estimatedPriceFcfa)}</span>
+              {creditsApply && <> · Solde disponible : <span className={`font-semibold tabular-nums ${creditBlocked ? "text-[#9d352e]" : "text-[#242428]"}`}>{formatFcfa(credit!.availableFcfa)}</span></>}
+              {credit?.operator && <span className="mt-1 block">Vidéo interne KÔMIAN : non débitée{credit.enforced ? "" : " · crédits non appliqués pour le client"}.</span>}
             </p>
           )}
           <p className="mt-4 border-t border-[#eeeae4] pt-4 text-xs leading-4 text-[#626269]">
@@ -1411,13 +1434,14 @@ export function StudioComposer({ mode, showPrompt = false, canRetryMontage = fal
           disabled={
             busy ||
             launchBlocked ||
+            creditBlocked ||
             pendingLaunch !== null ||
             !selectedDossier?.id ||
             !selectedDossier.photos.length ||
             (mode === "live" && (!storyboardModel || modelsLoading))
           }
           aria-describedby={
-            launchBlocked ? "generation-lock-message" : pendingLaunch ? "conflict-choice-message" : undefined
+            launchBlocked ? "generation-lock-message" : creditBlocked ? "credit-lock-message" : pendingLaunch ? "conflict-choice-message" : undefined
           }
           className="w-full rounded-md bg-[#c51e1c] px-4 py-4 text-sm font-semibold text-white transition hover:bg-[#a71715] disabled:cursor-not-allowed disabled:opacity-50"
         >
@@ -1425,8 +1449,15 @@ export function StudioComposer({ mode, showPrompt = false, canRetryMontage = fal
             ? "Le réalisateur prépare la vidéo…"
             : launchBlocked
               ? `${MAX_ACTIVE_VIDEOS} vidéos déjà en cours`
-              : `Générer la vidéo · ${durationS} s`}
+              : creditBlocked
+                ? "Solde insuffisant"
+                : `Générer la vidéo · ${durationS} s`}
         </button>
+        {creditBlocked && !launchBlocked && (
+          <p id="credit-lock-message" role="status" className="text-center text-xs leading-5 text-[#9d352e]">
+            Il manque {formatFcfa(missingFcfa)} pour cette vidéo. Choisissez un niveau ou une durée moins chers, ou {creditContact}.
+          </p>
+        )}
         {pendingLaunch && !launchBlocked && (
           <p id="conflict-choice-message" className="text-center text-xs text-[#626269]">
             Choisissez d’abord dans l’encadré ci-dessus : lancer la vidéo adaptée ou modifier votre demande.

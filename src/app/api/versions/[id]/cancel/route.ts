@@ -1,3 +1,4 @@
+import { hasAdminRights } from '@/core/auth/roles';
 import { notify } from '@/core/notifications/notify';
 import { NextResponse } from 'next/server';
 import { errorResponse, getActor, HttpError } from '@/core/auth/guards';
@@ -17,7 +18,7 @@ export async function POST(_request: Request, context: { params: Promise<{ id: s
     const { id } = await context.params;
     if (env.PROVIDERS_MODE === 'mock' && !env.NEXT_PUBLIC_SUPABASE_URL) {
       const current = allVersions().find((item) => item.id === id);
-      if (!current || actor.role !== 'admin' && current.userId !== actor.id) throw new HttpError(404, 'Génération introuvable.');
+      if (!current || !hasAdminRights(actor) && current.userId !== actor.id) throw new HttpError(404, 'Génération introuvable.');
       if (!['queued', 'generating'].includes(current.status)) throw new HttpError(409, 'Cette génération ne peut plus être annulée.');
       putVersion({ ...current, status: 'cancelled' });
       return NextResponse.json({ id, status: 'cancelled' });
@@ -26,7 +27,7 @@ export async function POST(_request: Request, context: { params: Promise<{ id: s
     const { data: version, error } = await admin.from('video_versions').select('id,status,video_id,provider_request_id,fal_credential_id,brief_json,model:ai_models(fal_endpoint_id,adapter_family),video:videos!inner(user_id,status)').eq('id', id).single();
     if (error || !version) throw new HttpError(404, 'Génération introuvable.');
     const video = Array.isArray(version.video) ? version.video[0] : version.video;
-    if (!video || actor.role !== 'admin' && video.user_id !== actor.id) throw new HttpError(403, 'Cette génération ne vous appartient pas.');
+    if (!video || !hasAdminRights(actor) && video.user_id !== actor.id) throw new HttpError(403, 'Cette génération ne vous appartient pas.');
     if (!['queued', 'generating'].includes(version.status)) throw new HttpError(409, 'Cette génération ne peut plus être annulée.');
     const now = new Date().toISOString();
     const model = Array.isArray(version.model) ? version.model[0] : version.model;
@@ -88,6 +89,8 @@ export async function POST(_request: Request, context: { params: Promise<{ id: s
         admin.from('usage_ledger').update({ status: 'released' }).eq('id', entry.id).eq('status', 'reserved'),
       ));
     }
+    // 27/10: a cancelled video is never billed to the client; provider costs stay internal (cost_usd unchanged).
+    await admin.from('usage_ledger').update({ price_fcfa: 0, applied_fcfa_per_second: 0 }).eq('version_id', id).eq('kind', 'generation');
     await notify(admin, { userId: video.user_id, versionId: id, type: 'cancelled', message: 'La génération a été annulée.' });
     // A cancelled video needs no decision any more.
     await admin.from('notifications').update({ read_at: new Date().toISOString() }).eq('version_id', id).eq('type', 'action_required').is('read_at', null);

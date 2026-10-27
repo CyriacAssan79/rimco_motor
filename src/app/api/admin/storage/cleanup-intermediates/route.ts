@@ -65,7 +65,7 @@ async function estimateBytes(admin: ReturnType<typeof createStorageAdminClient>,
 
 export async function POST(request: Request) {
   try {
-    await requireRole('admin');
+    await requireRole('operateur');
     let input: z.infer<typeof requestSchema>;
     try { input = requestSchema.parse(await request.json()); }
     catch { throw new HttpError(400, 'La demande de nettoyage est invalide.'); }

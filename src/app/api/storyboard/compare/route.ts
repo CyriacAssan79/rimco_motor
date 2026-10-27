@@ -1,3 +1,4 @@
+import { isOperator } from '@/core/auth/roles';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { errorResponse, getActor, HttpError } from '@/core/auth/guards';
@@ -22,7 +23,7 @@ const comparisonModes = ['standard', 'pro'] as const;
 export async function POST(request: Request) {
   try {
     const actor = await getActor();
-    if (actor.role !== 'admin') throw new HttpError(403, 'Le comparatif de modèles est réservé à l’administration pendant la phase de test.');
+    if (!isOperator(actor)) throw new HttpError(403, 'Le comparatif de modèles est réservé à l’équipe KÔMIAN.');
     const input = compareSchema.parse(await request.json());
     if (!actor.brandId) throw new HttpError(403, 'Aucune marque n’est associée à votre profil.');
     if (input.audioAssetId) throw new HttpError(422, 'Le comparatif est sans audio pour le moment.');

@@ -1,9 +1,8 @@
 "use client";
 import { useState } from 'react';
-import { formatFcfa } from '@/core/pricing';
 import { describeDefects } from '@/core/verification/defects';
 import type { ClipBoard as Board } from '@/core/versions/clip-gate';
-import { AdaptedRequests, FullScreen, ReviseShotForm, type Viewed } from './shot-review-panel';
+import { AdaptedRequests, FullScreen, RelaunchCost, ReviseShotForm, type Viewed } from './shot-review-panel';
 
 export function ClipBoard({ versionId, board, onChanged }: { versionId: string; board: Board; onChanged: () => void }) {
   const [busy, setBusy] = useState(false);
@@ -51,7 +50,7 @@ export function ClipBoard({ versionId, board, onChanged }: { versionId: string; 
           {shot.active && <button type="button" className={buttonClass} disabled={busy} onClick={() => void action(shot.approved ? 'unapprove' : 'approve', shot.shotNumber)}>{shot.approved ? 'Retirer la validation' : shot.colour === 'red' ? 'Accepter' : 'Valider'}</button>}
           <button type="button" className={buttonClass} disabled={busy || shot.active && board.shots.filter((item) => item.active).length <= 1} onClick={() => void action(shot.active ? 'disable' : 'enable', shot.shotNumber)}>{shot.active ? 'Désactiver ce clip' : 'Réactiver ce clip'}</button>
         </div>
-        {shot.active && shot.canRevise && !editing && <div className="mt-2 space-y-2">{(['clip', 'full'] as const).map((scope) => { const cost = shot.clipOptions?.[scope]; return cost ? <div key={scope}><button type="button" className={buttonClass} disabled={busy} onClick={() => setEditing({ number: shot.shotNumber, scope })}>{scope === 'clip' ? 'Modifier la vidéo du plan' : 'Revenir à l’image clé'}</button><p className="mt-1 text-xs">Environ {formatFcfa(cost.fcfa)} · 1 modification possible pour le clip.</p></div> : null; })}</div>}
+        {shot.active && shot.canRevise && !editing && <div className="mt-2 space-y-2">{(['clip', 'full'] as const).map((scope) => { const cost = shot.clipOptions?.[scope]; return cost ? <div key={scope}><button type="button" className={buttonClass} disabled={busy} onClick={() => setEditing({ number: shot.shotNumber, scope })}>{scope === 'clip' ? 'Modifier la vidéo du plan' : 'Revenir à l’image clé'}</button><p className="mt-1 text-xs"><RelaunchCost cost={cost} withMinutes={false} /> · {shot.revisionsLeft ?? 1} modification{(shot.revisionsLeft ?? 1) > 1 ? 's' : ''} possible{(shot.revisionsLeft ?? 1) > 1 ? 's' : ''} pour le clip.</p></div> : null; })}</div>}
         {!shot.canRevise && <p className="mt-2 text-xs">Modification utilisée</p>}
         {editing?.number === shot.shotNumber && <div className="mt-3"><ReviseShotForm versionId={versionId} shotNumber={shot.shotNumber} scope={editing.scope} cost={shot.clipOptions?.[editing.scope] ?? undefined} onCancel={() => setEditing(null)} onSent={(conflicts) => { setConflicts(conflicts); setEditing(null); onChanged(); }} /></div>}
       </article>;

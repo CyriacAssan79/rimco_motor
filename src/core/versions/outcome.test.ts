@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { libraryVideoHref } from '@/components/video-outcome';
-import { formatFcfa } from '@/core/pricing';
 import { billingSummary, failureBillingText, failureExplanation, playbackDurationSeconds, studioSettings } from './outcome';
 
 describe('end of a video in the Studio', () => {
@@ -46,9 +45,12 @@ describe('failure message', () => {
     expect(failureExplanation(null).cause).toBe('La génération a échoué chez le fournisseur.');
   });
 
-  it('says what was billed', () => {
-    expect(failureBillingText(billingSummary([{ kind: 'generation', status: 'released', price_fcfa: 2300 }]))).toBe('Rien ne vous est facturé pour cette vidéo.');
-    expect(failureBillingText(billingSummary([{ kind: 'generation', status: 'charged', price_fcfa: 2300 }]))).toBe(`${formatFcfa(2300)} facturés : le fournisseur a déjà produit une partie de la vidéo.`);
-    expect(failureBillingText(billingSummary([{ kind: 'generation', status: 'released', price_fcfa: 0 }, { kind: 'keyframe', status: 'reserved', price_fcfa: 0 }]))).toContain('en cours de vérification');
+  it('applies one rule to every failure: never billed, credits released (27/10)', () => {
+    const expected = 'Rien ne vous est facturé pour cette vidéo : le montant réservé a été libéré.';
+    expect(failureBillingText(billingSummary([{ kind: 'generation', status: 'released', price_fcfa: 2300 }]))).toBe(expected);
+    expect(failureBillingText(billingSummary([{ kind: 'generation', status: 'charged', price_fcfa: 2300 }]))).toBe(expected);
+    expect(failureBillingText(billingSummary([{ kind: 'generation', status: 'released', price_fcfa: 0 }, { kind: 'keyframe', status: 'reserved', price_fcfa: 0 }]))).toBe(expected);
+    expect(failureBillingText(null)).toBe(expected);
   });
+
 });

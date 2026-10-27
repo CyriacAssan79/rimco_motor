@@ -27,6 +27,8 @@ export function notificationHref(item: AppNotification) {
   if (item.type === 'expired' && item.version_id) return `/bibliotheque?video=${item.version_id}`;
   if (item.type === 'review_requested') return '/a-valider';
   if (['ready', 'approved', 'rejected'].includes(item.type)) return item.version_id ? `/bibliotheque?video=${item.version_id}` : '/bibliotheque';
+  // 27/10 · credits: the administrator's credits page (the operator follows the same link to the client's balance).
+  if (item.type === 'credit_low' || item.type === 'credit_expiring') return '/credits';
   return null;
 }
 
