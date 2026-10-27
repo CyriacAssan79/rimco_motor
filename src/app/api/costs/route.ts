@@ -1,3 +1,4 @@
+import { storedApproval } from '@/core/versions/keyframe-approval';
 import { NextResponse } from 'next/server';
 import { errorResponse, getActor, HttpError } from '@/core/auth/guards';
 import { env } from '@/env';
@@ -75,7 +76,8 @@ export async function GET() {
       const chargedCosts = ledgerRows.filter((row) => row.status === 'charged');
       const costEur = chargedCosts.reduce((sum, row) => sum + Number(row.cost_eur ?? 0), 0);
       const costRealFcfa = chargedCosts.reduce((sum, row) => sum + Number(row.cost_real_fcfa ?? 0), 0);
-      return [{ id: `${versionId}-generation`, version_id: versionId, video_id: version?.video_id, title: video?.title ?? 'Vidéo', kind: 'generation', price_fcfa: generationCost.priceFcfa, cost_real_fcfa: costRealFcfa, cost_eur: costEur, margin_fcfa: generationCost.priceFcfa - costRealFcfa, seconds: generationCost.seconds, status: generationCost.status, created_at: version?.created_at ?? first.created_at, ...plannedCost(version?.brief_json) }];
+      const approval = storedApproval(version?.brief_json && typeof version.brief_json === 'object' ? version.brief_json as Record<string, unknown> : {});
+      return [{ keyframe_approval_wait_seconds: approval.waitSeconds ?? null, keyframe_modified_shots: approval.modifiedShots ?? null, keyframe_approval_expired: Boolean(approval.expiredAt), id: `${versionId}-generation`, version_id: versionId, video_id: version?.video_id, title: video?.title ?? 'Vidéo', kind: 'generation', price_fcfa: generationCost.priceFcfa, cost_real_fcfa: costRealFcfa, cost_eur: costEur, margin_fcfa: generationCost.priceFcfa - costRealFcfa, seconds: generationCost.seconds, status: generationCost.status, created_at: version?.created_at ?? first.created_at, ...plannedCost(version?.brief_json) }];
     });
     return NextResponse.json({ rows });
   } catch (error) { return errorResponse(error); }

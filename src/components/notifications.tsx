@@ -48,7 +48,7 @@ export function NotificationsProvider({ enabled, countReviews, children }: { ena
   }, [enabled, countReviews]);
 
   // A followed video changed state (ready, failed, waiting for a decision): its notification is already written.
-  const trackerSignature = tracker.snapshot.versions.map((version) => `${version.id}:${version.versionStatus ?? version.status}:${version.reviewRequired?.length ?? 0}`).join('|');
+  const trackerSignature = tracker.snapshot.versions.map((version) => `${version.id}:${version.versionStatus ?? version.status}:${version.reviewRequired?.length ?? 0}:${(version.keyframeApproval as { requestedAt?: string; remindedAt?: string } | undefined)?.requestedAt ?? ''}:${(version.keyframeApproval as { remindedAt?: string } | undefined)?.remindedAt ?? ''}`).join('|');
   const lastSignature = useRef('');
   useEffect(() => {
     if (!center || trackerSignature === lastSignature.current) return;
@@ -160,7 +160,7 @@ export function ActionRequiredBanner() {
   const first: AppNotification = actions[0];
   const href = notificationHref(first) ?? '/file-generation';
   return <div role="status" className="mb-5 flex flex-wrap items-center justify-between gap-3 border border-[#e7c9c6] bg-[#fdf4f3] p-4 text-sm text-[#831810]">
-    <p className="min-w-0 flex-1"><strong>Action requise · </strong>{first.message}{actions.length > 1 ? ` (+${actions.length - 1} autre${actions.length > 2 ? 's' : ''})` : ''}</p>
-    <Link href={href} onClick={() => void markRead([first.id])} className="inline-flex min-h-11 items-center rounded-md bg-[#c51e1c] px-4 text-xs font-semibold text-white hover:bg-[#a71715]">Voir le plan</Link>
+    <p className="min-w-0 flex-1"><strong>{first.type === 'expired' ? 'Vidéo expirée · ' : 'Action requise · '}</strong>{first.message}{actions.length > 1 ? ` (+${actions.length - 1} autre${actions.length > 2 ? 's' : ''})` : ''}</p>
+    <Link href={href} onClick={() => void markRead([first.id])} className="inline-flex min-h-11 items-center rounded-md bg-[#c51e1c] px-4 text-xs font-semibold text-white hover:bg-[#a71715]">{first.type === 'expired' ? 'Voir la vidéo' : first.dedupe_key?.startsWith('keyframe_approval') ? 'Voir les images clés' : 'Voir le plan'}</Link>
   </div>;
 }

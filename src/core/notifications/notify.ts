@@ -5,7 +5,7 @@ import type { VerificationEntry } from '@/core/verification/loop';
  * In-app notifications (bell, banner, tab title, browser notifications). One row per event: `dedupe_key`
  * makes every write idempotent, so a refresh that sees the same state again never creates a duplicate.
  */
-export type NotificationType = 'ready' | 'failed' | 'cancelled' | 'action_required' | 'review_requested' | 'approved' | 'rejected';
+export type NotificationType = 'ready' | 'failed' | 'cancelled' | 'action_required' | 'review_requested' | 'approved' | 'rejected' | 'expired';
 export type NotificationInput = { userId: string; versionId: string | null; type: NotificationType; message: string; dedupeKey?: string };
 
 export async function notify(admin: SupabaseClient, input: NotificationInput | NotificationInput[]) {

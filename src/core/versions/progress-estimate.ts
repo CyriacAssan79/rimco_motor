@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { ProcessingMetrics } from './processing-metrics';
+import { storedApproval } from './keyframe-approval';
 import { buildProgress, estimateSteps, humanWaitIntervals, PROGRESS_STEPS, stepDurations, type GenerationProgress, type ProgressEstimate, type ProgressShotRow, type ProgressStep, type StepSeconds } from './progress';
 
 const HISTORY_SIZE = 20;
@@ -45,7 +46,7 @@ export async function versionProgress(admin: SupabaseClient, input: { status: st
   const hasQuality = input.brief.videoQualityMode === true;
   const hasKeyframes = input.brief.keyframeMode === true;
   const now = Date.now();
-  const base = buildProgress({ status: input.status, metrics, hasKeyframes, hasQuality, shots: input.shots, estimate: null, now });
+  const base = buildProgress({ status: input.status, metrics, hasKeyframes, hasQuality, shots: input.shots, estimate: null, now, approval: storedApproval(input.brief) });
   if (!['queued', 'generating', 'postprocessing'].includes(input.status)) return base;
   const shotCount = input.shots.length || (Array.isArray(input.brief.storyboard) ? input.brief.storyboard.length : 1);
   const tier = typeof input.brief.generationTier === 'string' ? input.brief.generationTier : null;

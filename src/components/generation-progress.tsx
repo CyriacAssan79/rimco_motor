@@ -10,8 +10,9 @@ export function GenerationProgress({ version, now, showShots = true }: { version
   const view = progressView(version, now);
   if (view.phase === 'failed' || view.phase === 'cancelled') return null;
   const eta = etaText(view.eta);
-  const timing = view.phase === 'decision'
-    ? [view.waitingSeconds != null ? `En attente de votre décision depuis ${formatDuration(view.waitingSeconds)}` : 'En attente de votre décision', view.totalSeconds != null ? `chrono arrêté à ${formatDuration(view.totalSeconds)}` : null]
+  const waitingFor = view.phase === 'approval' ? 'votre validation' : 'votre décision';
+  const timing = view.phase === 'decision' || view.phase === 'approval'
+    ? [view.waitingSeconds != null ? `En attente de ${waitingFor} depuis ${formatDuration(view.waitingSeconds)}` : `En attente de ${waitingFor}`, view.totalSeconds != null ? `chrono arrêté à ${formatDuration(view.totalSeconds)}` : null]
     : view.phase === 'ready'
       ? []
       : [view.totalSeconds != null ? `Lancée il y a ${formatDuration(view.totalSeconds)}` : null, view.stepSeconds != null ? `${view.stepLabel} depuis ${formatDuration(view.stepSeconds)}` : null];
@@ -19,8 +20,8 @@ export function GenerationProgress({ version, now, showShots = true }: { version
   return <div className="mt-3 space-y-2.5" data-progress-step={view.stepLabel}>
     <ol aria-label="Étapes de la vidéo" className="flex flex-wrap gap-x-4 gap-y-2">
       {view.items.map((item) => <li key={item.id} aria-current={item.state === 'current' ? 'step' : undefined} className="flex items-center gap-1.5 text-xs">
-        <span aria-hidden="true" className={`grid size-5 shrink-0 place-items-center rounded-full border-2 text-[11px] text-white ${item.state === 'done' ? 'border-[#c51e1c] bg-[#c51e1c]' : item.state === 'current' ? item.id === 'decision' ? 'border-[#831810] bg-[#fdf4f3]' : 'border-[#c51e1c] bg-white' : 'border-[#dfe1e4] bg-white'}`}>{item.state === 'done' ? '✓' : ''}</span>
-        <span className={item.state === 'todo' ? 'text-[#6b6760]' : item.id === 'decision' ? 'font-semibold text-[#831810]' : 'font-semibold text-[#242428]'}>{item.label}{item.state === 'done' ? <span className="sr-only"> (terminée)</span> : item.state === 'current' ? <span className="sr-only"> (en cours)</span> : null}</span>
+        <span aria-hidden="true" className={`grid size-5 shrink-0 place-items-center rounded-full border-2 text-[11px] text-white ${item.state === 'done' ? 'border-[#c51e1c] bg-[#c51e1c]' : item.state === 'current' ? item.id === 'decision' || item.id === 'approval' ? 'border-[#831810] bg-[#fdf4f3]' : 'border-[#c51e1c] bg-white' : 'border-[#dfe1e4] bg-white'}`}>{item.state === 'done' ? '✓' : ''}</span>
+        <span className={item.state === 'todo' ? 'text-[#6b6760]' : item.id === 'decision' || item.id === 'approval' ? 'font-semibold text-[#831810]' : 'font-semibold text-[#242428]'}>{item.label}{item.state === 'done' ? <span className="sr-only"> (terminée)</span> : item.state === 'current' ? <span className="sr-only"> (en cours)</span> : null}</span>
       </li>)}
     </ol>
     {timingText && <p className="text-xs leading-5 text-[#55545a] tabular-nums">{timingText}</p>}

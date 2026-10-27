@@ -54,7 +54,7 @@ export const LIST_RELOAD_MS = 60_000;
 const CLAIM_MS = 30_000;
 const UNAVAILABLE = 'Le suivi est momentanément indisponible. Nouvelle tentative automatique.';
 /** Fields that only describe the current moment: absent from a new refresh means no longer true. */
-const VOLATILE_KEYS = ['stageElapsedSeconds', 'reviewRequired', 'error', 'progress'] as const;
+const VOLATILE_KEYS = ['stageElapsedSeconds', 'reviewRequired', 'error', 'progress', 'keyframeApproval'] as const;
 
 const currentStatus = (version: TrackedVersion) => version.versionStatus ?? version.status;
 

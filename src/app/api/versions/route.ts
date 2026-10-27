@@ -9,6 +9,7 @@ import { requestSchema } from '@/core/versions/request-schema';
 import { createLiveVersion } from '@/core/versions/live';
 import { versionProgress } from '@/core/versions/progress-estimate';
 import { billingSummary, studioSettings } from '@/core/versions/outcome';
+import { storedApproval } from '@/core/versions/keyframe-approval';
 import type { ProgressShotRow } from '@/core/versions/progress';
 import { createPersistedMockVersion } from '@/core/versions/mock-persistence';
 import { createStorageAdminClient } from '@/core/storage/supabase';
@@ -44,6 +45,8 @@ const multiClipSchema = requestSchema.extend({
   castDescription: castDescriptionSchema.default(''),
   /** 26/10: signature of /api/storyboard/suggest; without it the storyboard is refused. */
   storyboardSignature: z.string().max(200).optional(),
+  /** 27/10: the Studio box « Valider les images clés avant la vidéo » (the brand setting has the last word). */
+  keyframeApproval: z.boolean().optional(),
 }).strict().refine((input) => input.clipDurationSeconds >= 10 || input.placeIds.length <= 1, {
   message: 'Une seule référence de lieu est autorisée pour une vidéo de moins de 10 secondes.',
   path: ['placeIds'],
@@ -60,6 +63,8 @@ const singleStoryboardSchema = requestSchema.extend({
   castAssetIds: z.array(z.string().uuid()).max(MAX_CAST_PER_VIDEO).default([]),
   castDescription: castDescriptionSchema.default(''),
   storyboardSignature: z.string().max(200).optional(),
+  /** 27/10: the Studio box « Valider les images clés avant la vidéo » (the brand setting has the last word). */
+  keyframeApproval: z.boolean().optional(),
 }).strict().refine((input) => input.placeIds.length <= 1, {
   message: 'Une vidéo en un seul plan utilise un seul lieu.',
   path: ['placeIds'],
@@ -175,7 +180,7 @@ export async function GET(request: Request) {
       const stage = qualityCheckActive ? 'quality_checking' : processingStage(latest?.status ?? status, metrics);
       const stageStartedAt = stage === 'queued' ? metrics.providerSubmittedAt : stage === 'keyframing' ? metrics.keyframingStartedAt : stage === 'generating' ? metrics.generationStartedAt ?? metrics.providerSubmittedAt : stage === 'transferring' ? metrics.providerCompletedAt : stage === 'postprocessing' ? metrics.postproductionStartedAt : undefined;
       const progress = latest ? await versionProgress(admin, { status: latest.status, brief: briefData, shots: runningShotsByVersion.get(latest.id) ?? shotRows as ProgressShotRow[] }) : null;
-      return { progress, settings: studioSettings(briefData, video.title), billing: billingSummary(ledgerRows), id: latest?.id ?? video.id, videoId: video.id, title: video.title, status, workflow: briefData.multiClipMode === true ? 'multi_clip' : 'single', tier: generationTier, photoFidelity: isPhotoFidelity, format: typeof briefData.format === 'string' ? briefData.format : '16:9', durationSeconds: Number(latest?.generation_seconds ?? generationCost?.seconds ?? 5), version: latest?.number ?? 1, versionStatus: latest?.status ?? null, errorMessage: latest?.error_message ?? null, qualityWarnings: storedQualityWarnings(briefData), inputs: extractGenerationInputs(briefData, assetTitles), pollError, canRetryTracking, reconciliationRequired, checkedQualityShots, totalQualityShots, shotProgress, processingStage: stage, stageElapsedSeconds: elapsedSeconds(stageStartedAt), processingDurations: processingDurations(metrics, latest?.status ?? status), processingMetrics: metrics, priceFcfa: generationCost?.priceFcfa ?? (typeof mockMetadata.priceFcfa === 'number' ? mockMetadata.priceFcfa : null), validationId: validationRows[0]?.id ?? null, validationStatus: validationRows[0]?.status ?? null, ...(includePreviews ? { videoUrl, previewUrl, previewSource } : {}), createdAt: video.created_at, department: video.department, userId: video.user_id };
+      return { progress, approvalState: storedApproval(briefData), settings: studioSettings(briefData, video.title), billing: billingSummary(ledgerRows), id: latest?.id ?? video.id, videoId: video.id, title: video.title, status, workflow: briefData.multiClipMode === true ? 'multi_clip' : 'single', tier: generationTier, photoFidelity: isPhotoFidelity, format: typeof briefData.format === 'string' ? briefData.format : '16:9', durationSeconds: Number(latest?.generation_seconds ?? generationCost?.seconds ?? 5), version: latest?.number ?? 1, versionStatus: latest?.status ?? null, errorMessage: latest?.error_message ?? null, qualityWarnings: storedQualityWarnings(briefData), inputs: extractGenerationInputs(briefData, assetTitles), pollError, canRetryTracking, reconciliationRequired, checkedQualityShots, totalQualityShots, shotProgress, processingStage: stage, stageElapsedSeconds: elapsedSeconds(stageStartedAt), processingDurations: processingDurations(metrics, latest?.status ?? status), processingMetrics: metrics, priceFcfa: generationCost?.priceFcfa ?? (typeof mockMetadata.priceFcfa === 'number' ? mockMetadata.priceFcfa : null), validationId: validationRows[0]?.id ?? null, validationStatus: validationRows[0]?.status ?? null, ...(includePreviews ? { videoUrl, previewUrl, previewSource } : {}), createdAt: video.created_at, department: video.department, userId: video.user_id };
     }));
     return NextResponse.json({ versions: requestedStatus ? versions.filter((version) => version.status === requestedStatus) : versions });
   } catch (error) { return errorResponse(error); }

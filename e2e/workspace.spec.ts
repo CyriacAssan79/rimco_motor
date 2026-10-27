@@ -145,6 +145,53 @@ async function expectConflictBlocksMainButton(page: Page) {
   await expect(generate).toBeEnabled();
 }
 
+/** « Modifier ce plan »: reasons, comment, cost, then « correction en cours » and the adapted request (real route, simulation). */
+async function expectReviseShot(page: Page) {
+  const version = { id: 'e2e-review-version', videoId: 'e2e-review-video', title: 'Vidéo E2E à corriger', status: 'generating', versionStatus: 'generating', processingStage: 'keyframing', createdAt: new Date().toISOString() };
+  const request = { shotNumber: 2, title: 'Arrêt face à la lagune', stage: 'keyframe', issues: ['blocking: car cut by the frame'], codes: ['cut_off'], url: null, canRetry: true, cost: { fcfa: 181, minutes: 2 }, revisionsLeft: 2, lastRevision: null };
+  await page.route((url) => url.pathname === '/api/versions', (route) => route.request().method() === 'GET' && !new URL(route.request().url()).searchParams.get('status')
+    ? route.fulfill({ json: { versions: [version] } }) : route.continue());
+  await page.route(`**/api/versions/${version.id}/refresh`, (route) => route.fulfill({ json: { id: version.id, status: 'generating', processingStage: 'awaiting_review', nextPollInSeconds: 120, reviewRequired: [request] } }));
+  await page.goto('/file-generation');
+  await page.getByRole('button', { name: 'Modifier ce plan' }).click({ timeout: 30_000 });
+  const launch = page.getByRole('button', { name: 'Lancer la correction' });
+  await expect(launch).toBeDisabled();
+  await expect(page.getByText('Coût de la correction : environ 181 FCFA, environ 2 min.')).toBeVisible();
+  await page.getByLabel('Voiture coupée ou mal cadrée').check();
+  await page.getByLabel('Précisez ce que vous voulez').fill('Je la veux entière, avec le logo RIMCO peint sur la porte.');
+  const sent = page.waitForRequest((call) => call.url().endsWith(`/api/versions/${version.id}/shots/2/review`) && call.method() === 'POST');
+  await launch.click();
+  expect((await sent).postDataJSON()).toEqual({ decision: 'revise', feedback: 'Je la veux entière, avec le logo RIMCO peint sur la porte.', reasons: ['framing'] });
+  await expect(page.getByText('Plan 2 · Arrêt face à la lagune : correction en cours')).toBeVisible();
+  await expect(page.getByRole('status').filter({ hasText: 'Votre demande a été adaptée aux règles de la marque' })).toContainText('Texte ou logo');
+}
+
+/** Keyframe board: the Studio box (« always » during the beta), then « Valider » and « Tout valider et lancer la vidéo ». */
+async function expectKeyframeBoard(page: Page) {
+  await page.goto('/');
+  const box = page.getByLabel(/Valider les images clés avant la vidéo/);
+  await expect(box).toBeChecked({ timeout: 30_000 });
+  await expect(box).toBeDisabled();
+  const version = { id: 'e2e-board', videoId: 'e2e-board-video', title: 'Vidéo E2E à valider', status: 'generating', versionStatus: 'generating', createdAt: new Date().toISOString() };
+  const shot = (shotNumber: number, title: string) => ({ shotNumber, title, action: 'Voiture qui roule · de gauche à droite · à vitesse normale · 5 s', url: null, state: 'to_approve', canRevise: true, revisionsLeft: 2, lastRevision: null, cost: { fcfa: 181, minutes: 2 } });
+  const board = { requestedAt: new Date().toISOString(), remindAt: new Date(Date.now() + 86_400_000).toISOString(), expiresAt: new Date(Date.now() + 172_800_000).toISOString(), shots: [shot(2, 'Arrêt face à la lagune'), shot(1, 'Arrivée sur le pont')] };
+  await page.route((url) => url.pathname === '/api/versions', (route) => route.request().method() === 'GET' && !new URL(route.request().url()).searchParams.get('status')
+    ? route.fulfill({ json: { versions: [version] } }) : route.continue());
+  await page.route(`**/api/versions/${version.id}/refresh`, (route) => route.fulfill({ json: { id: version.id, status: 'generating', processingStage: 'keyframe_approval', nextPollInSeconds: 120, keyframeApproval: board } }));
+  const approvals: unknown[] = [];
+  page.on('request', (request) => { if (request.url().endsWith(`/api/versions/${version.id}/keyframes/approve`)) approvals.push(request.postDataJSON()); });
+  await page.goto('/file-generation');
+  const section = page.locator(`#keyframes-${version.id}`);
+  await expect(section.getByRole('heading', { name: '2 images clés à valider' })).toBeVisible({ timeout: 30_000 });
+  // In the order of the film.
+  await expect(section.getByText(/^Plan \d · /)).toHaveText(['Plan 1 · Arrivée sur le pont', 'Plan 2 · Arrêt face à la lagune']);
+  await section.getByRole('button', { name: 'Valider', exact: true }).first().click();
+  await expect(section.getByRole('heading', { name: '1 image clé à valider' })).toBeVisible({ timeout: 30_000 });
+  await section.getByRole('button', { name: 'Tout valider et lancer la vidéo' }).click();
+  await expect(section.getByRole('heading', { name: 'Images clés validées : la vidéo démarre' })).toBeVisible({ timeout: 30_000 });
+  expect(approvals).toEqual([{ shots: [1] }, { shots: 'all' }]);
+}
+
 if (mockWithoutSupabase) {
   test('le studio de simulation est utilisable sans compte Supabase', async ({ page }) => {
     await page.goto('/');
@@ -204,6 +251,14 @@ if (mockWithoutSupabase) {
   test('pendant un conflit du brief, seul l’encadré permet de lancer', async ({ page }) => {
     test.setTimeout(90_000);
     await expectConflictBlocksMainButton(page);
+  });
+  test('« Modifier ce plan » envoie les motifs et le commentaire, puis montre la correction en cours', async ({ page }) => {
+    test.setTimeout(90_000);
+    await expectReviseShot(page);
+  });
+  test('la planche des images clés se valide plan par plan ou en un clic', async ({ page }) => {
+    test.setTimeout(90_000);
+    await expectKeyframeBoard(page);
   });
 } else {
   if (!adminPassword) throw new Error('E2E_ADMIN_PASSWORD doit être préparé par le setup global Playwright.');
@@ -283,5 +338,17 @@ if (mockWithoutSupabase) {
     test.setTimeout(90_000);
     await signIn(page, adminEmail, adminPassword);
     await expectConflictBlocksMainButton(page);
+  });
+
+  test('« Modifier ce plan » envoie les motifs et le commentaire, puis montre la correction en cours', async ({ page }) => {
+    test.setTimeout(90_000);
+    await signIn(page, adminEmail, adminPassword);
+    await expectReviseShot(page);
+  });
+
+  test('la planche des images clés se valide plan par plan ou en un clic', async ({ page }) => {
+    test.setTimeout(90_000);
+    await signIn(page, adminEmail, adminPassword);
+    await expectKeyframeBoard(page);
   });
 }

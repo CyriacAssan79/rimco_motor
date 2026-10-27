@@ -25,6 +25,8 @@ import {
 } from "@/core/versions/generation-tracker";
 import { GenerationProgress } from "@/components/generation-progress";
 import { FailedOutcome, ReadyOutcome } from "@/components/video-outcome";
+import { KeyframeBoard, type Board } from "@/components/keyframe-board";
+import { approvalBoxState, DEFAULT_KEYFRAME_APPROVAL_MODE, normalizeApprovalMode, type KeyframeApprovalMode } from "@/core/versions/keyframe-approval";
 import type { BillingSummary, StudioSettings } from "@/core/versions/outcome";
 import { preparationProgress } from "@/core/versions/progress";
 
@@ -37,6 +39,9 @@ type Job = TrackedVersion & {
   validationStatus?: string | null;
   settings?: StudioSettings | null;
   billing?: BillingSummary | null;
+  keyframeApproval?: Board | null;
+  approvalState?: { expiredAt?: string } | null;
+  priceFcfa?: number | null;
   completedShots?: number;
   totalShots?: number;
   completedKeyframes?: number;
@@ -166,6 +171,9 @@ export function StudioComposer({ mode, showPrompt = false }: { mode: "mock" | "l
   /** « Relancer avec les mêmes réglages »: the form is filled, then submitted once the new state is rendered. */
   const [autoLaunch, setAutoLaunch] = useState(false);
   const [settingsNotice, setSettingsNotice] = useState("");
+  /** 27/10 · « Valider les images clés avant la vidéo »: brand setting, and the user's choice when it is free. */
+  const [approvalMode, setApprovalMode] = useState<KeyframeApprovalMode>(DEFAULT_KEYFRAME_APPROVAL_MODE);
+  const [approvalChoice, setApprovalChoice] = useState<boolean | null>(null);
   const formRef = useRef<HTMLFormElement>(null);
   const conflictRef = useRef<HTMLDivElement>(null);
   /** The director writes the storyboard before the video exists: shown as the « Préparation » step. */
@@ -244,8 +252,12 @@ export function StudioComposer({ mode, showPrompt = false }: { mode: "mock" | "l
   const job: Job | undefined = shownId
     ? tracker.snapshot.versions.find((version) => version.id === shownId)
     : undefined;
+  const approvalBox = approvalBoxState(approvalMode, tier);
+  const approvalChecked = approvalBox.locked ? approvalBox.checked : approvalChoice ?? approvalBox.checked;
   const jobStatus = job ? (job.versionStatus ?? job.status) : undefined;
   const jobRunning = Boolean(job && isVersionRunning(job));
+  // 27/10: keyframes not validated within 48 h: the video expired (shown like a failure, with its relaunch).
+  const jobExpired = Boolean(job && jobStatus === "cancelled" && (job.keyframeApproval?.expiredAt || job.approvalState?.expiredAt));
   // A ready video opened again: its signed URL comes from /refresh (the list carries no preview).
   const fetchedReady = useRef(new Set<string>());
   useEffect(() => {
@@ -305,6 +317,15 @@ export function StudioComposer({ mode, showPrompt = false }: { mode: "mock" | "l
   useEffect(() => {
     if (pendingLaunch) conflictRef.current?.scrollIntoView({ block: "center" });
   }, [pendingLaunch]);
+
+  useEffect(() => {
+    let active = true;
+    fetch("/api/settings/keyframe-approval")
+      .then(async (response) => (response.ok ? response.json() : null))
+      .then((data) => { if (active && data) setApprovalMode(normalizeApprovalMode(data.mode)); })
+      .catch(() => undefined);
+    return () => { active = false; };
+  }, []);
 
   useEffect(() => {
     if (!autoLaunch || busy || assetsLoading) return;
@@ -560,6 +581,7 @@ export function StudioComposer({ mode, showPrompt = false }: { mode: "mock" | "l
         tier,
         durationS,
         overlayLogo: true,
+        keyframeApproval: approvalChecked,
         ...(audioAssetId ? { audioAssetId } : {}),
         castAssetIds: castIds,
         castDescription:
@@ -689,7 +711,7 @@ export function StudioComposer({ mode, showPrompt = false }: { mode: "mock" | "l
                         : "En cours"}
               </span>
             </div>
-            {(job.reconciliationRequired || jobStatus === "cancelled" || (jobRunning && job.error)) && (
+            {(job.reconciliationRequired || (jobStatus === "cancelled" && !jobExpired) || (jobRunning && job.error)) && (
               <p className="mt-2 text-xs leading-5 text-[#55545a]">
                 {job.reconciliationRequired
                   ? (job.error ??
@@ -716,7 +738,15 @@ export function StudioComposer({ mode, showPrompt = false }: { mode: "mock" | "l
                 onSubmitted={() => void tracker.reload()}
               />
             )}
-            {jobStatus === "failed" && !job.reconciliationRequired && (
+            {job.keyframeApproval && jobRunning && (
+              <KeyframeBoard
+                versionId={job.id}
+                board={job.keyframeApproval}
+                priceFcfa={job.estimatedPriceFcfa ?? job.priceFcfa}
+                onChanged={() => tracker.resolveReview(job.id)}
+              />
+            )}
+            {(jobStatus === "failed" || jobExpired) && !job.reconciliationRequired && (
               <FailedOutcome
                 outcome={job}
                 onRelaunch={job.settings && !launchBlocked ? () => { tracker.markSeen(job.id); applySettings(job.settings!, true); } : undefined}
@@ -1245,6 +1275,25 @@ export function StudioComposer({ mode, showPrompt = false }: { mode: "mock" | "l
               {durationS + 2} s.
             </p>
           </fieldset>
+          {approvalBox.visible && (
+            <label className="mt-4 flex min-h-11 items-start gap-2 text-xs text-[#242428]">
+              <input
+                type="checkbox"
+                checked={approvalChecked}
+                disabled={approvalBox.locked}
+                onChange={(event) => setApprovalChoice(event.target.checked)}
+                className="mt-0.5 size-4 accent-[#c51e1c]"
+              />
+              <span>
+                <span className="font-semibold">Valider les images clés avant la vidéo</span>
+                <span className="block text-[#626269]">
+                  {approvalBox.locked
+                    ? "Demandé par votre marque : les vidéos des plans, l’étape payante, attendent votre validation."
+                    : "Les vidéos des plans, l’étape payante, attendent votre validation des images clés."}
+                </span>
+              </span>
+            </label>
+          )}
           {mode === "live" && modelsError && (
             <p
               role="alert"

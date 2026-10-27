@@ -3,9 +3,20 @@
 import { useEffect, useState } from "react";
 import { formatFcfa } from "@/core/pricing";
 import { describeDefects } from "@/core/verification/defects";
-import type { ReviewRequest } from "@/core/verification/loop";
+import { REVISION_REASON_IDS, REVISION_REASONS, USER_FEEDBACK_MAX_LENGTH, type ReviewRequest, type RevisionReason } from "@/core/verification/loop";
 
-type Viewed = { src: string; kind: "image" | "video"; label: string };
+/** Requests adapted to the brand rules, shown with the corrected shot (same wording as the Studio brief). */
+export function AdaptedRequests({ conflicts, title = "Votre demande a été adaptée aux règles de la marque" }: { conflicts: string[]; title?: string }) {
+  if (!conflicts.length) return null;
+  return (
+    <div role="status" className="mt-2 rounded-md border border-[#e7d7b9] bg-[#fbf6ed] p-3 text-xs leading-5 text-[#765d39]">
+      <p className="font-semibold">{title}</p>
+      <ul className="mt-1 list-disc space-y-0.5 pl-4">{conflicts.map((conflict) => <li key={conflict}>{conflict}</li>)}</ul>
+    </div>
+  );
+}
+
+export type Viewed = { src: string; kind: "image" | "video"; label: string };
 
 /** Relaunch cost: FCFA for everyone, dollars added for an administrator only (sent by the server by role). */
 export function relaunchCostText(cost: NonNullable<ReviewRequest["cost"]>) {
@@ -13,8 +24,66 @@ export function relaunchCostText(cost: NonNullable<ReviewRequest["cost"]>) {
   return `environ ${formatFcfa(cost.fcfa)}${usd}, environ ${cost.minutes} min`;
 }
 
+/**
+ * « Modifier ce plan » (27/10): closed-list reasons and/or a comment (400 characters), the cost in FCFA, then
+ * « Lancer la correction ». Shared by the decision panel and the keyframe board.
+ */
+export function ReviseShotForm({ versionId, shotNumber, cost, onSent, onCancel }: { versionId: string; shotNumber: number; cost?: ReviewRequest["cost"]; onSent: (conflicts: string[]) => void; onCancel: () => void }) {
+  const [reasons, setReasons] = useState<RevisionReason[]>([]);
+  const [feedback, setFeedback] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      const response = await fetch(`/api/versions/${versionId}/shots/${shotNumber}/review`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ decision: "revise", feedback: feedback.trim(), reasons }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error ?? "La correction n’a pas pu être lancée.");
+      onSent(Array.isArray(data.feedbackConflicts) ? data.feedbackConflicts : []);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "La correction n’a pas pu être lancée.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <form onSubmit={(event) => void submit(event)} className="space-y-3 rounded-md border border-[#e7c9c6] bg-[#fffafa] p-3">
+      <fieldset>
+        <legend className="text-xs font-semibold text-[#242428]">Qu’est-ce qui ne va pas ?</legend>
+        <div className="mt-2 grid gap-1 sm:grid-cols-2">
+          {REVISION_REASON_IDS.map((reason) => (
+            <label key={reason} className="flex min-h-11 cursor-pointer items-center gap-2 text-xs text-[#242428]">
+              <input type="checkbox" checked={reasons.includes(reason)} onChange={() => setReasons((current) => current.includes(reason) ? current.filter((value) => value !== reason) : [...current, reason])} className="size-4 accent-[#c51e1c]" />
+              {REVISION_REASONS[reason].fr}
+            </label>
+          ))}
+        </div>
+      </fieldset>
+      <label className="grid gap-1 text-xs font-semibold text-[#242428]">
+        Précisez ce que vous voulez
+        <textarea value={feedback} onChange={(event) => setFeedback(event.target.value)} maxLength={USER_FEEDBACK_MAX_LENGTH} rows={3} placeholder="Ex. la voiture est coupée à gauche : je la veux entière, arrivant de la droite vers la caméra." className="rounded-md border border-[#d2cec6] bg-white p-2 text-xs font-normal outline-none focus:border-[#c51e1c]" />
+        <span className="text-xs font-normal text-[#626269]">{feedback.length}/{USER_FEEDBACK_MAX_LENGTH} caractères · les règles de la marque restent appliquées.</span>
+      </label>
+      {cost && <p className="text-xs text-[#55545a]">Coût de la correction : {relaunchCostText(cost)}.</p>}
+      {error && <p role="alert" className="text-xs text-[#9d352e]">{error}</p>}
+      <div className="flex flex-wrap gap-2">
+        <button type="submit" disabled={busy || (!reasons.length && !feedback.trim())} className="min-h-11 rounded-full bg-[#c51e1c] px-4 text-xs font-semibold text-white disabled:opacity-50">
+          {busy ? "Envoi au réalisateur…" : "Lancer la correction"}
+        </button>
+        <button type="button" onClick={onCancel} className="min-h-11 rounded-full border border-[#d8d4cd] bg-white px-4 text-xs font-semibold text-[#242428]">Annuler</button>
+      </div>
+    </form>
+  );
+}
+
 /** Full-screen view of a refused image, a clip or a reference photo; Escape or a click outside closes it. */
-function FullScreen({ viewed, onClose }: { viewed: Viewed; onClose: () => void }) {
+export function FullScreen({ viewed, onClose }: { viewed: Viewed; onClose: () => void }) {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
     window.addEventListener("keydown", onKey);
@@ -34,7 +103,7 @@ function FullScreen({ viewed, onClose }: { viewed: Viewed; onClose: () => void }
   );
 }
 
-function Thumbnail({ src, label, onOpen }: { src: string | null; label: string; onOpen: (viewed: Viewed) => void }) {
+export function Thumbnail({ src, label, onOpen }: { src: string | null; label: string; onOpen: (viewed: Viewed) => void }) {
   return (
     <figure className="min-w-0">
       {src ? (
@@ -66,10 +135,15 @@ export function ShotReviewPanel({
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [viewed, setViewed] = useState<Viewed | null>(null);
-  if (!items.length) return null;
+  /** « Modifier ce plan »: the open form, and the corrections sent (kept in the card until the shot comes back). */
+  const [editing, setEditing] = useState<number | null>(null);
+  const [sent, setSent] = useState<Array<{ shotNumber: number; title: string; conflicts: string[] }>>([]);
+  const shownSent = sent.filter((entry) => !items.some((item) => item.shotNumber === entry.shotNumber));
+  if (!items.length && !shownSent.length) return null;
   const ordered = [...items].sort((left, right) => left.shotNumber - right.shotNumber || (left.stage === "keyframe" ? -1 : 1));
 
-  async function decide(shotNumber: number, decision: "accept" | "retry") {
+  async function decide(item: ReviewRequest, decision: "accept") {
+    const shotNumber = item.shotNumber;
     setBusy(`${shotNumber}-${decision}`);
     setError("");
     try {
@@ -110,11 +184,19 @@ export function ShotReviewPanel({
       className="mt-4 scroll-mt-24 rounded-md border border-[#e7c9c6] bg-[#fdf4f3] p-3 md:p-4"
     >
       <h3 id={`review-${versionId}`} className="text-sm font-semibold text-[#831810]">
-        {ordered.length > 1 ? `${ordered.length} décisions requises` : "Décision requise"}
+        {ordered.length > 1 ? `${ordered.length} décisions requises` : ordered.length ? "Décision requise" : "Correction en cours"}
       </h3>
-      <p className="mt-1 text-xs leading-5 text-[#6f4a46]">
+      {ordered.length > 0 && <p className="mt-1 text-xs leading-5 text-[#6f4a46]">
         Le contrôle automatique refuse encore {ordered.length > 1 ? "ces plans" : "ce plan"} après les corrections du réalisateur. Rien n’est animé ni monté sans votre accord.
-      </p>
+      </p>}
+      {shownSent.map((entry) => (
+        <article key={`sent-${entry.shotNumber}`} aria-live="polite" className="mt-3 rounded border border-[#eeeae4] bg-white p-3 text-xs leading-5 text-[#55545a]">
+          <p className="text-sm font-semibold text-[#242428]">Plan {entry.shotNumber} · {entry.title} : correction en cours</p>
+          <p className="mt-1">Le réalisateur corrige le plan selon vos indications, puis une nouvelle image clé est produite et contrôlée. Si elle est encore refusée, elle reviendra ici.</p>
+          <AdaptedRequests conflicts={entry.conflicts} />
+          <button type="button" onClick={() => setSent((current) => current.filter((item) => item.shotNumber !== entry.shotNumber))} className="mt-1 min-h-11 text-xs font-semibold text-[#55545a] underline underline-offset-2">Masquer</button>
+        </article>
+      ))}
       <div className="mt-3 grid gap-3">
         {ordered.map((item) => {
           const defects = describeDefects(item.issues, item.codes);
@@ -173,19 +255,42 @@ export function ShotReviewPanel({
                 )}
                 <div className="mt-4 space-y-3">
                   <div>
-                    <button type="button" disabled={busy !== null} onClick={() => void decide(item.shotNumber, "accept")} className="min-h-11 rounded-full border border-[#d8d4cd] bg-white px-4 text-xs font-semibold text-[#242428] disabled:opacity-50">
+                    <button type="button" disabled={busy !== null} onClick={() => void decide(item, "accept")} className="min-h-11 rounded-full border border-[#d8d4cd] bg-white px-4 text-xs font-semibold text-[#242428] disabled:opacity-50">
                       {busy === `${item.shotNumber}-accept` ? "Enregistrement…" : "Accepter ce plan"}
                     </button>
                     <p className="mt-1 text-xs leading-5 text-[#55545a]">Le plan est gardé tel quel ; le valideur verra l’avertissement.</p>
                   </div>
-                  {item.canRetry && (
+                  {item.stage === "keyframe" && item.canRetry && editing !== item.shotNumber && (
                     <div>
-                      <button type="button" disabled={busy !== null} onClick={() => void decide(item.shotNumber, "retry")} className="min-h-11 rounded-full bg-[#c51e1c] px-4 text-xs font-semibold text-white disabled:opacity-50">
-                        {busy === `${item.shotNumber}-retry` ? "Envoi au réalisateur…" : "Relancer avec le réalisateur"}
+                      <button type="button" disabled={busy !== null} onClick={() => setEditing(item.shotNumber)} className="min-h-11 rounded-full bg-[#c51e1c] px-4 text-xs font-semibold text-white disabled:opacity-50">
+                        Modifier ce plan
                       </button>
                       <p className="mt-1 text-xs leading-5 text-[#55545a]">
-                        Le réalisateur corrige le plan : nouvelle image clé et nouveau contrôle, puis la vidéo du plan{item.cost ? ` ; ${relaunchCostText(item.cost)}` : ""}.
+                        Le réalisateur corrige le plan selon vos indications : nouvelle image clé et nouveau contrôle, puis la vidéo du plan{item.cost ? ` ; ${relaunchCostText(item.cost)}` : ""}.
+                        {item.revisionsLeft != null ? ` ${item.revisionsLeft} modification${item.revisionsLeft > 1 ? "s" : ""} possible${item.revisionsLeft > 1 ? "s" : ""} pour ce plan.` : ""}
                       </p>
+                    </div>
+                  )}
+                  {item.stage === "keyframe" && editing === item.shotNumber && (
+                    <ReviseShotForm
+                      versionId={versionId}
+                      shotNumber={item.shotNumber}
+                      cost={item.cost}
+                      onCancel={() => setEditing(null)}
+                      onSent={(conflicts) => {
+                        setSent((current) => [...current.filter((entry) => entry.shotNumber !== item.shotNumber), { shotNumber: item.shotNumber, title: item.title, conflicts }]);
+                        setEditing(null);
+                        onChanged();
+                      }}
+                    />
+                  )}
+                  {item.stage === "keyframe" && !item.canRetry && item.revisionsLeft === 0 && (
+                    <p className="text-xs leading-5 text-[#55545a]">Les modifications prévues pour ce plan sont utilisées : acceptez-le tel quel ou annulez la vidéo.</p>
+                  )}
+                  {item.lastRevision && (
+                    <div className="text-xs leading-5 text-[#55545a]">
+                      {item.lastRevision.feedback && <p>Votre dernière demande : « {item.lastRevision.feedback} »</p>}
+                      <AdaptedRequests conflicts={item.lastRevision.conflicts} title="Votre dernière demande a été adaptée aux règles de la marque" />
                     </div>
                   )}
                 </div>

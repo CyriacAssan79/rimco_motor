@@ -108,3 +108,15 @@ export function videoCostCapCheck(plan: { nominal: VideoCostBreakdown; worstCase
   if (capUsd === undefined) return { ok: true };
   return checkVideoCostCap(mode === 'worst_case' ? plan.worstCase : plan.nominal, capUsd, mode);
 }
+
+/**
+ * « Modifier ce plan » (27/10): a human correction is accepted only if the video stays under the cap, counting what
+ * is already engaged (charged + reserved) and, in `worst_case` mode, at least the worst case planned at launch.
+ * The message names no amount: a collaborator never sees provider costs.
+ */
+export function revisionCapCheck(input: { capUsd: number | undefined; mode: VideoCostCapMode; engagedUsd: number; plannedWorstCaseUsd: number | null; revisionUsd: number }): { ok: true } | { ok: false; message: string } {
+  if (input.capUsd === undefined) return { ok: true };
+  const base = input.mode === 'worst_case' ? Math.max(input.engagedUsd, input.plannedWorstCaseUsd ?? 0) : input.engagedUsd;
+  if (base + input.revisionUsd <= input.capUsd + 1e-9) return { ok: true };
+  return { ok: false, message: 'Cette modification dépasserait le plafond de coût fixé pour une vidéo. Acceptez le plan tel quel ou annulez la vidéo ; l’administrateur peut relever le plafond.' };
+}

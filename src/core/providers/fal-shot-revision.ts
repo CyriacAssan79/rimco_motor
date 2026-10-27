@@ -1,4 +1,5 @@
 import { createFalClient } from '@fal-ai/client';
+import { z } from 'zod';
 import { env } from '@/env';
 import { shotRevisionSchema, type ShotRevision } from '@/core/verification/loop';
 import { buildFalLlmInput, FAL_LLM_ENDPOINT, llmResponseCost, parseLlmFields } from './fal-llm';
@@ -24,7 +25,10 @@ export async function submitShotRevision(input: { prompt: string; systemPrompt: 
 export type ShotRevisionState =
   | { status: 'pending' }
   | { status: 'failed'; costUsd: null }
-  | { status: 'ready'; costUsd: number | null; revision: ShotRevision | null };
+  | { status: 'ready'; costUsd: number | null; revision: ShotRevision | null; feedbackConflicts: string[] };
+
+/** The shot fields, plus the director's French sentences when the user's request was adapted (read apart, never applied). */
+const conflictsSchema = z.object({ feedbackConflicts: z.array(z.string().max(400)).max(5).optional().catch(undefined) }).passthrough();
 
 /** `revision: null` = the director answered (and was paid) but not with a valid shot: the shot keeps its text. */
 export async function readShotRevision(requestId: string, apiKey: string): Promise<ShotRevisionState> {
@@ -34,5 +38,5 @@ export async function readShotRevision(requestId: string, apiKey: string): Promi
   if (value === 'FAILED') return { status: 'failed', costUsd: null };
   if (value !== 'COMPLETED') return { status: 'pending' };
   const result = await client.queue.result(FAL_LLM_ENDPOINT, { requestId });
-  return { status: 'ready', costUsd: llmResponseCost(result), revision: parseLlmFields(result, shotRevisionSchema) };
+  return { status: 'ready', costUsd: llmResponseCost(result), revision: parseLlmFields(result, shotRevisionSchema), feedbackConflicts: parseLlmFields(result, conflictsSchema)?.feedbackConflicts ?? [] };
 }

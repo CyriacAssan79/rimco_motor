@@ -18,6 +18,10 @@ type CostRow = {
   /** 26/10: planned at launch, in USD: one attempt of everything, and every automatic retry used. */
   nominal_cost_usd?: number;
   worst_case_cost_usd?: number | null;
+  /** 27/10: keyframe board: seconds waited before the launch, shots modified, expiry. */
+  keyframe_approval_wait_seconds?: number | null;
+  keyframe_modified_shots?: number | null;
+  keyframe_approval_expired?: boolean;
 };
 
 /** Margin of a line: nothing for a released line (not billed, nothing spent), « En cours » while reserved. */
@@ -73,7 +77,7 @@ export function CostDashboard() {
   const billed = selectedChargedRows.reduce((sum, row) => sum + Number(row.price_fcfa ?? 0), 0);
 
   function exportCsv() {
-    const columns: (keyof CostRow)[] = ['title', 'version_id', 'kind', 'seconds', 'price_fcfa', 'cost_real_fcfa', 'cost_eur', 'margin_fcfa', 'nominal_cost_usd', 'worst_case_cost_usd', 'status', 'created_at'];
+    const columns: (keyof CostRow)[] = ['title', 'version_id', 'kind', 'seconds', 'price_fcfa', 'cost_real_fcfa', 'cost_eur', 'margin_fcfa', 'nominal_cost_usd', 'worst_case_cost_usd', 'keyframe_approval_wait_seconds', 'keyframe_modified_shots', 'keyframe_approval_expired', 'status', 'created_at'];
     const csv = [columns.map(csvCell).join(';'), ...selectedRows.map((row) => columns.map((key) => csvCell(row[key])).join(';'))].join('\r\n');
     const blobUrl = URL.createObjectURL(new Blob(['\ufeff', csv], { type: 'text/csv;charset=utf-8' }));
     const link = document.createElement('a');

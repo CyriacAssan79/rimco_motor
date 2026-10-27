@@ -1,5 +1,47 @@
 # Décisions
 
+## Validation des images clés avant la vidéo (P2, 2026-10-27)
+
+- **Constat** : une image clé acceptée par le juge partait en animation automatiquement ; l'humain ne voyait que les images refusées.
+- **Décision** (étape 5 de l'architecture : deux validations humaines bon marché avant l'étape coûteuse) :
+  - **Réglage par marque** dans l'Admin (`brands.keyframe_approval_mode`, migration `0037`) :
+    - `off` : comportement d'avant ;
+    - `optional` : une case dans le Studio, décochée par défaut ;
+    - `premium_default` : la case est cochée par défaut en Premium ;
+    - `always` : validation obligatoire. **C'est la valeur par défaut, et celle de RIMCO pendant la bêta.**
+
+    Avant la migration, l'application applique `always` sans rien casser. Dans le Studio, la case « Valider les images clés avant la vidéo » suit ce réglage : cochée et grisée en `always`, absente en `off`. Le choix est figé au lancement (`brief_json.keyframeApproval`), et le réglage de la marque a le dernier mot.
+  - **Planche** : quand toutes les images clés sont prêtes, l'animation attend, à l'étape « Votre validation ». La planche montre les images dans l'ordre du film, en grand et en plein écran au clic. Pour chaque plan, elle affiche le titre, l'action en français (tirée des listes fermées : type de plan, sens, vitesse, durée) et les photos du véhicule et du lieu. Actions :
+    - « Valider » ou « Modifier ce plan », plan par plan ;
+    - **« Tout valider et lancer la vidéo »**, en un clic.
+
+    La vidéo part quand le **dernier** plan est validé, en une seule soumission même avec deux onglets (verrou de soumission existant). Une image modifiée sur la planche doit être validée à nouveau ; son image de fin éventuelle est retirée, et le plan est animé depuis son image de départ.
+  - **Stockage** : chaque validation est une entrée « human_approve » dans `verification_history`. Il n'y a pas de nouvelle colonne pour les plans.
+  - **Attente** :
+    - une notification « action requise » à l'ouverture de la planche ;
+    - un rappel à 24 h ;
+    - **à 48 h, expiration** : réservations libérées, rien facturé, **images clés conservées**, vidéo annulée avec le message « Images clés non validées sous 48 h ».
+
+    Le rappel et l'expiration sont appliqués à chaque rafraîchissement, donc dès qu'un onglet est ouvert, et par le cron. Ils s'affichent en bandeau (type « expired » ajouté par `0037`).
+  - **Chrono** : il est suspendu pendant la validation. Cette attente n'est comptée ni dans les durées, ni dans l'estimation.
+  - **Mesures enregistrées pour chaque vidéo** : temps d'attente de validation (`waitSeconds`), nombre de plans modifiés sur la planche (`modifiedShots`) et expiration. Elles figurent dans l'export CSV du suivi de consommation, pour décider, après la bêta, s'il faut passer à `premium_default`.
+  - **Coût** : aucun appel supplémentaire si tout est validé. Une modification coûte comme dans P1. Le délai machine ne change pas, car l'animation attendait déjà toutes les images clés.
+- **Évolution prévue : « Reprendre la vidéo » après expiration.** Il faut recréer les réservations du clip et de ses contrôles, revérifier le plafond (`VIDEO_COST_CAP_USD` / `VIDEO_COST_CAP_MODE`), puis revenir sur la planche sans refaire les images. C'est plus qu'un effort S : pour l'instant, une vidéo expirée se relance avec les mêmes réglages, avec un nouveau storyboard et de nouvelles images.
+
+## « Modifier ce plan » sur une image clé (P1, partie image clé, 2026-10-27)
+
+- **Décision** : sur le panneau de décision, et sur la planche de P2, « Modifier ce plan » remplace la relance sans commentaire.
+  - **Ce que l'utilisateur saisit** : des cases cochées dans une liste fermée, traduites en anglais pour le réalisateur, et/ou un commentaire de 400 caractères au plus. Il faut au moins l'un des deux.
+  - **Le commentaire est une donnée** : il est nettoyé (sans `< > { } [ ]` ni caractères de contrôle) et transmis au réalisateur seul, entre balises `<user_feedback>`. Il ne va jamais dans un prompt d'image ou de vidéo : l'image corrigée ne reçoit que les défauts du juge. Le message système du réalisateur rappelle les règles verrouillées.
+  - **Ce que le réalisateur peut changer** : seulement les champs déjà modifiables (`applyShotRevision`), dans la matrice (`keepWithinMatrix`), sans manœuvre interdite (`forbiddenShotText`).
+  - **Demande interdite** (logo, texte, dérapage, nuit sur un lieu de jour, autre véhicule…) : l'intention est gardée par un moyen autorisé. L'utilisateur voit l'encadré « Votre demande a été adaptée aux règles de la marque », alimenté par la liste fermée tout de suite, puis complété par les phrases du réalisateur (`feedbackConflicts`).
+  - **Limite** : `HUMAN_REVISIONS_PER_SHOT = 2` modifications humaines par plan, en plus des corrections automatiques (la relance sans commentaire compte dans ce budget). Au-delà, seuls « Accepter » et « Annuler la vidéo » restent. Avec `MAX_KEYFRAME_ATTEMPTS = 6` (contrainte de la migration 0033) : 1 essai + 2 corrections automatiques + 2 humaines = 5. **Aucune migration** n'est donc nécessaire pour cette partie.
+  - **Coût** : en FCFA, avec la même conversion et la même majoration que le reste de l'application (dollars pour l'admin seulement). Il est réservé avant tout appel : environ 181 FCFA en Standard et Pro, environ 212 FCFA en Premium. Le plafond de coût de la vidéo est vérifié avant toute réservation (coût engagé + cette modification ; en mode `worst_case`, au moins le pire cas prévu au lancement). En cas de dépassement, le message ne donne aucun montant.
+  - **Historique** : chaque modification est enregistrée dans `verification_history` (`human_revise`, commentaire nettoyé, cases, étendue, conflits).
+  - **Simulation** : la route répond désormais (correction simulée, sans appel) au lieu de renvoyer 409.
+  - **Reprise d'un clip refusé** : « Refaire la vidéo de ce plan » garde l'image clé validée ; « Refaire l'image clé puis la vidéo » réserve aussi une nouvelle image et son contrôle. Dans les deux cas, le réalisateur adapte le plan avant la nouvelle animation. Le coût du nouveau clip a sa propre ligne interne du journal (`ai_model_id` nul, prix client nul), soldée quand Fal livre le clip ; il n'est donc ni confondu avec la réservation initiale ni facturé une seconde fois au client. La reprise conserve l'ancien MP4 et utilise un suffixe `redo-N` unique. Les états et l'historique existants suffisent : aucune migration n'est requise.
+  - **Reprise d'un seul plan** : l'orchestrateur soumet les plans encore en attente même si les autres ont déjà leur identifiant Fal. La liste des plans déjà soumis reste protégée par l'état de soumission atomique.
+
 ## Corrections légères de l'audit UX (U6, 2026-10-26)
 
 Seulement des corrections d'affichage, sans changement de logique métier, de données ni de coût. Captures avant/après dans `docs/audit-ux/u6/`. Le détail est en fin de `docs/AUDIT-UX-2026-10-26.md`.

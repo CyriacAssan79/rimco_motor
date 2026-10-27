@@ -10,7 +10,7 @@ export async function GET() {
     const actor = await getActor();
     if (env.PROVIDERS_MODE === 'mock' && !env.NEXT_PUBLIC_SUPABASE_URL) return NextResponse.json({ notifications: [], unread: 0 });
     const supabase = await createSupabaseServerClient();
-    const { data, error } = await supabase.from('notifications').select('id,type,message,version_id,read_at,created_at').eq('user_id', actor.id).order('created_at', { ascending: false }).limit(20);
+    const { data, error } = await supabase.from('notifications').select('id,type,message,version_id,dedupe_key,read_at,created_at').eq('user_id', actor.id).order('created_at', { ascending: false }).limit(20);
     if (error) throw error;
     return NextResponse.json({ notifications: data ?? [], unread: (data ?? []).filter((item) => !item.read_at).length });
   } catch (error) { return errorResponse(error); }

@@ -2,19 +2,20 @@
  * Notification center of the browser (bell, badge « À valider », banner, tab title). Reloaded every 60 s while
  * the tab is visible, and at once when the video follow-up sees a change: no page change needed.
  */
-export type AppNotification = { id: string; type: string; message: string; version_id?: string | null; read_at?: string | null; created_at: string };
+export type AppNotification = { id: string; type: string; message: string; version_id?: string | null; dedupe_key?: string | null; read_at?: string | null; created_at: string };
 export type CenterSnapshot = { notifications: AppNotification[]; pendingReviewCount: number; loaded: boolean };
 
 export const NOTIFICATIONS_POLL_MS = 60_000;
 export const BASE_TITLE = 'RIMCO Studio';
 
+/** Shown in the banner: decisions and validations to take, and an expired video (27/10). */
 export function unreadActions(notifications: AppNotification[]) {
-  return notifications.filter((item) => item.type === 'action_required' && !item.read_at);
+  return notifications.filter((item) => (item.type === 'action_required' || item.type === 'expired') && !item.read_at);
 }
 
 /** « (1) Action requise · RIMCO Studio » while a decision waits, « Vidéo prête · RIMCO Studio » for an unread ready video. */
 export function documentTitle(notifications: AppNotification[]) {
-  const actions = unreadActions(notifications).length;
+  const actions = notifications.filter((item) => item.type === 'action_required' && !item.read_at).length;
   if (actions) return `(${actions}) Action requise · ${BASE_TITLE}`;
   if (notifications.some((item) => item.type === 'ready' && !item.read_at)) return `Vidéo prête · ${BASE_TITLE}`;
   return BASE_TITLE;
@@ -22,7 +23,8 @@ export function documentTitle(notifications: AppNotification[]) {
 
 /** Where a notification leads: the decision panel of the shot, the library, or the validation queue. */
 export function notificationHref(item: AppNotification) {
-  if (item.type === 'action_required' && item.version_id) return `/file-generation?version=${item.version_id}#decision-${item.version_id}`;
+  if (item.type === 'action_required' && item.version_id) return `/file-generation?version=${item.version_id}#${item.dedupe_key?.startsWith('keyframe_approval') ? 'keyframes' : 'decision'}-${item.version_id}`;
+  if (item.type === 'expired' && item.version_id) return `/bibliotheque?video=${item.version_id}`;
   if (item.type === 'review_requested') return '/a-valider';
   if (['ready', 'approved', 'rejected'].includes(item.type)) return item.version_id ? `/bibliotheque?video=${item.version_id}` : '/bibliotheque';
   return null;
