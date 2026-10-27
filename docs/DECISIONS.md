@@ -1,5 +1,24 @@
 # Décisions
 
+## Déconnexion et suppression d’un membre (2026-10-27)
+
+- « Se déconnecter » : le bouton « Quitter » du menu n’était relié à rien et absent sur mobile. La route `/api/auth/signout` ferme la session Supabase, puis la page de connexion est rechargée entièrement (aucun état du compte précédent ne reste en mémoire). Bouton en bas du menu latéral (ordinateur) et dans la barre du haut (mobile).
+- « Supprimer » un membre, réservé à l’administrateur (onglet Équipe), après confirmation. Jamais son propre compte, jamais le dernier administrateur actif.
+- Membre sans historique (aucune vidéo, coût, validation, comparaison) : compte supprimé. Membre avec historique : le journal des coûts ne doit jamais changer, donc il reste l’auteur de ses vidéos et coûts, mais il est archivé : connexion bloquée définitivement, adresse e-mail libérée (remplacée par une adresse réservée `.invalid`), compte inactif et retiré de l’équipe (`profiles.deleted_at`, migration 0040).
+- Ordre de l’archivage : la connexion est bloquée d’abord, puis le membre est retiré de la liste ; en cas d’échec, il reste visible et l’administrateur peut réessayer.
+- En mode développement seulement, le badge Next.js est déplacé en bas à droite (`next.config.ts`) : il couvrait « Se déconnecter ».
+
+## Conducteur par défaut : plus de « voiture fantôme » (2026-10-27)
+
+- Constat : une voiture qui roule apparaissait vide. Ce n’était pas un hasard du modèle : sans personne demandée, l’appli exigeait un habitacle vide visible à travers les vitres, et le juge refusait tout conducteur.
+- Règle décidée avec le responsable : la voiture roule, ou s’arrête juste après un plan où elle roulait → un conducteur discret au volant (vu à travers la vitre, jamais en gros plan sur le visage). Voiture garée dès le départ, showroom ou plan de détail → l’habitacle peut rester vide.
+- Brief qui dit explicitement « sans personne » : pas de conducteur, mais pas d’habitacle vide visible non plus ; les vitres reflètent le ciel et le décor.
+- Personnes déjà choisies (fiche du réalisateur, casting) : ce sont elles qui occupent la voiture, rien n’est ajouté.
+- Le juge des images clés et des clips refuse désormais un siège conducteur visiblement vide dans une voiture qui roule (défaut bloquant).
+- La description du conducteur est un réglage de marque (`brands.default_driver_description`, migration 0039), figée dans la vidéo au lancement pour que tous les plans montrent la même personne. RIMCO : « one adult West African driver in neat smart-casual clothes, calm and natural ». Sans valeur, une description neutre est utilisée.
+- Les vidéos lancées avant ce changement gardent leur comportement (pas de `movingDriver` dans leur brief).
+- Évolution prévue : modifier la description du conducteur depuis l’Admin (aujourd’hui : éditeur SQL de Supabase). Coût : un conducteur visible peut causer quelques refus de plus du juge ; reprises et plafond inchangés.
+
 ## Correction · Durées Pro et reprise du montage (2026-10-27)
 
 - **Erreur observée** : le montage vérifiait encore une liste fermée de durées finales (7, 12, 17 ou 22 s). Un clip Pro peut durer 3 ou 4 s ; après désactivation d’un plan, le film peut donc avoir une autre durée légitime. Le contrat vérifie maintenant une durée de clips positive et finie, puis **exactement deux secondes de logo**. Le rendu FFmpeg d’un clip actif de 4 s produit bien un film de 6 s ; musique et durée affichée suivent les clips retenus.

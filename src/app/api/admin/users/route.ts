@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { HttpError, errorResponse, requireRole } from '@/core/auth/guards';
 import { createStorageAdminClient } from '@/core/storage/supabase';
 import { env } from '@/env';
+import { deleteMember } from '@/core/team/delete-member';
 const roleSchema = z.enum(['collaborateur','valideur','admin']);
 const createSchema = z.object({ email: z.string().trim().email().max(254), password: z.string().min(12).max(128), name: z.string().trim().min(2).max(120), role: roleSchema.default('collaborateur'), department: z.string().trim().min(1).max(100), brandId: z.string().uuid() });
 const patchSchema = z.object({ id: z.string().uuid(), name: z.string().trim().min(2).max(120).optional(), role: roleSchema.optional(), department: z.string().trim().min(1).max(100).optional(), brandId: z.string().uuid().nullable().optional(), isActive: z.boolean().optional() }).refine((v) => Object.keys(v).some((key) => key !== 'id'), { message: 'Aucune modification fournie.' });
@@ -11,7 +12,12 @@ export async function GET() {
     await requireRole('admin');
     if (env.PROVIDERS_MODE === 'mock' && !env.NEXT_PUBLIC_SUPABASE_URL) return NextResponse.json({ users: [{ id: '00000000-0000-4000-8000-000000000003', email: 'admin@rimco.local', name: 'Oury', role: 'admin', department: 'Direction', brandId: '00000000-0000-4000-8000-000000000001', isActive: true }] });
     const admin = createStorageAdminClient();
-    const [{ data: profiles, error }, { data: authUsers, error: authError }] = await Promise.all([admin.from('profiles').select('id,name,role,department,brand_id,is_active,created_at').order('created_at'), admin.auth.admin.listUsers({ page: 1, perPage: 1000 })]);
+    // Deleted members (0040) stay as authors of their videos and costs, but leave the team. Before 0040: everyone.
+    const listProfiles = async () => {
+      const current = await admin.from('profiles').select('id,name,role,department,brand_id,is_active,created_at').is('deleted_at', null).order('created_at');
+      return current.error ? admin.from('profiles').select('id,name,role,department,brand_id,is_active,created_at').order('created_at') : current;
+    };
+    const [{ data: profiles, error }, { data: authUsers, error: authError }] = await Promise.all([listProfiles(), admin.auth.admin.listUsers({ page: 1, perPage: 1000 })]);
     if (error || authError) throw new HttpError(503, 'Impossible de charger les comptes utilisateurs.');
     const emailById = new Map((authUsers?.users ?? []).map((user) => [user.id, user.email ?? '']));
     return NextResponse.json({ users: (profiles ?? []).map((profile) => ({ id: profile.id, email: emailById.get(profile.id) ?? '', name: profile.name, role: profile.role, department: profile.department, brandId: profile.brand_id, isActive: profile.is_active, createdAt: profile.created_at })) });
@@ -51,5 +57,15 @@ export async function PATCH(request: Request) {
     if (error || !profile) throw new HttpError(400, 'Impossible de modifier ce compte.');
     const { data: authUser } = await admin.auth.admin.getUserById(input.id);
     return NextResponse.json({ user: { id: profile.id, email: authUser.user?.email ?? '', name: profile.name, role: profile.role, department: profile.department, brandId: profile.brand_id, isActive: profile.is_active } });
+  } catch (error) { return errorResponse(error); }
+}
+const deleteSchema = z.object({ id: z.string().uuid() }).strict();
+/** « Supprimer » (admin only): deletion, or archive when the member has videos or costs (see core/team/delete-member). */
+export async function DELETE(request: Request) {
+  try {
+    const actor = await requireRole('admin');
+    const input = deleteSchema.parse(await request.json());
+    if (env.PROVIDERS_MODE === 'mock' && !env.NEXT_PUBLIC_SUPABASE_URL) return NextResponse.json({ id: input.id, mode: 'deleted' });
+    return NextResponse.json(await deleteMember(createStorageAdminClient(), actor, input.id));
   } catch (error) { return errorResponse(error); }
 }

@@ -345,6 +345,26 @@ if (mockWithoutSupabase) {
     test.setTimeout(90_000);
     await expectKeyframeBoard(page);
   });
+  test('« Se déconnecter » ferme la session et ramène à la page de connexion', async ({ page }) => {
+    test.setTimeout(90_000);
+    await page.goto('/');
+    await expect(page.getByRole('heading', { name: /^Bonjour / })).toBeVisible({ timeout: 60_000 });
+    const signOut = page.waitForRequest((request) => request.url().endsWith('/api/auth/signout') && request.method() === 'POST');
+    await page.getByRole('button', { name: 'Se déconnecter' }).filter({ visible: true }).first().click();
+    await signOut;
+    await expect(page).toHaveURL(/\/connexion$/, { timeout: 30_000 });
+  });
+  test('l’administrateur supprime un membre après confirmation', async ({ page }) => {
+    test.setTimeout(90_000);
+    await page.goto('/equipe');
+    const remove = page.getByRole('button', { name: 'Supprimer Oury' });
+    await expect(remove).toBeVisible({ timeout: 60_000 });
+    page.once('dialog', (dialog) => { expect(dialog.message()).toContain('Cette action est irréversible'); void dialog.accept(); });
+    const request = page.waitForRequest((item) => item.url().endsWith('/api/admin/users') && item.method() === 'DELETE');
+    await remove.click();
+    expect((await request).postDataJSON()).toEqual({ id: '00000000-0000-4000-8000-000000000003' });
+    await expect(page.getByText('Oury est supprimé.')).toBeVisible();
+  });
 } else {
   if (!adminPassword) throw new Error('E2E_ADMIN_PASSWORD doit être préparé par le setup global Playwright.');
 
