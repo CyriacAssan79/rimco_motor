@@ -223,7 +223,7 @@ async function expectConflictBlocksMainButton(page: Page) {
   await expect(generate).toBeEnabled({ timeout: 30_000 });
   await page.getByLabel('Description de la vidéo').fill('Une Haval H6 de nuit.');
   await generate.click();
-  await expect(page.getByText('Votre demande a été adaptée aux règles de la marque')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText('Votre demande a été adaptée')).toBeVisible({ timeout: 30_000 });
   await expect(generate).toBeDisabled();
   await expect(page.getByText('Choisissez d’abord dans l’encadré ci-dessus')).toBeVisible();
   await page.getByRole('button', { name: 'Modifier ma demande' }).click();
@@ -249,7 +249,7 @@ async function expectReviseShot(page: Page) {
   await launch.click();
   expect((await sent).postDataJSON()).toEqual({ decision: 'revise', feedback: 'Je la veux entière, avec le logo RIMCO peint sur la porte.', reasons: ['framing'] });
   await expect(page.getByText('Plan 2 · Arrêt face à la lagune : correction en cours')).toBeVisible();
-  await expect(page.getByRole('status').filter({ hasText: 'Votre demande a été adaptée aux règles de la marque' })).toContainText('Texte ou logo');
+  await expect(page.getByRole('status').filter({ hasText: 'Votre demande a été adaptée' })).toContainText('Texte ou logo');
 }
 
 /** Keyframe board: the Studio box (« always » during the beta), then « Valider » and « Tout valider et lancer la vidéo ». */

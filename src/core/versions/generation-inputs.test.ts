@@ -16,8 +16,12 @@ describe('generation inputs read back from the brief', () => {
     const titles = new Map([[uploadedPlace, 'Pont HKB'], [audio, 'Musique calme']]);
     expect(extractGenerationInputs(brief, titles)).toEqual({
       description: 'Une Haval H6 au Plateau.', vehicle: 'Haval H6 bleu', places: [curated.title, 'Pont HKB'],
-      cast: ['Awa'], lighting: 'Lumière du matin', mood: 'Premium', music: 'Musique calme',
+      cast: ['Awa'], lighting: 'Lumière du matin', mood: 'Premium', music: 'Musique calme', adaptations: [],
     });
+  });
+
+  it('reads back the adaptations accepted before launch (28/10)', () => {
+    expect(extractGenerationInputs({ briefAdaptations: ['Drift demandé : conduite dynamique et légale.', 42, ' '] }).adaptations).toEqual(['Drift demandé : conduite dynamique et légale.']);
   });
 
   it('only asks for titles of uploaded assets', () => {
@@ -26,7 +30,7 @@ describe('generation inputs read back from the brief', () => {
 
   it('stays readable for older or partial briefs', () => {
     expect(extractGenerationInputs({ location: 'Boulevard Latrille', user_direction: '', audioAssetId: null })).toEqual({
-      description: null, vehicle: null, places: ['Boulevard Latrille'], cast: [], lighting: null, mood: null, music: null,
+      description: null, vehicle: null, places: ['Boulevard Latrille'], cast: [], lighting: null, mood: null, music: null, adaptations: [],
     });
   });
 });

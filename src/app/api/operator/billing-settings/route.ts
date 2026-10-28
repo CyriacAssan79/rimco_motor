@@ -4,6 +4,7 @@ import { createStorageAdminClient } from '@/core/storage/supabase';
 import { env } from '@/env';
 import { BILLING_COLUMNS, BILLING_LABELS, billingSettingsPatchSchema, DEFAULT_BILLING_SETTINGS, settingsFromRow, type BillingSettings } from '@/core/billing/settings';
 import { changedFields, logPricingChanges } from '@/core/billing/change-log';
+import { availableCredits } from '@/core/billing/credits';
 
 /** Réglages de facturation par client (27/10) : réservés à l'opérateur KÔMIAN. */
 export async function GET() {
@@ -17,7 +18,9 @@ export async function GET() {
     ]);
     if (error) throw new HttpError(503, 'Les réglages ne sont pas disponibles : appliquez les migrations 0041 et 0042 dans Supabase.');
     const byClient = new Map((rows ?? []).map((row) => [row.client_id as string, row as Record<string, unknown>]));
-    return NextResponse.json({ clients: (clients ?? []).map((client) => ({ id: client.id, name: client.name, settings: settingsFromRow(byClient.get(client.id)) })) });
+    // 28/10 · le solde de chaque client est renvoyé ici : l'écran n'appelle plus /api/credits une fois par client.
+    const balances = await Promise.all((clients ?? []).map((client) => availableCredits(admin, client.id).catch(() => null)));
+    return NextResponse.json({ clients: (clients ?? []).map((client, index) => ({ id: client.id, name: client.name, settings: settingsFromRow(byClient.get(client.id)), availableFcfa: balances[index] ?? 0 })) });
   } catch (error) { return errorResponse(error); }
 }
 

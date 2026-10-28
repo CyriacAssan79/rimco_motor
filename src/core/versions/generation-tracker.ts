@@ -50,6 +50,8 @@ export type TrackerSnapshot = { versions: TrackedVersion[]; loaded: boolean; lis
 
 export const TICK_MS = 2_000;
 export const LIST_RELOAD_MS = 60_000;
+/** 28/10 · nothing to follow: the list is read again every 5 min (and at once when the tab becomes visible). */
+export const LIST_IDLE_RELOAD_MS = 5 * 60_000;
 /** A refresh in progress keeps its claim at most this long (request timeout 25 s), so a closed tab never blocks a version. */
 const CLAIM_MS = 30_000;
 const UNAVAILABLE = 'Le suivi est momentanément indisponible. Nouvelle tentative automatique.';
@@ -178,7 +180,8 @@ export function createGenerationTracker(deps: TrackerDeps) {
 
   function tick() {
     if (timer === null || !deps.isVisible()) return; // paused while the tab is hidden
-    if (deps.now() - lastListAt >= LIST_RELOAD_MS) void reload().then(refreshDue);
+    const idle = ![...versions.values()].some(needsRefresh);
+    if (deps.now() - lastListAt >= (idle ? LIST_IDLE_RELOAD_MS : LIST_RELOAD_MS)) void reload().then(refreshDue);
     refreshDue();
   }
 

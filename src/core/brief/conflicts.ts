@@ -16,14 +16,24 @@ const plain = (value: string) => value.normalize('NFD').replace(/[̀-ͯ]/g, '').
 const word = (pattern: string) => new RegExp(`(?<![a-z])(?:${pattern})(?![a-z])`);
 
 /** `lighting`: the Studio light chip (26/10, vérification « preambule »). */
-type BriefContext = { placeTimes: Array<PlaceTimeOfDay | null>; hasInteriorPhoto: boolean; lighting?: string; timeTransition?: boolean };
+/** `singleShot`: 28/10 · the 5 s preview films one shot only. */
+type BriefContext = { placeTimes: Array<PlaceTimeOfDay | null>; hasInteriorPhoto: boolean; lighting?: string; timeTransition?: boolean; singleShot?: boolean };
 type ConflictRule = { id: string; keywords: RegExp; applies?: (text: string, context: BriefContext) => boolean; message: string };
 
 const NIGHT = word('nuit|nocturne|night|soir|soiree');
 const DAY = word('plein jour|en journee|grand soleil|sunny|daylight|en matinee|le matin');
 const REVERSE = word('marche arriere|demi.tour|u.?turn|revers\\w*|recul\\w*');
+/** 28/10 · V1: the shots are joined by straight cuts; a day → night « transition » is a lighting order, not an effect. */
+const VISUAL_TRANSITION = word('fondus?|enchaine\\w*|crossfade|fade|morph\\w*|volet|transitions? (?:fluides?|douces?|visuelles?|entre (?:les )?(?:plans|scenes))');
+/** 28/10 · words that announce several scenes in one brief. */
+const SEVERAL_SCENES = word('plusieurs (?:plans|scenes|lieux|sequences)|(?:plan|scene|sequence) (?:\\d|deux|trois|suivante?)|(?:\\d|deux|trois|quatre) (?:plans|scenes|sequences)|(?:deuxieme|second|deuxieme|troisieme|dernier|derniere) (?:plan|scene|sequence)|autre (?:lieu|scene|decor)|changement de (?:lieu|decor)');
+
+export const CUTS_CONFLICT = 'Transition demandée entre les plans (fondu, enchaîné…) : en V1, les plans s’enchaînent en coupe franche ; aucun effet de transition n’est ajouté.';
+export const SINGLE_SHOT_CONFLICT = 'Plusieurs scènes décrites : l’aperçu de 5 s tourne un seul plan, celui de la scène principale. Choisissez 10 s ou plus pour filmer les autres scènes.';
 
 const RULES: ConflictRule[] = [
+  { id: 'cuts', keywords: VISUAL_TRANSITION, message: CUTS_CONFLICT },
+  { id: 'single_shot', keywords: SEVERAL_SCENES, applies: (_text, context) => context.singleShot === true, message: SINGLE_SHOT_CONFLICT },
   { id: 'drift', keywords: word('drift\\w*|derap\\w*|burn ?out|donut\\w*|tete.a.queue|glisse\\w*|frein a main|skid\\w*'), message: 'Drift ou dérapage demandé : remplacé par une conduite dynamique et légale qui garde l’énergie de la scène.' },
   { id: 'speed', keywords: word('course|rallye|racing|race|pleine vitesse|a fond|tres vite|exces de vitesse'), message: 'Vitesse excessive demandée : remplacée par une vitesse soutenue et légale, sur route dégagée seulement.' },
   { id: 'text', keywords: word('logo\\w*|slogan\\w*|texte\\w*|ecrit\\w*|inscription\\w*|lettrage|banniere\\w*|affiche\\w*|tag\\w*|graffiti\\w*'), message: 'Texte ou logo à l’image demandé : aucun texte n’est généré dans la scène ; le logo RIMCO est ajouté au montage.' },
@@ -96,6 +106,7 @@ export function cleanConflict(value: string): string {
 const RULE_MENTIONS: Record<string, RegExp> = {
   drift: /drift|derap/, speed: /vitesse|course|rallye/, text: /texte|logo|slogan|inscription/, night: /nuit|nocturne/,
   day: /jour|soleil/, interior: /habitacle|interieur|cockpit/, showroom: /showroom/, reverse: /marche arriere|demi.tour|recul/,
+  cuts: /coupe franche|fondu|enchain/, single_shot: /un seul plan|5 s/,
 };
 
 /** The director's conflicts, completed by the code's (deduplicated), at most 5. */

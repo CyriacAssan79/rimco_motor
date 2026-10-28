@@ -9,6 +9,14 @@ Détail : docs/specs/ROLES-CREDITS-2026-10-27.md et docs/DECISIONS.md (entrée �
 - Pas de service d'envoi d'e-mails : alertes dans l'application uniquement ; mot de passe provisoire généré par le serveur et changé à la première connexion.
 - Git : un agent peut pousser sa propre branche de travail (jamais main) pour ouvrir une PR ; la fusion reste faite par le responsable sur GitHub.
 
+## Décisions du 28/10/2026 · finitions V1 (prioritaires sur le reste de ce fichier)
+Détail : docs/DECISIONS.md (entrée « Finitions V1 avant livraison client »).
+- V1 livrée au client : pas de nouvelle fonctionnalité, seulement des finitions. Limites annoncées dans docs/LIMITATIONS-V1.md.
+- 5 s reste la durée par défaut (phase de test, crédits ménagés) : c'est un « aperçu » à un seul plan, nommé comme tel dans le Studio.
+- Pas de transition en V1 : les plans s'enchaînent en coupe franche, et l'interface le dit (Studio, détail de la vidéo, briefConflicts si un fondu est demandé).
+- Tout écart entre la demande et la vidéo est signalé à l'utilisateur avant le lancement (briefConflicts) et rappelé ensuite dans le détail de la vidéo (brief_json.briefAdaptations).
+- Pas de Vercel Pro : la relance chaque minute passe, si l'équipe l'active, par Supabase pg_cron + pg_net (supabase/ops/generations_every_minute.sql) vers /api/cron/reconcile?scope=generations.
+
 ## Rôle attendu
 Lead développeur full-stack senior Next.js (App Router), TypeScript, Tailwind CSS et Supabase, expérimenté sur la génération vidéo IA via fal.ai et la maîtrise des coûts d'API. Tu tranches seul, tu livres simple, testé et sécurisé par défaut, et tu documentes chaque décision pour un responsable non développeur.
 

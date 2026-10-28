@@ -50,6 +50,8 @@ function GenerationInputsDetails({ video }: { video: Video }) {
     ['Musique', inputs.music ?? 'Sans musique'],
     ['Format', video.format ?? '16:9'],
     ['Niveau', videoMethodLabel(video)],
+    // 28/10 · V1 : pas de transition entre les plans.
+    ['Montage', 'Plans enchaînés en coupe franche, logo à la fin'],
   ];
   return <details onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()} className="mt-3 border-t border-[#e2e2e5] pt-3">
     <summary className="cursor-pointer text-xs font-semibold text-[#831810]">Voir les paramètres de création</summary>
@@ -58,6 +60,16 @@ function GenerationInputsDetails({ video }: { video: Video }) {
       <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1.5">{rows.map(([label, value]) => <div key={label} className="contents"><dt className="text-[#626269]">{label}</dt><dd className="break-words text-[#333338]">{value}</dd></div>)}</dl>
     </div>
   </details>;
+}
+
+/** 28/10 · V1 : ce que le réalisateur a adapté dans la demande, rappelé après le lancement. */
+export function AdaptationsNote({ video }: { video: Video }) {
+  const adaptations = video.inputs?.adaptations ?? [];
+  if (!adaptations.length) return null;
+  return <div role="note" className="mt-4 border border-[#e7d7b9] bg-[#fbf6ed] px-4 py-3 text-xs leading-5 text-[#765d39]">
+    <p className="font-semibold">Votre demande a été adaptée</p>
+    <ul className="mt-1 list-disc space-y-1 pl-4">{adaptations.map((entry) => <li key={entry}>{entry}</li>)}</ul>
+  </div>;
 }
 
 /** `currentUserId`: only the author of a video sends it for validation. */
@@ -70,6 +82,14 @@ export function VideoLibrary({ currentUserId }: { currentUserId?: string }) {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [deleting, setDeleting] = useState(false);
   const [selectedVideo, setSelectedVideo] = useState<Video | null>(null);
+  // 28/10 · le détail s'affiche sous la grille : on y amène l'utilisateur quand il ouvre une vidéo.
+  const detailRef = useRef<HTMLElement | null>(null);
+  const selectedVideoId = selectedVideo?.id ?? null;
+  useEffect(() => {
+    if (!selectedVideoId) return;
+    const reduce = typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    detailRef.current?.scrollIntoView?.({ behavior: reduce ? 'auto' : 'smooth', block: 'start' });
+  }, [selectedVideoId]);
   const videosRef = useRef<Video[]>([]);
   const [unavailablePreviewIds, setUnavailablePreviewIds] = useState<string[]>([]);
   const renewedPreviewIds = useRef(new Set<string>());
@@ -250,6 +270,6 @@ export function VideoLibrary({ currentUserId }: { currentUserId?: string }) {
         </div>
       </article>)}
     </div>}
-    {selectedVideo && <aside className="border border-[#e2e2e5] bg-white p-5" aria-label="Détails de la vidéo sélectionnée"><div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-[.16em] text-[#c51e1c]">Détail de la vidéo</p><h2 className="mt-1 text-lg font-semibold">{selectedVideo.title ?? 'Vidéo sans titre'}</h2></div><span className="text-xs text-[#626269]">{selectedVideo.format ?? '16:9'} · V{selectedVideo.version ?? 1} · {selectedVideo.durationSeconds ?? 5} s · {videoMethodLabel(selectedVideo)}</span></div>{selectedVideo.previewUrl && <video controls preload="none" src={selectedVideo.previewUrl} onError={() => { void renewExpiredPreview(selectedVideo.id); }} onLoadedMetadata={() => clearPreviewError(selectedVideo.id)} className={`mt-4 ${videoAspectClass(selectedVideo.format)} max-h-[420px] w-full bg-[#232326] object-contain`} />}{selectedVideo.previewSource === 'raw' && <p className="mt-3 border border-[#ead9b4] bg-[#fff9ed] px-4 py-2 text-xs text-[#77591f]">Aperçu du fichier brut : l’habillage ou la piste audio finale peuvent manquer.</p>}{(!selectedVideo.previewUrl || unavailablePreviewIds.includes(selectedVideo.id)) && ['ready', 'review'].includes(selectedVideo.status) && <p className="mt-3 border border-[#ead9b4] bg-[#fff9ed] px-4 py-2 text-xs text-[#77591f]">Aperçu indisponible après renouvellement : le MP4 est absent ou inaccessible dans le stockage.</p>}{selectedVideo.videoUrl && <a href={selectedVideo.videoUrl} download className="mt-4 inline-flex min-h-11 items-center rounded-sm bg-[#c51e1c] px-4 py-2.5 text-xs font-semibold text-white">Télécharger MP4</a>}<GenerationInputsDetails video={selectedVideo} /></aside>}
+    {selectedVideo && <aside ref={detailRef} className="mt-6 scroll-mt-6 border border-[#e2e2e5] bg-white p-5" aria-label="Détails de la vidéo sélectionnée"><div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-[.16em] text-[#c51e1c]">Détail de la vidéo</p><h2 className="mt-1 text-lg font-semibold">{selectedVideo.title ?? 'Vidéo sans titre'}</h2></div><span className="text-xs text-[#626269]">{selectedVideo.format ?? '16:9'} · V{selectedVideo.version ?? 1} · {selectedVideo.durationSeconds ?? 5} s · {videoMethodLabel(selectedVideo)}</span></div>{selectedVideo.previewUrl && <video controls preload="none" src={selectedVideo.previewUrl} onError={() => { void renewExpiredPreview(selectedVideo.id); }} onLoadedMetadata={() => clearPreviewError(selectedVideo.id)} className={`mt-4 ${videoAspectClass(selectedVideo.format)} max-h-[420px] w-full bg-[#232326] object-contain`} />}{selectedVideo.previewSource === 'raw' && <p className="mt-3 border border-[#ead9b4] bg-[#fff9ed] px-4 py-2 text-xs text-[#77591f]">Aperçu du fichier brut : l’habillage ou la piste audio finale peuvent manquer.</p>}{(!selectedVideo.previewUrl || unavailablePreviewIds.includes(selectedVideo.id)) && ['ready', 'review'].includes(selectedVideo.status) && <p className="mt-3 border border-[#ead9b4] bg-[#fff9ed] px-4 py-2 text-xs text-[#77591f]">Aperçu indisponible après renouvellement : le MP4 est absent ou inaccessible dans le stockage.</p>}{selectedVideo.videoUrl && <a href={selectedVideo.videoUrl} download className="mt-4 inline-flex min-h-11 items-center rounded-sm bg-[#c51e1c] px-4 py-2.5 text-xs font-semibold text-white">Télécharger MP4</a>}<AdaptationsNote video={selectedVideo} /><GenerationInputsDetails video={selectedVideo} /></aside>}
   </>;
 }

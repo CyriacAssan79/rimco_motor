@@ -267,7 +267,7 @@ export async function POST(request: Request) {
     const briefConflicts = mergeBriefConflicts(directorConflicts, detectBriefConflicts(input.direction, {
       placeTimes: timedPlaces.map((place) => place.timeOfDay), timeTransition: input.timeTransition,
       hasInteriorPhoto: selectedVehicle.some((photo) => vehicleViewOf(photo).angle === 'interior'),
-      lighting: input.lighting,
+      lighting: input.lighting, singleShot: input.workflow === 'single',
     }));
     // The launch route accepts only this exact storyboard (and people sheet), for this user and these choices.
     const storyboardSignature = signStoryboard({ storyboard: shots, castDescription, context: { userId: actor.id, vehicleDossierId: input.vehicleDossierId, workflow: input.workflow, mode: input.mode, durationSeconds: input.durationSeconds, format: input.format } }, signingKey);

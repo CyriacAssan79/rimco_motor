@@ -13,7 +13,7 @@ type Settings = {
   humanClipRevisionsPerShot: number;
   revisionPriceFcfa: number;
 };
-type Client = { id: string; name: string; settings: Settings };
+type Client = { id: string; name: string; settings: Settings; availableFcfa?: number };
 
 const input = 'min-h-11 w-full rounded-sm border border-[#d4d4d8] bg-white px-3 text-sm font-normal tabular-nums outline-none focus:border-[#c51e1c]';
 
@@ -44,11 +44,7 @@ export function BillingSettings() {
       if (!active) return;
       setClients(data.clients ?? []);
       setDrafts(Object.fromEntries((data.clients ?? []).map((client: Client) => [client.id, client.settings])));
-      const summaries = await Promise.all((data.clients ?? []).map(async (client: Client) => {
-        const credit = await fetch(`/api/credits?clientId=${client.id}&history=false`).then((res) => res.ok ? res.json() : null).catch(() => null);
-        return [client.id, Number(credit?.summary?.availableFcfa ?? 0)] as const;
-      }));
-      if (active) setBalances(Object.fromEntries(summaries));
+      setBalances(Object.fromEntries((data.clients ?? []).map((client: Client) => [client.id, Number(client.availableFcfa ?? 0)])));
     }).catch((cause) => { if (active) setError(cause instanceof Error ? cause.message : 'Réglages indisponibles.'); });
     return () => { active = false; };
   }, []);
