@@ -32,9 +32,12 @@ export async function GET(request: Request) {
     return NextResponse.json({ reconciled: results.length, results });
   }
   const admin = createStorageAdminClient();
-  await cleanupClipPreviews(admin);
+  // 28/10 · ?scope=generations : appel fréquent (Supabase pg_cron, chaque minute) qui fait seulement avancer les
+  // générations en cours ; le nettoyage et les crédits restent dans l'appel quotidien de Vercel.
+  const generationsOnly = new URL(request.url).searchParams.get('scope') === 'generations';
+  if (!generationsOnly) await cleanupClipPreviews(admin);
   // 27/10 · crédits : lots échus expirés (tracé dans le journal), alertes d'expiration et de solde bas.
-  const credits = await runCreditMaintenance(admin).catch(() => ({ expiredLots: 0, warnings: 0, available: false }));
+  const credits = generationsOnly ? null : await runCreditMaintenance(admin).catch(() => ({ expiredLots: 0, warnings: 0, available: false }));
   const { data, error } = await admin.from('video_versions').select('id').in('status', ['queued','generating','postprocessing']).order('updated_at', { ascending: true }).limit(10);
   if (error) return NextResponse.json({ error: 'Impossible de charger les générations en cours.' }, { status: 503 });
   const systemActor: Actor = { id: 'cron-reconcile', role: 'operateur', department: '', brandId: null };

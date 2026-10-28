@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { PREMIUM_FIXED_DURATION_SECONDS, PREMIUM_FIXED_SHOT_COUNT, PREMIUM_FIXED_SHOT_SECONDS, providerLimits, STORYBOARD_LOGO_SECONDS } from '@/core/storyboard-plan';
+export { PREMIUM_FIXED_DURATION_SECONDS, PREMIUM_FIXED_SHOT_COUNT, PREMIUM_FIXED_SHOT_SECONDS, STORYBOARD_LOGO_SECONDS, shotCountRange, durationHelpText } from '@/core/storyboard-plan';
 import { peoplePresets, type PeoplePresetId } from '@/core/people-presets';
 import { isBridgePlace, steeringRule, trafficRule } from '@/core/prompts/rules';
 import { directorMotionTable, motionRefs, type MotionMatrix } from '@/core/motion/place-motion';
@@ -7,7 +9,8 @@ import { placesForFilm, resolveFilmLighting } from '@/core/brief/film-lighting';
 
 export const storyModeSchema = z.enum(['standard', 'pro', 'premium']);
 export type StoryMode = z.infer<typeof storyModeSchema>;
-export type StoryProvider = 'wan' | 'kling' | 'seedance';
+export type { StoryProvider } from '@/core/storyboard-plan';
+import type { StoryProvider } from '@/core/storyboard-plan';
 export type ClipDurationSeconds = 5 | 10 | 15 | 20;
 
 export function compactStoryboardText(value: string, maxLength: number): string {
@@ -156,20 +159,6 @@ export function validatePhotoFidelityPlan(shots: PhotoFidelityShot[], durationSe
   return true;
 }
 
-export const STORYBOARD_LOGO_SECONDS = 2;
-export const PREMIUM_FIXED_DURATION_SECONDS = 20;
-export const PREMIUM_FIXED_SHOT_SECONDS = 5;
-export const PREMIUM_FIXED_SHOT_COUNT = PREMIUM_FIXED_DURATION_SECONDS / PREMIUM_FIXED_SHOT_SECONDS;
-/**
- * Shot lengths of the storyboard per engine. 26/10 · architecture: shots of 3 to 5 s, the engines hold badly beyond a
- * few seconds; Kling itself still accepts up to 15 s (its model catalogue is unchanged).
- */
-const providerLimits: Record<StoryProvider, { min: number; max: number }> = {
-  wan: { min: 5, max: 5 },
-  kling: { min: 3, max: 5 },
-  seedance: { min: 4, max: 30 },
-};
-
 export function finalVideoSeconds(clipDurationSeconds: ClipDurationSeconds): number {
   return clipDurationSeconds + STORYBOARD_LOGO_SECONDS;
 }
@@ -263,7 +252,7 @@ const DIRECTOR_SCHEMA = '{"briefConflicts":[],"castDescription":"","shots":[{"ti
 
 /** Shot count and durations, stated once, per tier. */
 export function directorShotPlan(input: { mode: StoryMode; durationSeconds: ClipDurationSeconds; single?: boolean }): string {
-  if (input.single) return `Exactly 1 shot of ${input.durationSeconds} seconds.`;
+  if (input.single) return `Exactly 1 shot of ${input.durationSeconds} seconds. If the brief describes several scenes, film the main one and list the others in briefConflicts.`;
   if (input.mode === 'premium') return `Exactly ${PREMIUM_FIXED_SHOT_COUNT} shots of ${PREMIUM_FIXED_SHOT_SECONDS} seconds (${PREMIUM_FIXED_DURATION_SECONDS} s).`;
   if (input.mode === 'standard') return `Exactly ${input.durationSeconds / 5} shots of 5 seconds (${input.durationSeconds} s).`;
   const { min, max } = providerLimits.kling;

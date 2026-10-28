@@ -9,6 +9,8 @@ export type GenerationInputs = {
   lighting: string | null;
   mood: string | null;
   music: string | null;
+  /** 28/10 · what the director adapted in the brief (accepted by the user before launch). */
+  adaptations: string[];
 };
 
 const text = (value: unknown) => typeof value === 'string' && value.trim() ? value.trim() : null;
@@ -38,5 +40,6 @@ export function extractGenerationInputs(brief: Record<string, unknown>, assetTit
     lighting: text(brief.lighting),
     mood: text(brief.mood),
     music: audioId ? assetTitles.get(audioId) ?? 'Piste de la médiathèque' : null,
+    adaptations: Array.isArray(brief.briefAdaptations) ? brief.briefAdaptations.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0).slice(0, 5) : [],
   };
 }

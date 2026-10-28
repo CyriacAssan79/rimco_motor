@@ -32,7 +32,9 @@ import { elapsedSeconds, processingDurations, processingStage, type ProcessingMe
 import { limitRelationToLatest } from '@/core/versions/library-query';
 import { storedQualityWarnings } from '@/core/versions/quality-gate';
 import { extractGenerationInputs, generationInputAssetIds } from '@/core/versions/generation-inputs';
+import { MAX_BRIEF_CONFLICTS } from '@/core/brief/conflicts';
 
+const briefAdaptationsSchema = z.array(z.string().max(400)).max(MAX_BRIEF_CONFLICTS).optional();
 const deleteSchema = z.object({ videoIds: z.array(z.string().uuid()).min(1).max(50) }).strict().refine((input) => new Set(input.videoIds).size === input.videoIds.length, { message: 'La sélection contient des doublons.' });
 const multiClipSchema = requestSchema.extend({
   workflow: z.literal('multi_clip'),
@@ -49,6 +51,8 @@ const multiClipSchema = requestSchema.extend({
   storyboardSignature: z.string().max(200).optional(),
   /** 27/10: the Studio box « Valider les images clés avant la vidéo » (the brand setting has the last word). */
   keyframeApproval: z.boolean().optional(),
+  /** 28/10: what the director adapted in the brief, accepted by the user before launch; kept for the video's detail. */
+  briefAdaptations: briefAdaptationsSchema,
 }).strict().refine((input) => input.clipDurationSeconds >= 10 || input.placeIds.length <= 1, {
   message: 'Une seule référence de lieu est autorisée pour une vidéo de moins de 10 secondes.',
   path: ['placeIds'],
@@ -67,6 +71,8 @@ const singleStoryboardSchema = requestSchema.extend({
   storyboardSignature: z.string().max(200).optional(),
   /** 27/10: the Studio box « Valider les images clés avant la vidéo » (the brand setting has the last word). */
   keyframeApproval: z.boolean().optional(),
+  /** 28/10: what the director adapted in the brief, accepted by the user before launch; kept for the video's detail. */
+  briefAdaptations: briefAdaptationsSchema,
 }).strict().refine((input) => input.placeIds.length <= 1, {
   message: 'Une vidéo en un seul plan utilise un seul lieu.',
   path: ['placeIds'],

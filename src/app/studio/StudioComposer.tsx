@@ -31,6 +31,7 @@ import { KeyframeBoard, type Board } from "@/components/keyframe-board";
 import { approvalBoxState, DEFAULT_KEYFRAME_APPROVAL_MODE, normalizeApprovalMode, type KeyframeApprovalMode } from "@/core/versions/keyframe-approval";
 import type { BillingSummary, StudioSettings } from "@/core/versions/outcome";
 import { preparationProgress } from "@/core/versions/progress";
+import { durationHelpText } from "@/core/storyboard-plan";
 import { PlaceTimeChoice } from "@/components/place-time-choice";
 import type { PlaceTimeOfDay } from "@/core/motion/place-motion";
 
@@ -341,6 +342,33 @@ export function StudioComposer({ mode, showPrompt = false, canRetryMontage = fal
     if (pendingLaunch) conflictRef.current?.scrollIntoView({ block: "center" });
   }, [pendingLaunch]);
 
+  // 28/10 · V1 : pendant la préparation (storyboard puis lancement), la vidéo n'existe pas encore côté serveur.
+  // Quitter l'onglet ou suivre un lien interne l'annulerait : on prévient l'utilisateur.
+  useEffect(() => {
+    if (preparingSince === null) return;
+    const message = "La vidéo n’est pas encore lancée : si vous quittez cette page maintenant, elle ne sera pas créée. Quitter quand même ?";
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = message;
+    };
+    const onClick = (event: MouseEvent) => {
+      if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      const link = (event.target as Element | null)?.closest?.("a[href]");
+      if (!(link instanceof HTMLAnchorElement) || link.target === "_blank" || link.hasAttribute("download")) return;
+      const url = new URL(link.href, window.location.href);
+      if (url.origin !== window.location.origin || url.pathname === window.location.pathname) return;
+      if (window.confirm(message)) return;
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    window.addEventListener("click", onClick, true);
+    return () => {
+      window.removeEventListener("beforeunload", onBeforeUnload);
+      window.removeEventListener("click", onClick, true);
+    };
+  }, [preparingSince]);
+
   useEffect(() => {
     let active = true;
     fetch("/api/settings/keyframe-approval")
@@ -631,6 +659,8 @@ export function StudioComposer({ mode, showPrompt = false, canRetryMontage = fal
             (entry): entry is string => typeof entry === "string",
           )
         : [];
+      // 28/10 · ce qui a été adapté reste visible après le lancement (Bibliothèque, détail de la vidéo).
+      if (conflicts.length) payload.briefAdaptations = conflicts;
       if (conflicts.length) {
         setPendingLaunch({ payload, conflicts });
         return;
@@ -708,6 +738,10 @@ export function StudioComposer({ mode, showPrompt = false, canRetryMontage = fal
             <h2 className="text-sm font-semibold">Préparation de la nouvelle vidéo</h2>
             <p className="mt-1 text-xs leading-5 text-[#55545a]">
               Le réalisateur écrit le storyboard à partir de vos choix.
+            </p>
+            {/* 28/10 · V1 : la vidéo n'est créée qu'à la fin de cette étape ; quitter la page l'annule. */}
+            <p role="status" className="mt-2 border border-[#e7d7b9] bg-[#fbf6ed] px-3 py-2 text-xs leading-5 text-[#765d39]">
+              Restez sur cette page jusqu’au lancement, en général moins d’une minute : si vous la quittez maintenant, la vidéo n’est pas créée. Ensuite, vous pourrez naviguer librement.
             </p>
             <GenerationProgress
               version={{
@@ -917,14 +951,13 @@ export function StudioComposer({ mode, showPrompt = false, canRetryMontage = fal
                   aria-pressed={durationS === seconds}
                   className={`inline-flex min-h-11 items-center justify-center rounded-full border px-3 text-xs ${durationS === seconds ? "border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]" : "border-[#e5e2dd] text-[#77736d]"}`}
                 >
-                  {seconds} s
+                  {seconds} s{seconds === 5 && tier !== "premium" ? " · aperçu" : ""}
                 </button>
               ))}
             </div>
-            <p className="mt-2 text-xs text-[#626269]">
-              {tier === "premium"
-                ? "Premium : quatre plans de 5 s + 2 s de logo animé = 22 s au total."
-                : `${durationS} s de clips + 2 s de logo animé = ${durationS + 2} s au total.`}
+            {/* 28/10 · V1 : ce que donne la durée choisie (nombre de plans, coupes franches, logo). */}
+            <p id="duration-help" className="mt-2 text-xs leading-5 text-[#626269]">
+              {durationHelpText({ mode: tier, durationSeconds: durationS })}
             </p>
           </fieldset>
         </section>
@@ -1310,8 +1343,7 @@ export function StudioComposer({ mode, showPrompt = false, canRetryMontage = fal
               ))}
             </div>
             <p className="mt-2 text-xs text-[#626269]">
-              Clips générés : {durationS} s · vidéo finale avec logo :{" "}
-              {durationS + 2} s.
+              Le niveau fixe le prix par seconde ; le prix de la vidéo s’affiche avant le lancement.
             </p>
           </fieldset>
           {approvalBox.visible && (
@@ -1372,8 +1404,8 @@ export function StudioComposer({ mode, showPrompt = false, canRetryMontage = fal
         </section>
         <p className="px-1 text-xs leading-4 text-[#626269]">
           {multiClip
-            ? "Les vues et lieux sélectionnés déterminent les plans, assemblés automatiquement."
-            : "Un plan créatif. Si nécessaire, le modèle le répartit en plusieurs clips avant le montage final."}
+            ? "Les vues et lieux sélectionnés déterminent les plans, assemblés bout à bout au montage."
+            : "Un seul plan, tourné à partir de la scène principale de votre description."}
         </p>
       </aside>
       <div className="space-y-3 xl:col-span-2">
@@ -1384,8 +1416,9 @@ export function StudioComposer({ mode, showPrompt = false, canRetryMontage = fal
             className="rounded-md border border-[#e7d7b9] bg-[#fbf6ed] p-4 text-xs leading-5 text-[#765d39]"
           >
             <p className="font-semibold">
-              Votre demande a été adaptée aux règles de la marque
+              Votre demande a été adaptée
             </p>
+            <p className="mt-1">Voici ce que la vidéo fera différemment de votre description :</p>
             <ul className="mt-2 list-disc space-y-1 pl-4">
               {pendingLaunch.conflicts.map((conflict) => (
                 <li key={conflict}>{conflict}</li>
