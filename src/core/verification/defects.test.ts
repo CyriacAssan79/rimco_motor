@@ -4,17 +4,17 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { RelaunchCost } from '@/components/shot-review-panel';
 import { JUDGE_SYSTEM_PROMPT, parseKeyframeQuality, VISION_MAX_OUTPUT_TOKENS } from '@/core/providers/fal-keyframes';
 import { relaunchCost } from '@/core/versions/review-details';
-import { DEFECT_CODES, DEFECT_LABELS_FR, describeDefects, normalizeDefectCode } from './defects';
+import { DEFECT_CODES, DEFECT_LABELS_FR, describeDefects, FIXED_DEFECT_CODES, normalizeDefectCode } from './defects';
 import { storedVerdict, UNREADABLE_VERDICT } from './loop';
 
 describe('defects in French for the user', () => {
   it('has a French sentence for every code, without English', () => {
-    for (const code of DEFECT_CODES) {
+    for (const code of [...DEFECT_CODES, ...FIXED_DEFECT_CODES]) {
       const label = DEFECT_LABELS_FR[code];
       expect(label.length).toBeGreaterThan(10);
       expect(label).not.toMatch(/\b(?:the|car|wheel|blocking|minor|floats?)\b/i);
     }
-    expect(new Set(Object.values(DEFECT_LABELS_FR)).size).toBe(DEFECT_CODES.length);
+    expect(new Set(Object.values(DEFECT_LABELS_FR)).size).toBe(DEFECT_CODES.length + FIXED_DEFECT_CODES.length);
   });
 
   it('turns « t=2.5s blocking: tyre floats » into a French line, the English kept as technical detail', () => {

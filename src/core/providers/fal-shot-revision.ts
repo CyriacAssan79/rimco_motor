@@ -1,4 +1,5 @@
 import { createFalClient } from '@fal-ai/client';
+import { falWebhookOption } from './fal-webhook';
 import { z } from 'zod';
 import { env } from '@/env';
 import { shotRevisionSchema, type ShotRevision } from '@/core/verification/loop';
@@ -18,7 +19,7 @@ function fal(apiKey: string) {
  */
 export async function submitShotRevision(input: { prompt: string; systemPrompt: string }, apiKey: string) {
   if (!env.LLM_MODEL) throw new Error('Le modèle de rédaction n’est pas configuré.');
-  const result = await fal(apiKey).queue.submit(FAL_LLM_ENDPOINT, { input: buildFalLlmInput(input.prompt, input.systemPrompt, env.LLM_MODEL) as never });
+  const result = await fal(apiKey).queue.submit(FAL_LLM_ENDPOINT, { input: buildFalLlmInput(input.prompt, input.systemPrompt, env.LLM_MODEL) as never, ...falWebhookOption() });
   return { requestId: result.request_id };
 }
 

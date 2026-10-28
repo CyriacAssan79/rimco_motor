@@ -20,7 +20,8 @@ const FINISHED_KEY = 'rimco:finished-versions';
 const DUE_PREFIX = 'rimco:refresh-due:';
 
 /** Honest message while no durable job queue exists (docs/DECISIONS.md). */
-export const KEEP_TAB_OPEN_MESSAGE = 'La génération avance tant qu’une page RIMCO Studio est ouverte. Vous pouvez naviguer dans l’application, mais gardez un onglet ouvert.';
+/** 28/10 · webhook fal + relance chaque minute (Supabase pg_cron) : la génération ne dépend plus d’un onglet ouvert. */
+export const KEEP_TAB_OPEN_MESSAGE = 'La génération continue même si vous fermez cet onglet. Les validations à faire et la vidéo prête s’affichent dans la cloche.';
 
 function readJson<T>(key: string, fallback: T): T {
   try {

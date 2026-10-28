@@ -21,16 +21,20 @@ import { notifyStoryboardState } from '@/core/notifications/storyboard';
 import { feedbackConflictMessages, lastHumanRevision, withFeedbackConflicts } from './shot-feedback';
 import { approvalBoard, enforceApprovalDeadline, keyframeApprovalGate } from './keyframe-gate';
 import { resolveKeyframeApproval, storedApproval } from './keyframe-approval';
-import { loadBrandApprovalMode } from './keyframe-approval-server';
+import { loadBrandApprovalSettings } from './keyframe-approval-server';
+import { fixedClipVerdict, FIXED_CHECK_ENDPOINT } from '@/core/verification/fixed-checks';
+import { judgeReferenceUrls } from '@/core/verification/judge-references';
+import { animationStarted, keyframeInProgress, keyframeSettled, mergeKeyframeOverlay, readyForAnimation, type KeyframeOverlay } from './shot-pipeline';
 import { firstObservedAt, type ProcessingMetrics } from './processing-metrics';
 import { renderSettingsFor, storedRenderSettings } from './render-settings';
 import { expandSingleShotStoryboard, holdStillInInterior, validateStoryboardCast, vehicleDescriptionForPrompt, finalVideoSeconds,  type ClipDurationSeconds, type StoryboardShot, validatePremiumTwentySecondStoryboard, validateSingleShotStoryboard, validateStoryboard, validateTierDuration } from '@/core/storyboard';
-import { assembleShotMontage, extractRepresentativeVideoFrames } from '@/core/postproduction/pipeline';
+import { assembleShotMontage, extractRepresentativeVideoFrames, inspectClip } from '@/core/postproduction/pipeline';
+import { randomUUID } from 'node:crypto';
 import { MAX_MONTAGE_ATTEMPTS, montageFailureDecision } from '@/core/postproduction/montage-failure';
 import { peopleForShot, storedCast, withCastReferences, type StoredCastMember } from './casting';
 import { loadDefaultDriver } from './moving-driver';
 import { collectQualityWarnings, storedQualityWarnings, warningIssues } from './quality-gate';
-import { appendVerification, applyShotRevision, clipRedoReservations, clipRedosDone, pendingClipRedo, pendingHumanFeedback, humanRevisionLimit, humanRevisionsUsed, buildShotRevisionInstruction, buildShotRevisionPrompt, clipLoopDecision, defectsAsData, effectiveShotDraft, keyframeCorrectionsAllowed, keyframeLoopDecision, MAX_CLIP_RETRIES, MAX_KEYFRAME_ATTEMPTS, MAX_KEYFRAME_CORRECTIONS, storedVerdict, UNREADABLE_VERDICT, type ReviewRequest } from '@/core/verification/loop';
+import { appendVerification, directRetryInstruction, applyShotRevision, clipRedoReservations, clipRedosDone, pendingClipRedo, pendingHumanFeedback, humanRevisionLimit, humanRevisionsUsed, buildShotRevisionInstruction, buildShotRevisionPrompt, clipLoopDecision, defectsAsData, effectiveShotDraft, keyframeCorrectionsAllowed, keyframeLoopDecision, MAX_CLIP_RETRIES, MAX_KEYFRAME_ATTEMPTS, MAX_KEYFRAME_CORRECTIONS, storedVerdict, UNREADABLE_VERDICT, type ReviewRequest } from '@/core/verification/loop';
 import { readShotRevision, SHOT_REVISION_RESERVE_USD, submitShotRevision } from '@/core/providers/fal-shot-revision';
 import type { CreateVersionInput } from './live';
 import { animationSubmitStateAfterFailure, canSubmitAnimation, type AnimationSubmitState } from './animation-submit-state';
@@ -294,10 +298,13 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
   }).select('id').single();
   if (videoError || !video) throw new HttpError(500, 'Impossible de créer la vidéo. Réessayez.');
   // 27/10: validation of the keyframes before the animation, frozen at launch; the brand setting has the last word.
-  const keyframeApproval = { required: keyframeMode && resolveKeyframeApproval(await loadBrandApprovalMode(admin, actor.brandId), input.keyframeApproval, input.storyMode) };
+  // 28/10 · both validations are frozen at launch: keyframes (brand mode + Studio box) and clips (operator setting).
+  const approvalSettings = await loadBrandApprovalSettings(admin, actor.brandId);
+  const keyframeApproval = { required: keyframeMode && resolveKeyframeApproval(approvalSettings.mode, input.keyframeApproval, input.storyMode) };
+  const clipApprovalRequired = keyframeApproval.required && approvalSettings.clipApproval;
   // 28/10 · V1: the adaptations accepted by the user, shown again in the video's detail (plain text, bounded).
   const briefAdaptations = (input.briefAdaptations ?? []).map(cleanConflict).filter((entry) => entry.length >= 5).slice(0, MAX_BRIEF_CONFLICTS);
-  const storedBrief = { ...brief, ...(briefAdaptations.length ? { briefAdaptations } : {}), humanRevisionLimits: frozenRevisionLimits(credits.settings), ...(credits.internal ? { internalVideo: true } : {}), filmLighting, timeTransition: input.timeTransition, keyframeApproval, storyboard: generationShots, approvedStoryboard: input.storyboard, generationTier: input.storyMode, overlayLogo: input.overlayLogo, audioAssetId: input.audioAssetId ?? null, multiClipMode: !isSingleShot, singleStoryboardMode: isSingleShot, storyMode: input.storyMode, clipDurationSeconds: input.clipDurationSeconds, finalDurationSeconds: finalVideoSeconds(input.clipDurationSeconds), purpose: input.purpose, vehicleDossierId: input.vehicleDossierId, vehiclePhotoIds: selectedVehiclePhotos.map((photo) => photo.id), keyframeReferencesByShot, placeIds: input.placeIds,  castAssets, castDescription, movingDriver, placeDescriptions, interiorPlaceIds, renderSettings: render, ...(marketLocation ? { marketLocation } : {}), ...(steeringSide ? { steeringSide } : {}), ...(trafficSide ? { trafficSide } : {}), motionMatrix, framingRules: true, frameChecks: 2, endFrameMode: endFrameCount > 0, promptRules: 'v3.2', ...(pricingWarning ? { pricingWarning } : {}), ...(premiumQualityMode ? { videoQualityMode: true } : {}), costPlanUsd: costPlanForBrief(costPlan), shotLighting, processingMetrics: { requestedAt: new Date().toISOString() }, shotProcessingMetrics: {}, ...(input.comparisonCampaignId ? { comparisonCampaignId: input.comparisonCampaignId } : {}) };
+  const storedBrief = { ...brief, ...(briefAdaptations.length ? { briefAdaptations } : {}), humanRevisionLimits: frozenRevisionLimits(credits.settings), ...(credits.internal ? { internalVideo: true } : {}), filmLighting, timeTransition: input.timeTransition, keyframeApproval, clipApprovalRequired, storyboard: generationShots, approvedStoryboard: input.storyboard, generationTier: input.storyMode, overlayLogo: input.overlayLogo, audioAssetId: input.audioAssetId ?? null, multiClipMode: !isSingleShot, singleStoryboardMode: isSingleShot, storyMode: input.storyMode, clipDurationSeconds: input.clipDurationSeconds, finalDurationSeconds: finalVideoSeconds(input.clipDurationSeconds), purpose: input.purpose, vehicleDossierId: input.vehicleDossierId, vehiclePhotoIds: selectedVehiclePhotos.map((photo) => photo.id), keyframeReferencesByShot, placeIds: input.placeIds,  castAssets, castDescription, movingDriver, placeDescriptions, interiorPlaceIds, renderSettings: render, ...(marketLocation ? { marketLocation } : {}), ...(steeringSide ? { steeringSide } : {}), ...(trafficSide ? { trafficSide } : {}), motionMatrix, framingRules: true, frameChecks: 2, endFrameMode: endFrameCount > 0, promptRules: 'v3.2', ...(pricingWarning ? { pricingWarning } : {}), ...(premiumQualityMode ? { videoQualityMode: true } : {}), costPlanUsd: costPlanForBrief(costPlan), shotLighting, processingMetrics: { requestedAt: new Date().toISOString() }, shotProcessingMetrics: {}, ...(input.comparisonCampaignId ? { comparisonCampaignId: input.comparisonCampaignId } : {}) };
   const { data: version, error: versionError } = await admin.from('video_versions').insert({
     video_id: video.id, number: 1, brief_json: storedBrief, generated_prompt: displayPrompts.join('\n\n--- Plan suivant ---\n\n'),
     ai_model_id: videoModel.id, fal_credential_id: falCredential.id, status: 'queued', generation_seconds: finalVideoSeconds(input.clipDurationSeconds),
@@ -870,7 +877,9 @@ async function refreshKeyframes(input: {
       const visionPrompt = `${buildKeyframeQualityPrompt({ timeOfDay: brief.filmLighting ? storedMotionMatrix(brief)?.places[draft.locationPhotoId ?? ""]?.timeOfDay : undefined, vehicleReferenceCount, hasLocationReference: Boolean(draft.locationPhotoId), excludePeople: people.excludePeople, castTitles: people.castTitles, castDescription: people.castDescription, cabin: people.cabin, ...storedDrivingRules(brief), interior: placeForShot(brief, draft).interior, onRoad: placeForShot(brief, draft).onRoad, moving: isMoving(draft), framing: framingCriterionOf(brief, draft, 'still'), plan: draft })}`;
       let qualityJob: { requestId: string };
       try {
-        qualityJob = await submitKeyframeQuality({ prompt: visionPrompt, imageUrls: [signedUrl, ...referenceUrls] }, apiKey);
+        // 28/10 · the judge reads 1 024 px copies of the references (the generator keeps the originals).
+        const judgeUrls = await judgeReferenceUrls({ admin, falStorage, paths: referencePaths, originals: referenceUrls });
+        qualityJob = await submitKeyframeQuality({ prompt: visionPrompt, imageUrls: [signedUrl, ...judgeUrls] }, apiKey);
       } catch (cause) {
         const statusCode = falErrorStatusCode(cause);
         const uncertain = statusCode === null || statusCode >= 500;
@@ -940,8 +949,11 @@ async function refreshKeyframes(input: {
       return;
     }
     if (decision === 'retry_image') {
-      // Readable text only: a cheap new image with blank signs, without calling the director.
-      await resubmitKeyframe(draft, 'make every sign, billboard, poster and storefront blank, without readable letters', { keyframe_quality: quality, verification_history: history });
+      // Readable text only, or (28/10) defects of the image itself: a new image with a fixed instruction, without the
+      // director's rewriting step. The judge's defects stay attached as data, as for every retry.
+      const direct = directRetryInstruction(quality);
+      const reason = direct ? `${direct}. Defects to fix: ${defectsAsData(quality)}` : 'make every sign, billboard, poster and storefront blank, without readable letters';
+      await resubmitKeyframe(draft, reason, { keyframe_quality: quality, verification_history: history });
       return;
     }
     if (decision === 'revise') {
@@ -969,41 +981,61 @@ async function refreshKeyframes(input: {
     return { shotNumber: shot.shot_number, title: shot.title, stage: 'keyframe' as const, issues: verdict ? (verdict.issues.length ? verdict.issues : [verdict.reason]) : [], codes: verdict?.issues.length ? verdict.codes : undefined, url: keyframePreviews.find((preview) => preview.number === shot.shot_number)?.url ?? null, canRetry: Number(shot.keyframe_retry_count ?? 0) + 1 < MAX_KEYFRAME_ATTEMPTS && humanRevisionsUsed(shot.verification_history) < humanRevisionLimit(brief, 'keyframe'), revisionsLeft: Math.max(0, humanRevisionLimit(brief, 'keyframe') - humanRevisionsUsed(shot.verification_history)), lastRevision: lastHumanRevision(shot.verification_history) };
   });
   // A rolling shot waits for its optional end frame (ready or failed) before animation; failure only drops the end frame.
-  const pendingKeyframes = refreshedShots.some((shot) => ['queued','generating','checking','revising'].includes(shot.keyframe_status)
-    || shot.keyframe_status === 'ready' && ['queued','generating','checking'].includes(String(shot.end_keyframe_status ?? 'skipped')));
+  const pendingKeyframes = refreshedShots.some(keyframeInProgress);
+  const clipsEngaged = animationStarted(refreshedShots);
   // 27/10 · keyframe validation: the board stays on screen while a shot is corrected or waits for a decision.
-  const gateInput = { admin, version, video, brief, shots: refreshedShots, keyframes: keyframePreviews, draftFor: (shot: { shot_number: number; revised_draft?: unknown }) => effectiveShotDraft(draftsByNumber.get(Number(shot.shot_number)), shot.revised_draft) };
-  if (pendingKeyframes || reviewRequired.length) {
-    const expired = await enforceApprovalDeadline(gateInput);
-    if (expired) return expired;
-    const board = approvalBoard(gateInput, storedApproval(brief));
-    return { id: version.id, status: 'generating' as const, processingStage: pendingKeyframes ? 'keyframing' as const : 'awaiting_review' as const, reviewRequired, qualityWarnings: collectQualityWarnings(refreshedShots), completedKeyframes, totalKeyframes: refreshedShots.length, keyframes: keyframePreviews, completedShots: 0, totalShots: refreshedShots.length, ...(board ? { keyframeApproval: board } : {}) };
-  }
-  if (completedKeyframes !== refreshedShots.length) {
+  // 28/10 · once a clip is paid the video never expires on the board: only a reminder is sent (clipsPaid).
+  const gateInput = { admin, version, video, brief, shots: refreshedShots, keyframes: keyframePreviews, clipsPaid: clipsEngaged, draftFor: (shot: { shot_number: number; revised_draft?: unknown }) => effectiveShotDraft(draftsByNumber.get(Number(shot.shot_number)), shot.revised_draft) };
+  const failedKeyframes = refreshedShots.filter((shot) => shot.keyframe_status === 'failed');
+  const keyframeProgress = { reviewRequired, qualityWarnings: collectQualityWarnings(refreshedShots), completedKeyframes, totalKeyframes: refreshedShots.length, keyframes: keyframePreviews };
+  if (failedKeyframes.length && !clipsEngaged) {
+    // Nothing paid at fal for the clips yet: same as before, wait for the images in progress, then fail the video.
+    if (pendingKeyframes || reviewRequired.length) return { blocking: { id: version.id, status: 'generating' as const, processingStage: pendingKeyframes ? 'keyframing' as const : 'awaiting_review' as const, ...keyframeProgress, completedShots: 0, totalShots: refreshedShots.length } };
     const { data: generationLedger } = await admin.from('usage_ledger').select('id').eq('version_id', version.id).eq('kind', 'generation').eq('ai_model_id', version.ai_model_id).eq('status', 'reserved').maybeSingle();
     if (generationLedger?.id) await settleUsageCost(admin, { entryId: generationLedger.id, outcome: 'released', actualCostUsd: 0, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA });
-    const error = refreshedShots.find((shot) => shot.keyframe_status === 'failed')?.error_message ?? 'Une image-clé n’a pas passé le contrôle. Aucun plan vidéo n’a été envoyé.';
-    const unusedRetryReservations = refreshedShots.flatMap((shot) => {
-      const used = Number(shot.keyframe_retry_count ?? 0) + 1;
-      return [
-        ...(Array.isArray(shot.keyframe_image_ledger_ids) ? shot.keyframe_image_ledger_ids.slice(used) : []),
-        ...(Array.isArray(shot.keyframe_quality_ledger_ids) ? shot.keyframe_quality_ledger_ids.slice(used) : []),
-        ...(Array.isArray(shot.video_quality_ledger_ids) ? shot.video_quality_ledger_ids : []),
-        ...(shot.end_keyframe_status === 'queued' && Array.isArray(shot.end_keyframe_ledger_ids) ? shot.end_keyframe_ledger_ids : []),
-      ];
-    });
+    const error = failedKeyframes[0]?.error_message ?? 'Une image-clé n’a pas passé le contrôle. Aucun plan vidéo n’a été envoyé.';
+    const unusedRetryReservations = refreshedShots.flatMap(unusedKeyframeReservations);
     await Promise.all([
       ...unusedRetryReservations.map((entryId) => settleUsageCost(admin, { entryId: String(entryId), outcome: 'released', actualCostUsd: 0, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA, billable: false })),
       admin.from('video_versions').update({ status: 'failed', error_message: error, updated_at: now }).eq('id', version.id),
       admin.from('videos').update({ status: 'failed', updated_at: now }).eq('id', version.video_id),
     ]);
-    return { id: version.id, status: 'failed' as const, error, qualityWarnings: collectQualityWarnings(refreshedShots), completedKeyframes, totalKeyframes: refreshedShots.length, keyframes: keyframePreviews };
+    return { blocking: { id: version.id, status: 'failed' as const, error, qualityWarnings: keyframeProgress.qualityWarnings, completedKeyframes, totalKeyframes: refreshedShots.length, keyframes: keyframePreviews } };
   }
-  // Every keyframe is ready: the animation (the expensive step) waits for the user's validation when it was asked.
-  const gate = await keyframeApprovalGate(gateInput);
-  if (gate) return gate;
-  const animationTargets = refreshedShots.filter((shot) => canSubmitAnimation(shot.animation_submit_state, shot.provider_request_id));
-  if (!animationTargets.length) return null;
+  if (failedKeyframes.length) {
+    // 28/10 · clips already engaged: the failed shot is closed (its unused reservations released) and no new clip is
+    // sent; the clip side then ends the video as failed, with the real fal cost kept and nothing billed to the client.
+    const closing = failedKeyframes.filter((shot) => shot.status !== 'failed');
+    await Promise.all(closing.flatMap((shot) => [
+      ...unusedKeyframeReservations(shot).map((entryId) => settleUsageCost(admin, { entryId: String(entryId), outcome: 'released', actualCostUsd: 0, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA, billable: false })),
+      admin.from('video_shots').update({ status: 'failed', video_quality_status: brief.videoQualityMode === true ? 'failed' : 'skipped', updated_at: now }).eq('version_id', version.id).eq('shot_number', shot.shot_number),
+    ]));
+    return { overlay: { ...keyframeProgress } };
+  }
+  // 28/10 · the board opens with the first keyframe ready, so the user validates each image as it comes.
+  const approvalBefore = storedApproval(brief);
+  let boardResult: Awaited<ReturnType<typeof keyframeApprovalGate>> = null;
+  if (approvalBefore.required && !approvalBefore.approvedAt && !approvalBefore.expiredAt && (refreshedShots.some(keyframeSettled) || approvalBefore.requestedAt)) {
+    boardResult = await keyframeApprovalGate(gateInput);
+    if (boardResult && boardResult.status === 'cancelled') return { blocking: boardResult };
+  } else if (pendingKeyframes || reviewRequired.length) {
+    const expired = await enforceApprovalDeadline(gateInput);
+    if (expired) return { blocking: expired };
+  }
+  const approval = storedApproval(brief);
+  const board = boardResult && 'keyframeApproval' in boardResult ? boardResult.keyframeApproval : approval.required && approval.requestedAt && !approval.approvedAt ? approvalBoard(gateInput, approval) : null;
+  // Each shot leaves for its animation as soon as its own keyframe is final (and validated when asked).
+  const animationTargets = refreshedShots.filter((shot) => readyForAnimation(shot, approval) && canSubmitAnimation(shot.animation_submit_state, shot.provider_request_id));
+  // A board waiting only for the user is followed every 60 s; while images are still coming, every 15 s.
+  const boardPoll = pendingKeyframes ? 15 : 60;
+  const keyframeOverlay = { ...keyframeProgress, ...(board ? { keyframeApproval: board, nextPollInSeconds: boardPoll } : {}) };
+  if (!animationTargets.length) {
+    // No new clip: when one is already being made, the clip side of the refresh runs and carries this overlay.
+    if (clipsEngaged) return { overlay: keyframeOverlay };
+    if (boardResult) return { blocking: { ...boardResult, ...keyframeProgress, nextPollInSeconds: boardPoll } };
+    if (pendingKeyframes || reviewRequired.length) return { blocking: { id: version.id, status: 'generating' as const, processingStage: pendingKeyframes ? 'keyframing' as const : 'awaiting_review' as const, ...keyframeOverlay, completedShots: 0, totalShots: refreshedShots.length } };
+    return null;
+  }
 
   const provider = keyframeVideoProviders[adapterFamily];
   const animationJobs = await Promise.allSettled(animationTargets.map(async (shot) => {
@@ -1047,11 +1079,26 @@ async function refreshKeyframes(input: {
       }).eq('version_id', version.id).eq('shot_number', Number(animationTargets[index].shot_number));
     }
   }
+  // 28/10 · first clip sent = providerSubmittedAt; every keyframe final = keyframingCompletedAt (step durations).
   const metrics = brief.processingMetrics && typeof brief.processingMetrics === 'object' ? brief.processingMetrics as ProcessingMetrics : {};
-  const keyframeCompletedAt = new Date().toISOString();
-  const updatedBrief = { ...brief, processingMetrics: { ...metrics, keyframingCompletedAt: keyframeCompletedAt, providerSubmittedAt: keyframeCompletedAt } };
-  await admin.rpc('rimco_patch_version_brief', { p_version_id: version.id, p_patch: { processingMetrics: updatedBrief.processingMetrics } });
-  return { id: version.id, status: 'generating' as const, processingStage: 'generating' as const, qualityWarnings: collectQualityWarnings(refreshedShots), completedKeyframes, totalKeyframes: refreshedShots.length, keyframes: keyframePreviews, completedShots: 0, totalShots: refreshedShots.length };
+  const submittedAt = new Date().toISOString();
+  const nextMetrics = { ...metrics, providerSubmittedAt: metrics.providerSubmittedAt ?? submittedAt, ...(!pendingKeyframes && !reviewRequired.length && !board ? { keyframingCompletedAt: metrics.keyframingCompletedAt ?? submittedAt } : {}) };
+  Object.assign(brief, { processingMetrics: nextMetrics });
+  await admin.rpc('rimco_patch_version_brief', { p_version_id: version.id, p_patch: { processingMetrics: nextMetrics } });
+  // The clips just sent are followed by the clip side of the same refresh, which carries the keyframe overlay.
+  return { overlay: keyframeOverlay };
+}
+
+/** Keyframe reservations a shot will not use any more (retries, checks, end frame never made). */
+function unusedKeyframeReservations(shot: { keyframe_retry_count?: unknown; keyframe_image_ledger_ids?: unknown; keyframe_quality_ledger_ids?: unknown; video_quality_ledger_ids?: unknown; end_keyframe_status?: unknown; end_keyframe_ledger_ids?: unknown }): string[] {
+  const used = Number(shot.keyframe_retry_count ?? 0) + 1;
+  const list = (value: unknown) => Array.isArray(value) ? value.map(String) : [];
+  return [
+    ...list(shot.keyframe_image_ledger_ids).slice(used),
+    ...list(shot.keyframe_quality_ledger_ids).slice(used),
+    ...list(shot.video_quality_ledger_ids),
+    ...(shot.end_keyframe_status === 'queued' ? list(shot.end_keyframe_ledger_ids) : []),
+  ];
 }
 
 /**
@@ -1088,6 +1135,8 @@ async function refreshStoryboardState(versionId: string, actor: Actor) {
   const { data: shots, error: shotsError } = await admin.from('video_shots')
     .select('shot_number,duration_seconds,title,generated_prompt,provider_request_id,provider_endpoint,status,raw_path,error_message,updated_at,keyframe_status,keyframe_request_id,keyframe_endpoint,keyframe_quality_request_id,keyframe_quality_endpoint,keyframe_path,keyframe_retry_count,keyframe_quality,keyframe_image_ledger_ids,keyframe_quality_ledger_ids,video_quality_status,video_quality_request_id,video_quality_endpoint,video_quality_retry_count,video_quality_ledger_ids,provider_poll_failure_count,provider_next_poll_at,provider_last_poll_error,provider_reconciliation_required,animation_submit_state,animation_submit_started_at,end_keyframe_status,end_keyframe_request_id,end_keyframe_quality_request_id,end_keyframe_path,end_keyframe_ledger_ids,revised_draft,revision_request_id,revision_ledger_id,verification_history,video_quality')
     .eq('version_id', versionId).order('shot_number');
+  type VersionRow = typeof version;
+  type ShotRows = typeof shots;
   const briefData = version.brief_json && typeof version.brief_json === 'object' ? version.brief_json as Record<string, unknown> : {};
   const singleStoryboardMode = briefData.singleStoryboardMode === true;
   if (shotsError || !shots || (singleStoryboardMode ? shots.length < 1 || shots.length > 6 : shots.length < 2 || shots.length > 6)) throw new HttpError(503, 'Les plans de cette vidéo sont introuvables.');
@@ -1115,10 +1164,19 @@ async function refreshStoryboardState(versionId: string, actor: Actor) {
   const keyframeMode = briefData.keyframeMode === true;
   const premiumQualityMode = briefData.videoQualityMode === true;
   const falCredential = await getFalCredentialById(version.fal_credential_id, admin);
+  let keyframeOverlay: KeyframeOverlay | null = null;
   if (keyframeMode) {
-    const keyframeResult = await refreshKeyframes({ admin, version, video, shots, actor, brief: briefData, apiKey: falCredential.apiKey, adapterFamily });
-    if (keyframeResult) return keyframeResult;
+    const keyframeStep = await refreshKeyframes({ admin, version, video, shots, actor, brief: briefData, apiKey: falCredential.apiKey, adapterFamily });
+    if (keyframeStep?.blocking) return keyframeStep.blocking;
+    keyframeOverlay = keyframeStep?.overlay ?? null;
+    // 28/10 · the keyframe step may have recorded step times (first clip sent, board): the clip side keeps them.
+    if (briefData.processingMetrics && typeof briefData.processingMetrics === 'object') Object.assign(currentMetrics, briefData.processingMetrics);
   }
+  // 28/10 · the clip side runs while other shots are still at their keyframe; the result carries both.
+  return mergeKeyframeOverlay(await refreshClipStage(version, shots), keyframeOverlay);
+
+  // Same code as before 28/10 (clip polling, checks, gates, montage), now also run while keyframes are pending.
+  async function refreshClipStage(version: NonNullable<VersionRow>, shots: NonNullable<ShotRows>) {
   const statusProvider = keyframeMode ? keyframeVideoProviders[adapterFamily] : multiClip || singleStoryboardMode ? providers[adapterFamily] : klingVideoProvider;
   const statusEndpoint = 'endpoint' in statusProvider ? statusProvider.endpoint : KLING_ENDPOINT;
   const retryEndpoint = 'endpoint' in statusProvider ? statusProvider.endpoint : KLING_ENDPOINT;
@@ -1131,9 +1189,13 @@ async function refreshStoryboardState(versionId: string, actor: Actor) {
       const shotNumber = Number(shot.shot_number);
       const qualityLedgerIds = Array.isArray(shot.video_quality_ledger_ids) ? shot.video_quality_ledger_ids as string[] : [];
       const attempt = Math.min(MAX_CLIP_RETRIES, Number(shot.video_quality_retry_count ?? 0));
-      let qualityState;
+      let qualityState: Awaited<ReturnType<typeof readKeyframeQuality>>;
+      // 28/10 · verdict of the fixed checks: already stored, nothing to ask fal, nothing paid.
+      const fixedVerdict = String(shot.video_quality_endpoint) === FIXED_CHECK_ENDPOINT ? storedVerdict(shot.video_quality) : null;
       try {
-        qualityState = await readKeyframeQuality(String(shot.video_quality_request_id), falCredential.apiKey, String(shot.video_quality_endpoint || KEYFRAME_VISION_ENDPOINT), 'video');
+        qualityState = fixedVerdict
+          ? { status: 'ready' as const, costUsd: 0, quality: fixedVerdict }
+          : await readKeyframeQuality(String(shot.video_quality_request_id), falCredential.apiKey, String(shot.video_quality_endpoint || KEYFRAME_VISION_ENDPOINT), 'video');
       } catch (cause) {
         await recordPollFailure({ admin, versionId, shotNumber, shot, stage: 'video_quality', cause, apiKey: falCredential.apiKey, now: new Date().toISOString() });
         return;
@@ -1261,7 +1323,19 @@ async function refreshStoryboardState(versionId: string, actor: Actor) {
       const curatedPlace = placeId ? findCuratedLocation(placeId) : undefined;
       const placeAsset = placeId && !curatedPlace ? (await admin.from('assets').select('id,path,kind,status,brand_id').eq('id', placeId).eq('kind', 'place').eq('status', 'validée').eq('brand_id', video.brand_id).maybeSingle()).data : null;
       if (!draft || refError || (refAssets ?? []).length !== vehicleIds.length || placeId && !curatedPlace && !placeAsset) throw new HttpError(422, `Les références du plan ${shotNumber} ne sont plus accessibles pour son contrôle qualité.`);
-      const frameBytes = await extractRepresentativeVideoFrames(bytes, Number(shot.duration_seconds));
+      // 28/10 · fixed checks (duration, black frames, frozen image) in the same second as the judge's frames.
+      const [frameBytes, inspection] = await Promise.all([extractRepresentativeVideoFrames(bytes, Number(shot.duration_seconds)), inspectClip(bytes)]);
+      const fixedVerdict = inspection ? fixedClipVerdict(inspection, { expectedSeconds: Number(shot.duration_seconds), moving: isMoving(draft) }) : null;
+      if (fixedVerdict) {
+        // A clip with a plain defect skips the judge (no wait, no cost): the usual clip decision follows at the next
+        // follow-up, from this stored verdict (retry of this shot only, then a human decision).
+        console.info('clip_fixed_check_failed', JSON.stringify({ versionId, shotNumber, codes: fixedVerdict.codes, inspection }));
+        const fixedPatch = { status: 'postprocessing', raw_path: rawPath, video_quality_status: 'checking', video_quality_request_id: `fixed-${randomUUID()}`, video_quality_endpoint: FIXED_CHECK_ENDPOINT, video_quality: fixedVerdict, ...(clipRedo ? {} : { actual_cost_usd: Number(shot.duration_seconds) * Number(model?.price_usd_per_second ?? 0) * (Number(shot.video_quality_retry_count ?? 0) + 1) }), provider_poll_failure_count: 0, provider_next_poll_at: null, provider_last_poll_error: null, provider_reconciliation_required: false, error_message: null, updated_at: new Date().toISOString() };
+        const fixedWrite = await admin.from('video_shots').update(fixedPatch).eq('version_id', versionId).eq('shot_number', shotNumber).eq('status', 'generating');
+        if (fixedWrite.error) throw new HttpError(503, `Impossible d’enregistrer le contrôle du plan ${shotNumber}.`);
+        nextShotMetrics[String(shot.shot_number)] = firstObservedAt(nextShotMetrics[String(shot.shot_number)] ?? {}, 'rawStoredAt', new Date().toISOString());
+        return;
+      }
       const falStorage = createFalClient({ credentials: falCredential.apiKey }).storage;
       const frameUrls = await Promise.all(frameBytes.map((frame) => falStorage.upload(new Blob([frame.buffer.slice(frame.byteOffset, frame.byteOffset + frame.byteLength) as ArrayBuffer], { type: 'image/jpeg' }), { lifecycle: { expiresIn: '1d' } })));
       const assets = new Map((refAssets ?? []).map((asset) => [asset.id, asset]));
@@ -1274,7 +1348,8 @@ async function refreshStoryboardState(versionId: string, actor: Actor) {
       const visionPrompt = `${buildVideoQualityPrompt({ timeOfDay: briefData.filmLighting ? storedMotionMatrix(briefData)?.places[draft.locationPhotoId ?? ""]?.timeOfDay : undefined, vehicleReferenceCount: vehicleIds.length, hasLocationReference: Boolean(placeId), excludePeople: clipPeople.excludePeople, castTitles: clipPeople.castTitles, castDescription: clipPeople.castDescription, cabin: clipPeople.cabin, shotType: resolveShotType(draft), durationS: Number(shot.duration_seconds), ...storedDrivingRules(briefData), interior: placeForShot(briefData, draft).interior, onRoad: placeForShot(briefData, draft).onRoad, moving: isMoving(draft), framing: framingCriterionOf(briefData, draft), plan: draft, startKeyframe: Boolean(startKeyframeUrl) })}`;
       let qualityJob: { requestId: string };
       try {
-        qualityJob = await submitKeyframeQuality({ prompt: visionPrompt, imageUrls: [...frameUrls, ...(startKeyframeUrl ? [startKeyframeUrl] : []), ...referenceUrls] }, falCredential.apiKey);
+        const judgeUrls = await judgeReferenceUrls({ admin, falStorage, paths: referencePaths, originals: referenceUrls });
+        qualityJob = await submitKeyframeQuality({ prompt: visionPrompt, imageUrls: [...frameUrls, ...(startKeyframeUrl ? [startKeyframeUrl] : []), ...judgeUrls] }, falCredential.apiKey);
       } catch (cause) {
         const statusCode = falErrorStatusCode(cause);
         const uncertain = statusCode === null || statusCode >= 500;
@@ -1331,7 +1406,7 @@ async function refreshStoryboardState(versionId: string, actor: Actor) {
   const scheduledPolls = latestShots.map((shot) => shot.provider_next_poll_at ? Math.max(1, Math.ceil((new Date(shot.provider_next_poll_at).getTime() - Date.now()) / 1000)) : null).filter((seconds): seconds is number => seconds !== null);
   const nextPollInSeconds = scheduledPolls.length ? Math.min(...scheduledPolls) : 15;
   if (pendingShots) return { id: versionId, status: 'generating' as const, qualityWarnings: collectQualityWarnings(latestShots), completedShots, totalShots: latestShots.length, checkedQualityShots: latestShots.filter((shot) => shot.video_quality_status === 'passed').length, totalQualityShots: premiumQualityMode ? latestShots.length : 0, shotProgress: premiumQualityMode ? shotProgress : undefined, processingStage: latestShots.some((shot) => shot.video_quality_status === 'checking') ? 'quality_checking' as const : 'generating' as const, reviewRequired, nextPollInSeconds };
-  const clipsReadyForBoard = storedApproval(briefData).required && latestShots.every((shot) => shot.raw_path && ["passed", "awaiting_review"].includes(shot.video_quality_status));
+  const clipsReadyForBoard = storedApproval(briefData).required && briefData.clipApprovalRequired !== false && latestShots.every((shot) => shot.raw_path && ["passed", "awaiting_review"].includes(shot.video_quality_status));
   if (reviewRequired.length && !clipsReadyForBoard) return { id: versionId, status: 'generating' as const, processingStage: 'awaiting_review' as const, reviewRequired, qualityWarnings: collectQualityWarnings(latestShots), completedShots, totalShots: latestShots.length, checkedQualityShots: latestShots.filter((shot) => shot.video_quality_status === 'passed').length, totalQualityShots: premiumQualityMode ? latestShots.length : 0, shotProgress: premiumQualityMode ? shotProgress : undefined, nextPollInSeconds };
 
   if (premiumQualityMode) {
@@ -1415,6 +1490,7 @@ async function refreshStoryboardState(versionId: string, actor: Actor) {
       return { id: versionId, status: 'failed' as const, error: decision.userMessage, completedShots: latestShots.length, totalShots: latestShots.length };
     }
     return { id: versionId, status: 'postprocessing' as const, error: `${decision.userMessage} Nouvelle tentative automatique (${decision.attempts}/${MAX_MONTAGE_ATTEMPTS}).`, completedShots: latestShots.length, totalShots: latestShots.length };
+  }
   }
 }
 

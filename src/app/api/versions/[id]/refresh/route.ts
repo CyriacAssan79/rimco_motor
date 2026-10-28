@@ -25,7 +25,9 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
       const { data: version } = await admin.from('video_versions').select('status,brief_json').eq('id', id).maybeSingle();
       const brief = version?.brief_json && typeof version.brief_json === 'object' ? version.brief_json as Record<string, unknown> : {};
       const metrics = brief.processingMetrics && typeof brief.processingMetrics === 'object' ? brief.processingMetrics as ProcessingMetrics : {};
-      const processingStageName = 'processingStage' in result && (result.processingStage === 'quality_checking' || result.processingStage === 'awaiting_review' || result.processingStage === 'keyframe_approval' || result.processingStage === 'clip_approval') ? result.processingStage : processingStage(version?.status ?? result.status, metrics);
+      // 28/10: the clip side and the keyframe side of one refresh are merged, so the stage is read as a plain string.
+      const reportedStage = 'processingStage' in result ? String(result.processingStage) : '';
+      const processingStageName = (['quality_checking', 'awaiting_review', 'keyframe_approval', 'clip_approval'] as const).find((stage) => stage === reportedStage) ?? processingStage(version?.status ?? result.status, metrics);
       const stageStartedAt = processingStageName === 'queued' ? metrics.providerSubmittedAt : processingStageName === 'keyframing' ? metrics.keyframingStartedAt : processingStageName === 'generating' ? metrics.generationStartedAt ?? metrics.providerSubmittedAt : processingStageName === 'transferring' ? metrics.providerCompletedAt : processingStageName === 'postprocessing' ? metrics.postproductionStartedAt : undefined;
       const { data: shots } = await admin.from('video_shots').select('shot_number,title,status,keyframe_status,video_quality_status,verification_history').eq('version_id', id);
       const progress = await versionProgress(admin, { status: version?.status ?? result.status, brief, shots: (shots ?? []) as ProgressShotRow[] });

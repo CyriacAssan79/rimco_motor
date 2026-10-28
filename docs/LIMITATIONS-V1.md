@@ -16,7 +16,8 @@ Document à partager avec RIMCO Motors à la remise des accès.
 | Transitions | Les plans s'enchaînent en coupe franche, sans fondu | Transitions au montage (fondu, fondu au noir) |
 | Respect de la demande | Ce qui ne peut pas être filmé (règles de la marque, scènes en trop pour un aperçu, fondus…) est signalé avant le lancement, puis rappelé dans le détail de la vidéo | Écran de validation des plans avant les images clés |
 | Préparation | Pendant « Préparation » (moins d'une minute), il faut rester sur la page : la vidéo n'est créée qu'à la fin de cette étape | Préparation entièrement côté serveur |
-| Suivi de la génération | La génération avance tant qu'un onglet RIMCO Studio est ouvert ; on peut naviguer dans l'application | Génération entièrement en arrière-plan, avec notification à la fin |
-| Délai | Quelques minutes par plan, selon la file du fournisseur | Plans traités en parallèle et suivi en temps réel |
+| Validations | L'utilisateur valide les images clés, et les clips si KÔMIAN l'a activé pour la marque | — |
+| Suivi de la génération | La génération continue même onglet fermé ; les validations à faire et la vidéo prête s'affichent dans la cloche de l'application (pas d'e-mail) | Notification par e-mail |
+| Délai | Environ 5 minutes de calcul pour 10 s, plus le temps des validations. Chaque plan part en vidéo dès que son image clé est validée | Suivi en temps réel à l'écran |
 | Textes à l'image | Aucun texte ni logo n'est généré dans les scènes ; le logo est ajouté au montage | Textes et mentions composés au montage |
 | E-mails | Aucun : l'administrateur crée les accès et transmet le mot de passe provisoire ; les alertes sont dans l'application | Service d'e-mails |

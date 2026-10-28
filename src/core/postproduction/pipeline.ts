@@ -11,6 +11,7 @@ import { createStorageAdminClient } from '@/core/storage/supabase';
 import { chooseMontageFps, makeClipPreviewArgs, makeFinalVideoArgs, makeMultiClipMontageArgs, parseFfmpegFps, makePhotoFidelityShotArgs, makeShotMontageArgs, normalizeVideoFormat, shouldOverlayLogo, type VideoFormat } from './ffmpeg-args';
 import { firstObservedAt, type ProcessingMetrics } from '@/core/versions/processing-metrics';
 import { videoQualityTimestamps } from '@/core/providers/fal-keyframes';
+import { CLIP_INSPECTION_FILTER, parseClipInspection, type ClipInspection } from '@/core/verification/fixed-checks';
 
 const ffmpegPath = resolveFfmpegPath(process.platform, process.cwd());
 
@@ -298,6 +299,54 @@ export async function extractRepresentativeVideoFrames(bytes: Buffer, durationS 
       if (info.size <= 0 || info.size > MAX_IMAGE_BYTES) throw new HttpError(502, 'Une image de contrôle du clip est invalide.');
       return readFile(path);
     }));
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
+/**
+ * 28/10 · fixed checks of a clip (verification/fixed-checks.ts): one FFmpeg decoding pass with blackdetect and
+ * freezedetect, run at the same time as the frame extraction above. Never throws: an inspection that cannot run
+ * returns null and the judge decides alone, as before.
+ */
+export async function inspectClip(bytes: Buffer): Promise<ClipInspection | null> {
+  try { await access(ffmpegPath, constants.X_OK); } catch { return null; }
+  const directory = await mkdtemp(join(tmpdir(), 'rimco-inspect-'));
+  const inputFile = join(directory, 'clip.mp4');
+  try {
+    await writeFile(inputFile, bytes);
+    const stderr = await new Promise<string>((resolve) => {
+      const child = spawn(ffmpegPath, ['-hide_banner', '-nostats', '-i', inputFile, '-an', '-vf', CLIP_INSPECTION_FILTER, '-f', 'null', '-'], { stdio: ['ignore', 'ignore', 'pipe'] });
+      let output = '';
+      const timeout = setTimeout(() => child.kill('SIGKILL'), 20_000);
+      child.stderr.on('data', (chunk: Buffer) => { if (output.length < 40_000) output += chunk.toString('utf8'); });
+      child.once('error', () => { clearTimeout(timeout); resolve(''); });
+      child.once('close', (code) => { clearTimeout(timeout); resolve(code === 0 ? output : ''); });
+    });
+    return stderr ? parseClipInspection(stderr) : null;
+  } catch {
+    return null;
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
+/**
+ * 28/10 · smaller copy of a reference photo for the vision judge (JPEG, longest side `maxSide`). The generators keep
+ * the original. Returns null when FFmpeg cannot run: the caller then sends the original, as before.
+ */
+export async function downscaleImage(bytes: Buffer, maxSide = 1024): Promise<Buffer | null> {
+  try { await access(ffmpegPath, constants.X_OK); } catch { return null; }
+  const directory = await mkdtemp(join(tmpdir(), 'rimco-judge-'));
+  const inputFile = join(directory, 'source');
+  const outputFile = join(directory, 'judge.jpg');
+  try {
+    await writeFile(inputFile, bytes);
+    await runFfmpeg(ffmpegPath, ['-hide_banner', '-loglevel', 'error', '-y', '-i', inputFile, '-frames:v', '1', '-vf', `scale='if(gt(iw,ih),min(${maxSide},iw),-2)':'if(gt(iw,ih),-2,min(${maxSide},ih))'`, '-q:v', '3', outputFile]);
+    const output = await readFile(outputFile);
+    return output.length > 0 ? output : null;
+  } catch {
+    return null;
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

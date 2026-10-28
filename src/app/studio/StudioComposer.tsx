@@ -180,6 +180,8 @@ export function StudioComposer({ mode, showPrompt = false, canRetryMontage = fal
   const [settingsNotice, setSettingsNotice] = useState("");
   /** 27/10 · « Valider les images clés avant la vidéo »: brand setting, and the user's choice when it is free. */
   const [approvalMode, setApprovalMode] = useState<KeyframeApprovalMode>(DEFAULT_KEYFRAME_APPROVAL_MODE);
+  /** 28/10 · the operator may switch off the clip validation (the keyframes stay validated). */
+  const [clipApproval, setClipApproval] = useState(true);
   const [approvalChoice, setApprovalChoice] = useState<boolean | null>(null);
   const formRef = useRef<HTMLFormElement>(null);
   const conflictRef = useRef<HTMLDivElement>(null);
@@ -373,7 +375,7 @@ export function StudioComposer({ mode, showPrompt = false, canRetryMontage = fal
     let active = true;
     fetch("/api/settings/keyframe-approval")
       .then(async (response) => (response.ok ? response.json() : null))
-      .then((data) => { if (active && data) setApprovalMode(normalizeApprovalMode(data.mode)); })
+      .then((data) => { if (active && data) { setApprovalMode(normalizeApprovalMode(data.mode)); setClipApproval(data.clipApproval !== false); } })
       .catch(() => undefined);
     return () => { active = false; };
   }, []);
@@ -1356,11 +1358,10 @@ export function StudioComposer({ mode, showPrompt = false, canRetryMontage = fal
                 className="mt-0.5 size-4 accent-[#c51e1c]"
               />
               <span>
-                <span className="font-semibold">Valider les images clés et les clips avant le montage</span>
+                <span className="font-semibold">{clipApproval ? "Valider les images clés et les clips avant le montage" : "Valider les images clés avant la vidéo"}</span>
                 <span className="block text-[#626269]">
-                  {approvalBox.locked
-                    ? "Demandé par votre marque : les vidéos des plans, l’étape payante, attendent votre validation."
-                    : "Les vidéos des plans, l’étape payante, attendent votre validation des images clés."}
+                  {approvalBox.locked ? "Demandé par votre marque. " : ""}
+                  Chaque plan part en vidéo, l’étape payante, dès que vous validez son image clé.
                 </span>
               </span>
             </label>

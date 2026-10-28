@@ -63,7 +63,7 @@ describe('keyframe board before the paid animation', () => {
     const result = await first.run();
     expect(result).toMatchObject({ status: 'generating', processingStage: 'keyframe_approval', keyframeApproval: { shots: [{ shotNumber: 1, state: 'to_approve', canRevise: true, action: 'Voiture qui roule · de gauche à droite · à vitesse normale · 5 s' }, { shotNumber: 2 }] } });
     expect(brief.keyframeApproval).toMatchObject({ required: true, requestedAt: new Date(T0).toISOString() });
-    expect(first.notifications).toEqual([expect.objectContaining({ type: 'action_required', message: '« Haval H6 » · 2 images clés à valider avant la vidéo : l’animation attend votre validation.' })]);
+    expect(first.notifications).toEqual([expect.objectContaining({ type: 'action_required', message: '« Haval H6 » · Images clés à valider : chaque plan part en vidéo dès que vous validez son image.' })]);
     // Next refresh, one minute later: still waiting, no second notification.
     const second = gate(brief, [readyShot(1), readyShot(2)], T0 + 60_000);
     expect(await second.run()).toMatchObject({ processingStage: 'keyframe_approval' });

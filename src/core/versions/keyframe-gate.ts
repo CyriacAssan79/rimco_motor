@@ -1,7 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { notify } from '@/core/notifications/notify';
 import type { StoryboardShot } from '@/core/storyboard';
-import { humanRevisionLimit, humanRevisionsUsed, MAX_KEYFRAME_ATTEMPTS } from '@/core/verification/loop';
+import { humanRevisionLimit, humanRevisionsUsed, MAX_KEYFRAME_ATTEMPTS, storedVerdict } from '@/core/verification/loop';
+import { CRITICAL_DEFECT_CODES, describeDefects, hasCriticalDefect } from '@/core/verification/defects';
 import { approvalDeadline, isShotApproved, shotActionFr, shotsModifiedOnBoard, storedApproval, type KeyframeApprovalState } from './keyframe-approval';
 import { lastHumanRevision } from './shot-feedback';
 import { storedClipApproval } from './clip-approval';
@@ -15,6 +16,7 @@ export type GateShot = {
   title?: string | null;
   keyframe_status?: string | null;
   keyframe_retry_count?: number | null;
+  keyframe_quality?: unknown;
   verification_history?: unknown;
 };
 
@@ -30,14 +32,30 @@ export type KeyframeBoard = {
     /** French, from the closed fields of the shot (the director's text is English, for the models). */
     action: string;
     url: string | null;
-    state: 'to_approve' | 'approved' | 'correcting' | 'decision';
+    /** 28/10 · `pending`: the image of this shot is still being made (the board opens with the first one ready). */
+    state: 'to_approve' | 'approved' | 'correcting' | 'decision' | 'pending';
     canRevise: boolean;
     revisionsLeft: number;
     lastRevision: { feedback: string; reasons: string[]; conflicts: string[] } | null;
+    /** 28/10 · critical defects the judge let through as minor (French), to look at before validating. */
+    alerts?: string[];
   }>;
 };
 
 export const EXPIRED_MESSAGE = 'Images clés non validées sous 48 h : la vidéo a expiré. Rien ne vous est facturé ; les images clés sont conservées. Relancez avec les mêmes réglages depuis le Studio.';
+
+/** A new image after a defect or a user's modification (not the first image of the shot). */
+function isCorrecting(shot: GateShot): boolean {
+  return shot.keyframe_status === 'revising' || Number(shot.keyframe_retry_count ?? 0) > 0;
+}
+
+/** French labels of the critical defects listed by an approving judge (identity, setting, floating car…). */
+function criticalAlerts(quality: unknown): { alerts?: string[] } {
+  const verdict = storedVerdict(quality);
+  if (!verdict?.approved || !hasCriticalDefect(verdict.codes)) return {};
+  const alerts = [...new Set(describeDefects(verdict.issues, verdict.codes).filter((defect) => CRITICAL_DEFECT_CODES.includes(defect.code)).map((defect) => defect.label))];
+  return alerts.length ? { alerts } : {};
+}
 
 type GateInput = {
   admin: SupabaseClient;
@@ -48,6 +66,8 @@ type GateInput = {
   shots: GateShot[];
   keyframes: Array<{ number: number; url: string }>;
   draftFor: (shot: GateShot) => StoryboardShot | undefined;
+  /** 28/10 · at least one clip is engaged at fal: the video then never expires on the board (reminder only). */
+  clipsPaid?: boolean;
   now?: number;
 };
 
@@ -70,10 +90,11 @@ export function approvalBoard(input: Pick<GateInput, 'shots' | 'keyframes' | 'dr
         title: shot.title ?? draft?.title ?? `Plan ${shot.shot_number}`,
         action: draft ? shotActionFr(draft) : '',
         url: input.keyframes.find((keyframe) => keyframe.number === shot.shot_number)?.url ?? null,
-        state: approved ? 'approved' : ready ? 'to_approve' : shot.keyframe_status === 'awaiting_review' ? 'decision' : 'correcting',
+        state: approved ? 'approved' : ready ? 'to_approve' : shot.keyframe_status === 'awaiting_review' ? 'decision' : isCorrecting(shot) ? 'correcting' : 'pending',
         canRevise: ready && !approved && used < humanRevisionLimit(input.brief, 'keyframe') && Number(shot.keyframe_retry_count ?? 0) + 1 < MAX_KEYFRAME_ATTEMPTS,
         revisionsLeft: Math.max(0, humanRevisionLimit(input.brief, 'keyframe') - used),
         lastRevision: lastHumanRevision(shot.verification_history),
+        ...criticalAlerts(shot.keyframe_quality),
       };
     }),
   };
@@ -100,8 +121,9 @@ export async function enforceApprovalDeadline(input: GateInput) {
   const now = input.now ?? Date.now();
   const nowIso = new Date(now).toISOString();
   const deadline = approvalDeadline(state.requestedAt, now);
-  // Returning from the clip board: the earlier clips are paid. This image may wait without cancelling the film.
-  if (storedClipApproval(input.brief).requestedAt) {
+  // Returning from the clip board, or (28/10) clips already sent while other images wait: the earlier clips are paid.
+  // This image may wait without cancelling the film.
+  if (storedClipApproval(input.brief).requestedAt || input.clipsPaid) {
     if (deadline.due !== 'none' && !state.remindedAt) {
       await saveApproval(input, { ...state, remindedAt: nowIso }, {});
       await notify(input.admin, { userId: input.video.user_id, versionId: input.version.id, type: 'action_required', message: `${await videoTitle(input)}L’image clé corrigée attend votre validation. Les clips déjà payés sont conservés ; la vidéo n’expire pas.`, dedupeKey: `keyframe_return_reminder:${state.requestedAt}` });
@@ -143,7 +165,7 @@ export async function keyframeApprovalGate(input: GateInput) {
   if (!state.requestedAt) {
     state = { ...state, requestedAt: nowIso };
     await saveApproval(input, state, { keyframeApprovalRequestedAt: nowIso });
-    await notify(input.admin, { userId: input.video.user_id, versionId: input.version.id, type: 'action_required', message: `${await videoTitle(input)}${input.shots.length} image${input.shots.length > 1 ? 's' : ''} clé${input.shots.length > 1 ? 's' : ''} à valider avant la vidéo : l’animation attend votre validation.`, dedupeKey: `keyframe_approval:${nowIso}` });
+    await notify(input.admin, { userId: input.video.user_id, versionId: input.version.id, type: 'action_required', message: `${await videoTitle(input)}Images clés à valider : chaque plan part en vidéo dès que vous validez son image.`, dedupeKey: `keyframe_approval:${nowIso}` });
   }
   if (input.shots.every((shot) => isShotApproved(shot.verification_history))) {
     const waitSeconds = Math.max(0, Math.round((now - Date.parse(state.requestedAt!)) / 1000));

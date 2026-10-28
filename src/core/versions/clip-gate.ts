@@ -10,6 +10,7 @@ import { shotActionFr, storedApproval } from './keyframe-approval';
 import { clipRedoCostUsd, decorateReviewRequests } from './review-details';
 import { effectiveShotDraft, type ReviewRequest } from '@/core/verification/loop';
 import type { StoryboardShot } from '@/core/storyboard';
+import { hasCriticalDefect } from '@/core/verification/defects';
 import { clipBoardMeasures, isClipActive, isClipApproved, storedClipApproval } from './clip-approval';
 
 export type ClipBoard = { requestedAt: string; releasedAt?: string; durationSeconds: number; shots: Array<ReviewRequest & { action: string; active: boolean; approved: boolean; colour: 'green' | 'orange' | 'red'; canRevise: boolean }> };
@@ -27,7 +28,8 @@ export async function authorizeClipBoard(actor: Actor, versionId: string) {
 }
 
 export async function clipApprovalGate(input: { admin: SupabaseClient; version: { id: string; video_id: string }; userId: string; brief: Record<string, unknown>; shots: ClipGateShot[]; now?: number }) {
-  if (!storedApproval(input.brief).required) return null;
+  // 28/10: videos launched before 0043 have no flag and keep validating their clips.
+  if (!storedApproval(input.brief).required || input.brief.clipApprovalRequired === false) return null;
   let state = storedClipApproval(input.brief);
   if (state.approvedAt) return null;
   const now = input.now ?? Date.now();
@@ -82,5 +84,5 @@ export async function buildClipBoard(admin: SupabaseClient, input: { brief: Reco
   }));
   const decorated = await decorateReviewRequests(admin, { items: requests, brief: input.brief, role: input.role, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA });
   return { requestedAt: storedClipApproval(input.brief).requestedAt!, releasedAt: storedClipApproval(input.brief).releasedAt, durationSeconds: input.shots.filter((shot) => isClipActive(shot.verification_history)).reduce((sum, shot) => sum + shot.duration_seconds, 0) + 2,
-    shots: decorated.map((item) => { const shot = input.shots.find((shot) => shot.shot_number === item.shotNumber)!; const verdict = storedVerdict(shot.video_quality); const draft = effectiveShotDraft(drafts[shot.shot_number - 1], shot.revised_draft); return { ...item, action: draft ? shotActionFr(draft) : `${shot.duration_seconds} s`, active: isClipActive(shot.verification_history), approved: isClipApproved(shot.verification_history), colour: !verdict?.approved ? 'red' : verdict.issues.length || verdict.readableText || (shot.video_quality as { warning?: boolean } | null)?.warning ? 'orange' : 'green', canRevise: (item.revisionsLeft ?? 0) > 0 }; }) };
+    shots: decorated.map((item) => { const shot = input.shots.find((shot) => shot.shot_number === item.shotNumber)!; const verdict = storedVerdict(shot.video_quality); const draft = effectiveShotDraft(drafts[shot.shot_number - 1], shot.revised_draft); return { ...item, action: draft ? shotActionFr(draft) : `${shot.duration_seconds} s`, active: isClipActive(shot.verification_history), approved: isClipApproved(shot.verification_history), colour: !verdict?.approved || hasCriticalDefect(verdict.codes) ? 'red' : verdict.issues.length || verdict.readableText || (shot.video_quality as { warning?: boolean } | null)?.warning ? 'orange' : 'green', canRevise: (item.revisionsLeft ?? 0) > 0 }; }) };
 }

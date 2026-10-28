@@ -7,7 +7,18 @@ export const DEFECT_CODES = [
   'identity', 'framing', 'cut_off', 'wrong_direction', 'floating', 'sliding', 'treadmill', 'place', 'foreign_setting',
   'pasted_on', 'extra_vehicle', 'people', 'steering', 'traffic_side', 'lighting', 'text', 'other',
 ] as const;
-export type DefectCode = typeof DEFECT_CODES[number];
+/** 28/10 · codes written by the fixed checks of a clip (fixed-checks.ts), never asked to the judge. */
+export const FIXED_DEFECT_CODES = ['duration', 'black_frames', 'frozen'] as const;
+export type DefectCode = typeof DEFECT_CODES[number] | typeof FIXED_DEFECT_CODES[number];
+
+/**
+ * 28/10 · defects that change what the client sees of his car or of his city. The judge may call them « minor »;
+ * they are then shown in red to the person who validates (no extra retry: the generation time is unchanged).
+ */
+export const CRITICAL_DEFECT_CODES: readonly DefectCode[] = ['identity', 'foreign_setting', 'floating', 'pasted_on', 'extra_vehicle'];
+export function hasCriticalDefect(codes: unknown): boolean {
+  return Array.isArray(codes) && codes.some((code) => CRITICAL_DEFECT_CODES.includes(normalizeDefectCode(code)));
+}
 
 export const DEFECT_LABELS_FR: Record<DefectCode, string> = {
   identity: 'Le véhicule ne correspond pas à sa photo (couleur, calandre, logo, jantes ou feux)',
@@ -27,6 +38,9 @@ export const DEFECT_LABELS_FR: Record<DefectCode, string> = {
   lighting: 'La lumière ne correspond pas au moment de la journée du lieu ou change pendant le clip',
   text: 'Un texte ou un logo lisible apparaît dans l’image',
   other: 'Autre défaut signalé par le contrôle automatique',
+  duration: 'Le clip est plus court que prévu',
+  black_frames: 'Le clip contient des images noires',
+  frozen: 'L’image reste figée alors que la voiture devrait rouler',
 };
 
 /** English list given to the judges (prompt): same codes, same order. */
@@ -34,7 +48,7 @@ export const DEFECT_CODES_FOR_JUDGE = DEFECT_CODES.join(', ');
 
 export function normalizeDefectCode(value: unknown): DefectCode {
   const code = typeof value === 'string' ? value.trim().toLowerCase().replace(/[\s-]+/g, '_') : '';
-  return (DEFECT_CODES as readonly string[]).includes(code) ? code as DefectCode : 'other';
+  return (DEFECT_CODES as readonly string[]).includes(code) || (FIXED_DEFECT_CODES as readonly string[]).includes(code) ? code as DefectCode : 'other';
 }
 
 /** Codes read back from a stored verdict, aligned on its issues; anything unknown becomes « other ». */

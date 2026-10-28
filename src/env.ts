@@ -3,6 +3,9 @@ const schema = z.object({
   PROVIDERS_MODE: z.enum(['mock','live']).default('mock'),
   FAL_KEY: z.string().optional(), FAL_CREDENTIALS_ENCRYPTION_KEY: z.string().optional(), LLM_MODEL: z.string().optional(),
   LLM_MAX_COST_USD: z.coerce.number().positive().optional(),
+  // 28/10 · optional model of the vision judges only (keyframes and clips). Empty = LLM_MODEL, as before. To test a
+  // faster model: it must stay of another family than the generators (no Google model: the keyframes come from Gemini).
+  VISION_MODEL: z.preprocess((value) => (typeof value === 'string' && value.trim() === '' ? undefined : value), z.string().optional()),
   // Optional per-video cap (AGENTS.md: no app-level block by default); an empty Vercel variable means "no cap" instead of breaking the app at boot.
   VIDEO_COST_CAP_USD: z.preprocess((value) => (typeof value === 'string' && value.trim() === '' ? undefined : value), z.coerce.number().positive().optional()),
   // 26/10: estimate the optional cap applies to: « nominal » (default, one attempt of everything) or « worst_case » (every automatic retry). Team decision.

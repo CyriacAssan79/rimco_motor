@@ -104,7 +104,7 @@ async function expectStudioRestoresActiveVersion(page: Page) {
   });
   await page.goto('/');
   await expect(page.getByRole('heading', { name: 'État de la vidéo · Vidéo E2E en cours' })).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByText(/gardez un onglet ouvert/)).toBeVisible();
+  await expect(page.getByText(/continue même si vous fermez cet onglet/)).toBeVisible();
   const indicator = page.getByRole('link', { name: /1 vidéo en cours · Images clés/ });
   await expect(indicator).toBeVisible();
   await expect.poll(() => refreshCalls.length, { timeout: 15_000 }).toBe(1);

@@ -17,6 +17,13 @@ Détail : docs/DECISIONS.md (entrée « Finitions V1 avant livraison client »).
 - Tout écart entre la demande et la vidéo est signalé à l'utilisateur avant le lancement (briefConflicts) et rappelé ensuite dans le détail de la vidéo (brief_json.briefAdaptations).
 - Pas de Vercel Pro : la relance chaque minute passe, si l'équipe l'active, par Supabase pg_cron + pg_net (supabase/ops/generations_every_minute.sql) vers /api/cron/reconcile?scope=generations.
 
+## Décisions du 28/10/2026 · optimisation de la vitesse (prioritaires sur le reste de ce fichier)
+Détail : docs/DECISIONS.md (entrée « Optimisation de la vitesse de génération ») et docs/PROTOCOLE-MESURE.md.
+- Validations humaines conservées, réglées par l'opérateur seulement (Espace KÔMIAN · Paramètres · Validation humaine) : mode des images clés (0037) et validation des clips oui/non (0043, `brands.clip_approval_enabled`), figés au lancement (`brief_json.clipApprovalRequired`).
+- Chaque plan à son rythme (src/core/versions/shot-pipeline.ts) : un plan part en animation dès que SON image clé est prête (et validée si demandé) ; le tableau des images clés s'ouvre avec la première prête ; le montage attend tous les clips. Une vidéo dont un clip est payé n'expire plus sur le tableau (rappel seulement).
+- Webhook fal réel (src/core/providers/fal-webhook.ts, /api/fal/webhook) : simple « réveil » du suivi, corps jamais utilisé, jeton secret ; envoyé seulement depuis la production. Le suivi par onglet et la relance pg_cron chaque minute restent les filets de sécurité.
+- Vérificateurs : contrôles fixes FFmpeg avant le juge (durée, images noires, image figée ; src/core/verification/fixed-checks.ts) ; défauts importants signalés en rouge au validateur sans reprise supplémentaire ; juge sur des copies 1 024 px des références ; reprise directe de l'image clé (sans réécriture du réalisateur) pour les défauts de l'image ; VISION_MODEL facultatif pour tester un juge plus rapide.
+
 ## Rôle attendu
 Lead développeur full-stack senior Next.js (App Router), TypeScript, Tailwind CSS et Supabase, expérimenté sur la génération vidéo IA via fal.ai et la maîtrise des coûts d'API. Tu tranches seul, tu livres simple, testé et sécurisé par défaut, et tu documentes chaque décision pour un responsable non développeur.
 

@@ -131,7 +131,32 @@ export function keyframeLoopDecision(verdict: Verdict | null, correctionsDone: n
     if (!verdict.readableText) return verdict.issues.length ? 'accept_with_warning' : 'accept';
     return correctionsDone === 0 && canCorrect ? 'retry_image' : 'accept_with_warning';
   }
-  return canCorrect ? 'revise' : 'review';
+  if (!canCorrect) return 'review';
+  // 28/10 · defects of the image itself (not of the shot written by the director): a new image with a fixed
+  // instruction, without the director's rewriting step (one step and one language-model call less).
+  return directRetryInstruction(verdict) ? 'retry_image' : 'revise';
+}
+
+/**
+ * 28/10 · fixed instruction per defect code for a new keyframe, when every defect is of the image itself. Null when
+ * one defect needs the director (framing, direction, place, people, steering, traffic side, other, or no code).
+ */
+const DIRECT_RETRY_INSTRUCTIONS: Record<string, string> = {
+  text: 'make every sign, billboard, poster and storefront blank, without readable letters',
+  floating: 'all four tyres rest on the ground with a soft contact shadow under each wheel',
+  extra_vehicle: 'remove every other vehicle: only the reference car is in the image',
+  pasted_on: 'match the car to the scene: same light direction, colour temperature and shadows as the place',
+  cut_off: 'show the whole car inside the frame with a margin on every side',
+  lighting: 'use the light of the time of day of the place only',
+  identity: 'copy the reference car exactly: same paint, grille, badges, wheels and lights as the reference photos',
+};
+export function directRetryInstruction(verdict: Pick<Verdict, 'approved' | 'codes' | 'issues'>): string | null {
+  if (verdict.approved) return null;
+  const codes = verdict.codes ?? [];
+  if (!codes.length || codes.length < verdict.issues.length) return null;
+  const instructions = codes.map((code) => DIRECT_RETRY_INSTRUCTIONS[String(code).trim().toLowerCase()]);
+  if (instructions.some((instruction) => !instruction)) return null;
+  return [...new Set(instructions)].join('; ');
 }
 
 /** Verdict stored on a shot (`keyframe_quality` / `video_quality`), or null when absent or malformed. */
