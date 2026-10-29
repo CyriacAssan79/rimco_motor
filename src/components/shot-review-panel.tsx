@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { formatFcfa } from "@/core/pricing";
 import { describeDefects } from "@/core/verification/defects";
 import { REVISION_REASON_IDS, REVISION_REASONS, USER_FEEDBACK_MAX_LENGTH, type ReviewRequest, type RevisionReason } from "@/core/verification/loop";
+import { KIND_LABELS, nonConformityActions, type NonConformityKind, type ReportDecision, type ReportStage } from "@/core/versions/shot-reports";
 
 /** Requests adapted to the brand rules, shown with the corrected shot (same wording as the Studio brief). */
 export function AdaptedRequests({ conflicts, title = "Votre demande a été adaptée aux règles de la marque" }: { conflicts: string[]; title?: string }) {
@@ -36,61 +37,118 @@ export function RelaunchCost({ cost, withMinutes = true }: { cost: ModificationC
   );
 }
 
+export type RelaunchOption = { scope?: "clip" | "full"; label: string; cost?: ReviewRequest["cost"] };
+
+async function postJson(url: string, body: unknown, fallback: string) {
+  const response = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error ?? fallback);
+  return data as Record<string, unknown>;
+}
+
 /**
- * « Modifier ce plan » (27/10): closed-list reasons and/or a comment (400 characters), the cost in FCFA, then
- * « Lancer la correction ». Shared by the decision panel and the keyframe board.
+ * 29/10 · S01 · « Non conforme » sur un plan, avant le montage. Deux voies :
+ * - reprise créative : un commentaire, puis la génération du plan est relancée (limite de reprises réglée par KÔMIAN) ;
+ * - erreur technique : une ou plusieurs cases de la liste fermée, puis accepter le plan, relancer la génération
+ *   (jamais facturée) ou rejeter le plan (clips seulement : il est désactivé).
+ * La déclaration est enregistrée d'abord (suivi KÔMIAN, recrédit des erreurs techniques), puis l'action est faite par
+ * les routes existantes. Partagé par la planche des images clés, la planche des clips et le panneau de décision.
  */
-export function ReviseShotForm({ versionId, shotNumber, cost, scope, onSent, onCancel }: { versionId: string; shotNumber: number; cost?: ReviewRequest["cost"]; scope?: 'clip' | 'full'; onSent: (conflicts: string[]) => void; onCancel: () => void }) {
+export function NonConformityForm({ versionId, shotNumber, stage, relaunchOptions, revisionsLeft, onAccept, onReject, onSent, onDecided, onCancel }: {
+  versionId: string;
+  shotNumber: number;
+  stage: ReportStage;
+  relaunchOptions: RelaunchOption[];
+  revisionsLeft?: number | null;
+  onAccept?: () => Promise<void>;
+  onReject?: () => Promise<void>;
+  onSent: (conflicts: string[]) => void;
+  onDecided: () => void;
+  onCancel: () => void;
+}) {
+  const [kind, setKind] = useState<NonConformityKind | null>(null);
   const [reasons, setReasons] = useState<RevisionReason[]>([]);
-  const [feedback, setFeedback] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [comment, setComment] = useState("");
+  const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState("");
-  async function submit(event: React.FormEvent) {
-    event.preventDefault();
-    setBusy(true);
-    setError("");
-    try {
-      const response = await fetch(`/api/versions/${versionId}/shots/${shotNumber}/review`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ decision: "revise", feedback: feedback.trim(), reasons, ...(scope ? { scope } : {}) }),
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error ?? "La correction n’a pas pu être lancée.");
-      onSent(Array.isArray(data.feedbackConflicts) ? data.feedbackConflicts : []);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "La correction n’a pas pu être lancée.");
-    } finally {
-      setBusy(false);
-    }
+  const actions = kind ? nonConformityActions({ kind, stage, canRelaunch: relaunchOptions.length > 0, canAccept: Boolean(onAccept), canReject: Boolean(onReject) }) : null;
+  const ready = kind === "technical" ? reasons.length > 0 : kind === "creative" ? comment.trim().length > 0 : false;
+
+  async function report(decision: ReportDecision) {
+    await postJson(`/api/versions/${versionId}/shots/${shotNumber}/report`, { stage, kind, reasons: kind === "technical" ? reasons : [], comment: comment.trim() || undefined, decision }, "Le signalement n’a pas pu être enregistré.");
   }
+  async function run(key: string, task: () => Promise<void>) {
+    setBusy(key);
+    setError("");
+    try { await task(); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : "La décision n’a pas pu être enregistrée."); }
+    finally { setBusy(null); }
+  }
+  const relaunch = (option: RelaunchOption) => run(`relaunch-${option.scope ?? "plan"}`, async () => {
+    await report("relaunch");
+    const data = await postJson(`/api/versions/${versionId}/shots/${shotNumber}/review`, { decision: "revise", feedback: kind === "creative" ? comment.trim() : "", reasons: kind === "technical" ? reasons : [], kind, ...(option.scope ? { scope: option.scope } : {}) }, "La relance n’a pas pu être lancée.");
+    onSent(Array.isArray(data.feedbackConflicts) ? data.feedbackConflicts as string[] : []);
+  });
+  const decide = (decision: "accept" | "reject", action?: () => Promise<void>) => run(decision, async () => {
+    if (!action) return;
+    await report(decision);
+    await action();
+    onDecided();
+  });
+
   return (
-    <form onSubmit={(event) => void submit(event)} className="space-y-3 rounded-md border border-[#e7c9c6] bg-[#fffafa] p-3">
+    <div className="space-y-3 rounded-md border border-[#e7c9c6] bg-[#fffafa] p-3">
       <fieldset>
-        <legend className="text-xs font-semibold text-[#242428]">Qu’est-ce qui ne va pas ?</legend>
-        <div className="mt-2 grid gap-1 sm:grid-cols-2">
-          {REVISION_REASON_IDS.map((reason) => (
-            <label key={reason} className="flex min-h-11 cursor-pointer items-center gap-2 text-xs text-[#242428]">
-              <input type="checkbox" checked={reasons.includes(reason)} onChange={() => setReasons((current) => current.includes(reason) ? current.filter((value) => value !== reason) : [...current, reason])} className="size-4 accent-[#c51e1c]" />
-              {REVISION_REASONS[reason].fr}
+        <legend className="text-xs font-semibold text-[#242428]">Ce plan n’est pas conforme : de quoi s’agit-il ?</legend>
+        <div className="mt-2 grid gap-2 sm:grid-cols-2">
+          {(["technical", "creative"] as const).map((value) => (
+            <label key={value} className={`flex min-h-11 cursor-pointer items-start gap-2 rounded border p-2 text-xs ${kind === value ? "border-[#c51e1c] bg-[#fff1ef]" : "border-[#e5e2dd] bg-white"}`}>
+              <input type="radio" name={`kind-${versionId}-${shotNumber}`} checked={kind === value} onChange={() => { setKind(value); setError(""); }} className="mt-0.5 size-4 accent-[#c51e1c]" />
+              <span><b className="font-semibold">{KIND_LABELS[value]}</b><span className="block text-[#55545a]">{value === "technical" ? "Un défaut de rendu : cochez ce qui ne va pas. Jamais facturé." : "Vous voulez autre chose : décrivez-le, le plan est relancé."}</span></span>
             </label>
           ))}
         </div>
       </fieldset>
-      <label className="grid gap-1 text-xs font-semibold text-[#242428]">
-        Précisez ce que vous voulez
-        <textarea value={feedback} onChange={(event) => setFeedback(event.target.value)} maxLength={USER_FEEDBACK_MAX_LENGTH} rows={3} placeholder="Ex. la voiture est coupée à gauche : je la veux entière, arrivant de la droite vers la caméra." className="rounded-md border border-[#d2cec6] bg-white p-2 text-xs font-normal outline-none focus:border-[#c51e1c]" />
-        <span className="text-xs font-normal text-[#626269]">{feedback.length}/{USER_FEEDBACK_MAX_LENGTH} caractères · les règles de la marque restent appliquées.</span>
-      </label>
-      {cost && <p className="text-xs text-[#55545a]">Coût de la correction : <RelaunchCost cost={cost} />.</p>}
+      {kind === "technical" && (
+        <fieldset>
+          <legend className="text-xs font-semibold text-[#242428]">Erreurs constatées</legend>
+          <div className="mt-2 grid gap-1 sm:grid-cols-2">
+            {REVISION_REASON_IDS.map((reason) => (
+              <label key={reason} className="flex min-h-11 cursor-pointer items-center gap-2 text-xs text-[#242428]">
+                <input type="checkbox" checked={reasons.includes(reason)} onChange={() => setReasons((current) => current.includes(reason) ? current.filter((value) => value !== reason) : [...current, reason])} className="size-4 accent-[#c51e1c]" />
+                {REVISION_REASONS[reason].fr}
+              </label>
+            ))}
+          </div>
+        </fieldset>
+      )}
+      {kind === "creative" && (
+        <label className="grid gap-1 text-xs font-semibold text-[#242428]">
+          Ce que vous voulez changer
+          <textarea value={comment} onChange={(event) => setComment(event.target.value)} maxLength={USER_FEEDBACK_MAX_LENGTH} rows={3} placeholder="Ex. je veux la voiture arrivant de la droite vers la caméra, en fin de journée." className="rounded-md border border-[#d2cec6] bg-white p-2 text-xs font-normal outline-none focus:border-[#c51e1c]" />
+          <span className="text-xs font-normal text-[#626269]">{comment.length}/{USER_FEEDBACK_MAX_LENGTH} caractères · les règles de la marque restent appliquées.</span>
+        </label>
+      )}
+      {actions && (
+        <div className="space-y-2">
+          <div className="flex flex-wrap gap-2">
+            {actions.accept && <button type="button" disabled={!ready || busy !== null} onClick={() => void decide("accept", onAccept)} className="min-h-11 rounded-full border border-[#d8d4cd] bg-white px-4 text-xs font-semibold text-[#242428] disabled:opacity-50">{busy === "accept" ? "Enregistrement…" : "Accepter le plan quand même"}</button>}
+            {actions.relaunch && relaunchOptions.map((option) => (
+              <button key={option.scope ?? "plan"} type="button" disabled={!ready || busy !== null} onClick={() => void relaunch(option)} className="min-h-11 rounded-full bg-[#c51e1c] px-4 text-xs font-semibold text-white disabled:opacity-50">{busy === `relaunch-${option.scope ?? "plan"}` ? "Envoi…" : option.label}</button>
+            ))}
+            {actions.reject && <button type="button" disabled={!ready || busy !== null} onClick={() => void decide("reject", onReject)} className="min-h-11 rounded-full border border-[#c51e1c] bg-white px-4 text-xs font-semibold text-[#b21c1a] disabled:opacity-50">{busy === "reject" ? "Enregistrement…" : "Rejeter le plan"}</button>}
+          </div>
+          {actions.relaunch && kind === "creative" && relaunchOptions[0]?.cost && <p className="text-xs text-[#55545a]">Coût de la reprise : <RelaunchCost cost={relaunchOptions[0].cost} />.</p>}
+          {actions.relaunch && kind === "technical" && <p className="text-xs text-[#55545a]">Relance non facturée.</p>}
+          {actions.relaunch && revisionsLeft != null && <p className="text-xs text-[#55545a]">{revisionsLeft} relance{revisionsLeft > 1 ? "s" : ""} possible{revisionsLeft > 1 ? "s" : ""} pour ce plan.</p>}
+          {!actions.relaunch && <p className="text-xs text-[#55545a]">Plus de relance possible pour ce plan{kind === "creative" ? " : acceptez-le, signalez une erreur technique ou annulez la vidéo." : "."}</p>}
+          {kind === "technical" && stage === "keyframe" && <p className="text-xs text-[#55545a]">Pour retirer un plan du film, rejetez son clip à l’étape suivante.</p>}
+          {kind === "technical" && <p className="text-xs text-[#55545a]">Votre signalement est transmis à KÔMIAN, qui le traite.</p>}
+        </div>
+      )}
       {error && <p role="alert" className="text-xs text-[#9d352e]">{error}</p>}
-      <div className="flex flex-wrap gap-2">
-        <button type="submit" disabled={busy || (!reasons.length && !feedback.trim())} className="min-h-11 rounded-full bg-[#c51e1c] px-4 text-xs font-semibold text-white disabled:opacity-50">
-          {busy ? "Envoi au réalisateur…" : "Lancer la correction"}
-        </button>
-        <button type="button" onClick={onCancel} className="min-h-11 rounded-full border border-[#d8d4cd] bg-white px-4 text-xs font-semibold text-[#242428]">Annuler</button>
-      </div>
-    </form>
+      <button type="button" onClick={onCancel} disabled={busy !== null} className="min-h-11 rounded-full border border-[#d8d4cd] bg-white px-4 text-xs font-semibold text-[#242428] disabled:opacity-50">Annuler</button>
+    </div>
   );
 }
 
@@ -270,24 +328,28 @@ export function ShotReviewPanel({
                     <button type="button" disabled={busy !== null} onClick={() => void decide(item, "accept")} className="min-h-11 rounded-full border border-[#d8d4cd] bg-white px-4 text-xs font-semibold text-[#242428] disabled:opacity-50">
                       {busy === `${item.shotNumber}-accept` ? "Enregistrement…" : "Accepter ce plan"}
                     </button>
-                    <p className="mt-1 text-xs leading-5 text-[#55545a]">Le plan est gardé tel quel ; le valideur verra l’avertissement.</p>
+                    <p className="mt-1 text-xs leading-5 text-[#55545a]">Le plan est gardé tel quel ; l’avertissement reste visible dans le détail de la vidéo.</p>
                   </div>
-                  {item.stage === "keyframe" && item.canRetry && editing !== item.shotNumber && (
+                  {item.stage === "keyframe" && editing !== item.shotNumber && (
                     <div>
                       <button type="button" disabled={busy !== null} onClick={() => setEditing(item.shotNumber)} className="min-h-11 rounded-full bg-[#c51e1c] px-4 text-xs font-semibold text-white disabled:opacity-50">
-                        Modifier ce plan
+                        Non conforme
                       </button>
                       <p className="mt-1 text-xs leading-5 text-[#55545a]">
-                        Le réalisateur corrige le plan selon vos indications : nouvelle image clé et nouveau contrôle, puis la vidéo du plan{item.cost ? <> ; <RelaunchCost cost={item.cost} /></> : null}.
+                        Erreur technique (à cocher) ou reprise créative (à décrire) : vous choisissez ensuite d’accepter le plan ou de le relancer{item.cost ? <> ; reprise créative : <RelaunchCost cost={item.cost} /></> : null}.
                         {item.revisionsLeft != null ? ` ${item.revisionsLeft} modification${item.revisionsLeft > 1 ? "s" : ""} possible${item.revisionsLeft > 1 ? "s" : ""} pour ce plan.` : ""}
                       </p>
                     </div>
                   )}
                   {item.stage === "keyframe" && editing === item.shotNumber && (
-                    <ReviseShotForm
+                    <NonConformityForm
                       versionId={versionId}
                       shotNumber={item.shotNumber}
-                      cost={item.cost}
+                      stage="keyframe"
+                      relaunchOptions={item.canRetry ? [{ label: "Relancer la génération", cost: item.cost }] : []}
+                      revisionsLeft={item.revisionsLeft}
+                      onAccept={async () => { const response = await fetch(`/api/versions/${versionId}/shots/${item.shotNumber}/review`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ decision: "accept" }) }); const data = await response.json().catch(() => ({})); if (!response.ok) throw new Error(data.error ?? "La décision n’a pas pu être enregistrée."); }}
+                      onDecided={() => { setEditing(null); onChanged(); }}
                       onCancel={() => setEditing(null)}
                       onSent={(conflicts) => {
                         setSent((current) => [...current.filter((entry) => entry.shotNumber !== item.shotNumber), { shotNumber: item.shotNumber, title: item.title, conflicts }]);

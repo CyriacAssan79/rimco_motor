@@ -1,5 +1,20 @@
 # Décisions
 
+## Plans conformes ou non conformes avant le montage, suivi KÔMIAN (2026-10-29)
+
+S01 et S03 en version simple, plus la distinction de S05 (reprise créative ≠ erreur technique). Décisions du responsable du 29/10, transmises par Cyriac. Migration **0046** (`shot_reports`), ajoutée à `setup.sql` ; retour arrière `supabase/rollback/0046_down.sql` (efface l'historique : exporter avant).
+
+- **Où.** Sur les planches qui existent déjà avant le montage : images clés, clips, et panneau « Décision requise ». RIMCO est en mode `always` (0037) : chaque plan y passe.
+- **Conforme** : « Conforme » valide le plan, comme l'ancien « Valider ».
+- **Non conforme**, deux voies. *Reprise créative* : un commentaire, puis la génération du plan est relancée. *Erreur technique* : une ou plusieurs cases parmi les 10 motifs de « Modifier ce plan » (liste conservée telle quelle), puis au choix accepter le plan quand même, relancer la génération, ou rejeter le plan.
+- **Limite de relances** : celle que l'opérateur règle déjà (modifications par image clé et par clip, figées dans la vidéo au lancement). Reprises créatives et relances techniques partagent cette limite.
+- **Facturation** : une relance après erreur technique n'est jamais facturée (`kind: 'technical'` saute le blocage de crédits) ; une reprise créative suit le prix d'une modification réglé par KÔMIAN (0 aujourd'hui, D-02 ouverte).
+- **Rejeter** : possible sur un clip seulement (il est désactivé, au moins un clip reste actif). Sur une image clé, le plan se rejette à l'étape des clips : le serveur ne sait pas retirer un plan avant son animation.
+- **Trace** : chaque déclaration est inscrite dans `shot_reports` avant l'action (étape, type, motifs ou commentaire, décision, auteur, client). Une vidéo supprimée garde ses signalements. Aucune règle d'accès : lecture et écriture par les routes serveur après contrôle du rôle (auteur, Manager du client, opérateur).
+- **Suivi KÔMIAN** : Espace KÔMIAN › « Plans non conformes ». Filtres : erreurs techniques à traiter, toutes, reprises créatives. Le recrédit se fait à la main (Clients et crédits › Crédit offert), puis l'opérateur inscrit le montant et une référence (« Marquer recrédité ») ou refuse avec un motif. Une seule décision par signalement. **D-03** : le montant d'un plan sous forfait reste à fixer.
+- **Correctif du lot A** : le panneau de décision affichait encore « le valideur verra l'avertissement » (O02) ; corrigé.
+- **Vérifications.** Lint, TypeScript, 87 fichiers / 604 tests, build en simulation. Migration 0046 exécutée deux fois, contraintes vérifiées (technique sans motif, créative sans commentaire ou sans relance refusés), suppression d'une vidéo, retour arrière puis réapplication, sur PGlite. Scénarios Playwright mis à jour (planche des clips, vidéo prête, reprise créative, planche des images clés) mais **non exécutés** ici (navigateurs indisponibles).
+
 ## Finitions avant la présentation RIMCO : forfait, Manager / Contributeur, téléchargement direct (2026-10-29)
 
 Lot PRÉ du backlog : O01, O02, O03, E01 (partiel). Migrations **0044** (forfait) et **0045** (réglage de validation), ajoutées à `setup.sql`, retour arrière dans `supabase/rollback/0044_down.sql` et `0045_down.sql`. Le numéro 0043 reste réservé au patch « optimisation vitesse » (L04).

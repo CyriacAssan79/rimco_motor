@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { formatFcfa } from '@/core/pricing';
 import type { ReviewRequest } from '@/core/verification/loop';
-import { AdaptedRequests, FullScreen, RelaunchCost, ReviseShotForm, Thumbnail, type Viewed } from './shot-review-panel';
+import { AdaptedRequests, FullScreen, NonConformityForm, RelaunchCost, Thumbnail, type Viewed } from './shot-review-panel';
 
 export type BoardShot = {
   shotNumber: number;
@@ -30,7 +30,7 @@ const STATE_LABELS: Record<BoardShot['state'], string> = {
 
 /**
  * 27/10 · keyframe board: the animation (the paid step) waits for the user's validation. In the order of the film,
- * large, with the title and the action of each shot; « Valider » or « Modifier ce plan » shot by shot, or
+ * large, with the title and the action of each shot; « Conforme » or « Non conforme » (29/10, S01) shot by shot, or
  * « Tout valider et lancer la vidéo » in one click. The video starts when the last shot is validated.
  */
 export function KeyframeBoard({ versionId, board, priceFcfa, onChanged }: { versionId: string; board: Board; priceFcfa?: number | null; onChanged: () => void }) {
@@ -48,14 +48,19 @@ export function KeyframeBoard({ versionId, board, priceFcfa, onChanged }: { vers
   const waiting = shots.filter((shot) => shot.state === 'correcting' || shot.state === 'decision').length;
   const allDone = toApprove === 0 && waiting === 0;
 
+  /** Validation sent to the server; throws on failure (also used by « Accepter le plan quand même »). */
+  async function sendApproval(target: 'all' | number) {
+    const response = await fetch(`/api/versions/${versionId}/keyframes/approve`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ shots: target === 'all' ? 'all' : [target] }) });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error ?? 'La validation n’a pas pu être enregistrée.');
+    setApprovedNow((current) => [...current, ...(target === 'all' ? shots.filter((shot) => shot.state === 'to_approve').map((shot) => shot.shotNumber) : [target])]);
+  }
+
   async function approve(target: 'all' | number) {
     setBusy(String(target));
     setError('');
     try {
-      const response = await fetch(`/api/versions/${versionId}/keyframes/approve`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ shots: target === 'all' ? 'all' : [target] }) });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error ?? 'La validation n’a pas pu être enregistrée.');
-      setApprovedNow((current) => [...current, ...(target === 'all' ? shots.filter((shot) => shot.state === 'to_approve').map((shot) => shot.shotNumber) : [target])]);
+      await sendApproval(target);
       onChanged();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'La validation n’a pas pu être enregistrée.');
@@ -115,24 +120,32 @@ export function KeyframeBoard({ versionId, board, priceFcfa, onChanged }: { vers
               {shot.state === 'to_approve' && editing !== shot.shotNumber && (
                 <div className="mt-3 flex flex-wrap gap-2">
                   <button type="button" disabled={busy !== null} onClick={() => void approve(shot.shotNumber)} className="min-h-11 rounded-full border border-[#d8d4cd] bg-white px-4 text-xs font-semibold text-[#242428] disabled:opacity-50">
-                    {busy === String(shot.shotNumber) ? 'Validation…' : 'Valider'}
+                    {busy === String(shot.shotNumber) ? 'Validation…' : 'Conforme'}
                   </button>
-                  {shot.canRevise && (
-                    <button type="button" disabled={busy !== null} onClick={() => setEditing(shot.shotNumber)} className="min-h-11 rounded-full border border-[#c51e1c] bg-white px-4 text-xs font-semibold text-[#b21c1a] disabled:opacity-50">Modifier ce plan</button>
-                  )}
+                  <button type="button" disabled={busy !== null} onClick={() => setEditing(shot.shotNumber)} className="min-h-11 rounded-full border border-[#c51e1c] bg-white px-4 text-xs font-semibold text-[#b21c1a] disabled:opacity-50">Non conforme</button>
                 </div>
               )}
               {shot.state === 'to_approve' && editing !== shot.shotNumber && shot.canRevise && (
                 <p className="mt-1 text-xs leading-5 text-[#55545a]">
-                  Modifier : nouvelle image clé et nouveau contrôle{shot.cost ? <> ; <RelaunchCost cost={shot.cost} /></> : null}. {shot.revisionsLeft} modification{shot.revisionsLeft > 1 ? 's' : ''} possible{shot.revisionsLeft > 1 ? 's' : ''}.
+                  Non conforme : erreur technique (relance non facturée) ou reprise créative{shot.cost ? <> (<RelaunchCost cost={shot.cost} />)</> : null}. {shot.revisionsLeft} relance{shot.revisionsLeft > 1 ? 's' : ''} possible{shot.revisionsLeft > 1 ? 's' : ''}.
                 </p>
               )}
               {shot.state === 'to_approve' && !shot.canRevise && shot.revisionsLeft === 0 && (
-                <p className="mt-1 text-xs leading-5 text-[#55545a]">Modification utilisée : validez le plan ou annulez la vidéo.</p>
+                <p className="mt-1 text-xs leading-5 text-[#55545a]">Relance utilisée : déclarez le plan conforme, ou signalez une erreur technique et acceptez-le.</p>
               )}
               {editing === shot.shotNumber && (
                 <div className="mt-3">
-                  <ReviseShotForm versionId={versionId} shotNumber={shot.shotNumber} cost={shot.cost} onCancel={() => setEditing(null)} onSent={(conflicts) => { setSent((current) => ({ ...current, [shot.shotNumber]: conflicts })); setEditing(null); onChanged(); }} />
+                  <NonConformityForm
+                    versionId={versionId}
+                    shotNumber={shot.shotNumber}
+                    stage="keyframe"
+                    relaunchOptions={shot.canRevise ? [{ label: 'Relancer la génération', cost: shot.cost }] : []}
+                    revisionsLeft={shot.revisionsLeft}
+                    onAccept={() => sendApproval(shot.shotNumber)}
+                    onDecided={() => { setEditing(null); onChanged(); }}
+                    onCancel={() => setEditing(null)}
+                    onSent={(conflicts) => { setSent((current) => ({ ...current, [shot.shotNumber]: conflicts })); setEditing(null); onChanged(); }}
+                  />
                 </div>
               )}
             </article>

@@ -36,6 +36,7 @@ const nav: NavItem[] = [
   { label: "Crédits", href: "/credits", icon: "wallet", section: "production" },
   { label: "Équipe", href: "/equipe", icon: "users", section: "administration", visible: hasAdminRights },
   { label: "Clients et crédits", href: "/operateur/clients", icon: "wallet", section: "komian", visible: isOperator },
+  { label: "Plans non conformes", href: "/operateur/plans", icon: "check", section: "komian", visible: isOperator },
   { label: "Coûts de production", href: "/couts", icon: "chart", section: "komian", visible: isOperator },
   { label: "Paramètres", href: "/admin", icon: "settings", section: "komian", visible: isOperator },
 ];

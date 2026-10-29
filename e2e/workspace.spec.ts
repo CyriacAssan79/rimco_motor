@@ -75,9 +75,16 @@ test('images clés puis clips, désactivation et montage en simulation', async (
   const board = page.getByRole('region', { name: 'Validation des clips' });
   await expect(board.getByRole('heading', { name: '2 clips à valider' })).toBeVisible({ timeout: 30_000 });
   await expect(board.getByLabel('Clip du plan 1')).toHaveJSProperty('muted', true);
-  await board.getByRole('button', { name: 'Désactiver ce clip', exact: true }).last().click();
+  // 29/10 · S01 : un clip se rejette par « Non conforme » › erreur technique › « Rejeter le plan » (signalement tracé).
+  const reports: unknown[] = [];
+  await page.route('**/api/versions/*/shots/*/report', (route) => { reports.push(route.request().postDataJSON()); return route.fulfill({ status: 201, json: { reported: true } }); });
+  await board.getByRole('button', { name: 'Non conforme', exact: true }).last().click();
+  await board.getByLabel(/Erreur technique/).check();
+  await board.getByLabel('Voiture qui flotte ou glisse').check();
+  await board.getByRole('button', { name: 'Rejeter le plan' }).click();
   await expect(board.getByText(/Durée finale : 7 s/)).toBeVisible({ timeout: 30_000 });
-  await expect(board.getByRole('button', { name: 'Désactiver ce clip', exact: true })).toBeDisabled();
+  await expect(board.getByRole('button', { name: 'Réactiver ce clip' })).toBeVisible();
+  expect(reports).toEqual([{ stage: 'video', kind: 'technical', reasons: ['floating'], decision: 'reject' }]);
   expect(montageStarts).toBe(0);
   await board.getByRole('button', { name: 'Tout valider et lancer le montage' }).click();
   await expect(board).toBeHidden({ timeout: 30_000 });
@@ -158,20 +165,16 @@ async function routeFinishedVersion(page: Page, status: 'ready' | 'failed') {
   return version;
 }
 
-/** Ready video: player, send to the validator, direct link to the library, download reminder. */
+/** Ready video (29/10 · O03): player, direct link to the library, immediate download; no validation by default. */
 async function expectReadyVideoActions(page: Page) {
   const version = await routeFinishedVersion(page, 'ready');
-  let submitted: unknown = null;
-  await page.route('**/api/validations', (route) => { submitted = route.request().postDataJSON(); return route.fulfill({ status: 201, json: { id: 'e2e-validation', status: 'pending' } }); });
   await page.goto('/');
   await expect(page.getByText('Votre vidéo est prête.')).toBeVisible({ timeout: 30_000 });
   await expect(page.getByLabel('Vidéo finale')).toHaveAttribute('src', '/mock/mock-video.mp4');
   await expect(page.getByText('Durée 7 s · Niveau Standard · Format 16:9')).toBeVisible();
-  await expect(page.getByText('Le téléchargement est possible après l’approbation du valideur.')).toBeVisible();
+  await expect(page.getByText('Vous pouvez la télécharger tout de suite depuis la Bibliothèque.')).toBeVisible();
   await expect(page.getByRole('link', { name: 'Ouvrir dans la Bibliothèque' })).toHaveAttribute('href', `/bibliotheque?video=${version.videoId}`);
-  await page.getByRole('button', { name: 'Envoyer au valideur' }).click();
-  await expect(page.getByText('Envoyée au valideur : en attente de sa décision.')).toBeVisible();
-  expect(submitted).toEqual({ versionId: version.id });
+  await expect(page.getByRole('button', { name: 'Envoyer en validation' })).toHaveCount(0);
 }
 
 /** Failed video: the cause in French, nothing billed, relaunch with the same settings. */
@@ -230,7 +233,7 @@ async function expectConflictBlocksMainButton(page: Page) {
   await expect(generate).toBeEnabled();
 }
 
-/** « Modifier ce plan »: reasons, comment, cost, then « correction en cours » and the adapted request (real route, simulation). */
+/** « Non conforme » (29/10): creative request, cost, then « correction en cours » and the adapted request (real route, simulation). */
 async function expectReviseShot(page: Page) {
   const version = { id: 'e2e-review-version', videoId: 'e2e-review-video', title: 'Vidéo E2E à corriger', status: 'generating', versionStatus: 'generating', processingStage: 'keyframing', createdAt: new Date().toISOString() };
   const request = { shotNumber: 2, title: 'Arrêt face à la lagune', stage: 'keyframe', issues: ['blocking: car cut by the frame'], codes: ['cut_off'], url: null, canRetry: true, cost: { fcfa: 181, minutes: 2 }, revisionsLeft: 2, lastRevision: null };
@@ -238,21 +241,25 @@ async function expectReviseShot(page: Page) {
     ? route.fulfill({ json: { versions: [version] } }) : route.continue());
   await page.route(`**/api/versions/${version.id}/refresh`, (route) => route.fulfill({ json: { id: version.id, status: 'generating', processingStage: 'awaiting_review', nextPollInSeconds: 120, reviewRequired: [request] } }));
   await page.goto('/file-generation');
-  await page.getByRole('button', { name: 'Modifier ce plan' }).click({ timeout: 30_000 });
-  const launch = page.getByRole('button', { name: 'Lancer la correction' });
+  // 29/10 · S01 : « Non conforme » › reprise créative (commentaire) › relance ; le signalement part avant la relance.
+  await page.route('**/api/versions/*/shots/*/report', (route) => route.fulfill({ status: 201, json: { reported: true } }));
+  await page.getByRole('button', { name: 'Non conforme' }).click({ timeout: 30_000 });
+  await page.getByLabel(/Reprise créative/).check();
+  const launch = page.getByRole('button', { name: 'Relancer la génération' });
   await expect(launch).toBeDisabled();
   // 27/10: a modification included in the price is shown struck through, « (non facturé) ».
-  await expect(page.getByText(/Coût de la correction : 181\s?FCFA \(non facturé\), environ 2 min\./)).toBeVisible();
-  await page.getByLabel('Voiture coupée ou mal cadrée').check();
-  await page.getByLabel('Précisez ce que vous voulez').fill('Je la veux entière, avec le logo RIMCO peint sur la porte.');
+  await expect(page.getByText(/Coût de la reprise : 181\s?FCFA \(non facturé\), environ 2 min\./)).toBeVisible();
+  await page.getByLabel('Ce que vous voulez changer').fill('Je la veux entière, avec le logo RIMCO peint sur la porte.');
+  const reported = page.waitForRequest((call) => call.url().endsWith(`/api/versions/${version.id}/shots/2/report`) && call.method() === 'POST');
   const sent = page.waitForRequest((call) => call.url().endsWith(`/api/versions/${version.id}/shots/2/review`) && call.method() === 'POST');
   await launch.click();
-  expect((await sent).postDataJSON()).toEqual({ decision: 'revise', feedback: 'Je la veux entière, avec le logo RIMCO peint sur la porte.', reasons: ['framing'] });
+  expect((await reported).postDataJSON()).toEqual({ stage: 'keyframe', kind: 'creative', reasons: [], comment: 'Je la veux entière, avec le logo RIMCO peint sur la porte.', decision: 'relaunch' });
+  expect((await sent).postDataJSON()).toEqual({ decision: 'revise', feedback: 'Je la veux entière, avec le logo RIMCO peint sur la porte.', reasons: [], kind: 'creative' });
   await expect(page.getByText('Plan 2 · Arrêt face à la lagune : correction en cours')).toBeVisible();
   await expect(page.getByRole('status').filter({ hasText: 'Votre demande a été adaptée' })).toContainText('Texte ou logo');
 }
 
-/** Keyframe board: the Studio box (« always » during the beta), then « Valider » and « Tout valider et lancer la vidéo ». */
+/** Keyframe board: the Studio box (« always » during the beta), then « Conforme » and « Tout valider et lancer la vidéo ». */
 async function expectKeyframeBoard(page: Page) {
   await page.goto('/');
   const box = page.getByLabel(/Valider les images clés et les clips avant le montage/);
@@ -271,7 +278,7 @@ async function expectKeyframeBoard(page: Page) {
   await expect(section.getByRole('heading', { name: '2 images clés à valider' })).toBeVisible({ timeout: 30_000 });
   // In the order of the film.
   await expect(section.getByText(/^Plan \d · /)).toHaveText(['Plan 1 · Arrivée sur le pont', 'Plan 2 · Arrêt face à la lagune']);
-  await section.getByRole('button', { name: 'Valider', exact: true }).first().click();
+  await section.getByRole('button', { name: 'Conforme', exact: true }).first().click();
   await expect(section.getByRole('heading', { name: '1 image clé à valider' })).toBeVisible({ timeout: 30_000 });
   await section.getByRole('button', { name: 'Tout valider et lancer la vidéo' }).click();
   await expect(section.getByRole('heading', { name: 'Images clés validées : la vidéo démarre' })).toBeVisible({ timeout: 30_000 });
@@ -338,7 +345,7 @@ if (mockWithoutSupabase) {
     test.setTimeout(90_000);
     await expectConflictBlocksMainButton(page);
   });
-  test('« Modifier ce plan » envoie les motifs et le commentaire, puis montre la correction en cours', async ({ page }) => {
+  test('« Non conforme » envoie la reprise créative et son signalement, puis montre la correction en cours', async ({ page }) => {
     test.setTimeout(90_000);
     await expectReviseShot(page);
   });
@@ -446,7 +453,7 @@ if (mockWithoutSupabase) {
     await expectConflictBlocksMainButton(page);
   });
 
-  test('« Modifier ce plan » envoie les motifs et le commentaire, puis montre la correction en cours', async ({ page }) => {
+  test('« Non conforme » envoie la reprise créative et son signalement, puis montre la correction en cours', async ({ page }) => {
     test.setTimeout(90_000);
     await signIn(page, adminEmail, adminPassword);
     await expectReviseShot(page);

@@ -2,20 +2,24 @@
 import { useState } from 'react';
 import { describeDefects } from '@/core/verification/defects';
 import type { ClipBoard as Board } from '@/core/versions/clip-gate';
-import { AdaptedRequests, FullScreen, RelaunchCost, ReviseShotForm, type Viewed } from './shot-review-panel';
+import { AdaptedRequests, FullScreen, NonConformityForm, type RelaunchOption, type Viewed } from './shot-review-panel';
 
 export function ClipBoard({ versionId, board, onChanged }: { versionId: string; board: Board; onChanged: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const [editing, setEditing] = useState<{ number: number; scope: 'clip' | 'full' } | null>(null);
+  const [editing, setEditing] = useState<number | null>(null);
   const [viewed, setViewed] = useState<Viewed | null>(null);
   const [conflicts, setConflicts] = useState<string[]>([]);
+  /** Decision sent to the server; throws on failure (also used by the « Non conforme » form). */
+  async function send(action: 'approve' | 'unapprove' | 'disable' | 'enable', shotNumber?: number) {
+    const response = await fetch(`/api/versions/${versionId}/clips/review`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action, ...(shotNumber ? { shotNumber } : {}) }) });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error ?? 'La décision n’a pas pu être enregistrée.');
+  }
   async function action(action: 'approve' | 'unapprove' | 'disable' | 'enable', shotNumber?: number) {
     setBusy(true); setError('');
     try {
-      const response = await fetch(`/api/versions/${versionId}/clips/review`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action, ...(shotNumber ? { shotNumber } : {}) }) });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error ?? 'La décision n’a pas pu être enregistrée.');
+      await send(action, shotNumber);
       onChanged();
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'La décision n’a pas pu être enregistrée.'); }
     finally { setBusy(false); }
@@ -31,6 +35,7 @@ export function ClipBoard({ versionId, board, onChanged }: { versionId: string; 
     finally { setBusy(false); }
   }
   const remaining = board.shots.filter((shot) => shot.active && !shot.approved).length;
+  const activeCount = board.shots.filter((shot) => shot.active).length;
   const buttonClass = 'min-h-11 rounded-full border border-[#d8d4cd] bg-white px-4 text-xs font-semibold disabled:opacity-50';
   return <section id={`decision-${versionId}`} className="mt-4 scroll-mt-24 rounded-md border border-[#e7d7b9] bg-[#fbf6ed] p-4" aria-label="Validation des clips">
     <h3 className="text-sm font-semibold">{remaining} clip{remaining > 1 ? 's' : ''} à valider</h3>
@@ -47,12 +52,26 @@ export function ClipBoard({ versionId, board, onChanged }: { versionId: string; 
         <p className="mt-2 text-xs font-semibold">{!shot.active ? 'Clip désactivé' : shot.approved ? 'Validé' : shot.colour === 'red' ? 'Refusé par le contrôle automatique' : shot.colour === 'orange' ? 'Accepté avec avertissements' : 'Accepté par le contrôle automatique'}</p>
         <ul className="mt-1 space-y-1 text-xs">{describeDefects(shot.issues, shot.codes).map((defect, i) => <li key={i}>{defect.label}{defect.at ? ` (${defect.at})` : ''}</li>)}</ul>
         <div className="mt-3 flex flex-wrap gap-2">
-          {shot.active && <button type="button" className={buttonClass} disabled={busy} onClick={() => void action(shot.approved ? 'unapprove' : 'approve', shot.shotNumber)}>{shot.approved ? 'Retirer la validation' : shot.colour === 'red' ? 'Accepter' : 'Valider'}</button>}
-          <button type="button" className={buttonClass} disabled={busy || shot.active && board.shots.filter((item) => item.active).length <= 1} onClick={() => void action(shot.active ? 'disable' : 'enable', shot.shotNumber)}>{shot.active ? 'Désactiver ce clip' : 'Réactiver ce clip'}</button>
+          {/* 29/10 · S01 : « Conforme » valide le clip ; « Non conforme » ouvre la reprise créative ou l'erreur technique
+              (accepter, relancer, rejeter). Un clip rejeté est désactivé ; « Réactiver » reste possible. */}
+          {shot.active && shot.approved && <button type="button" className={buttonClass} disabled={busy} onClick={() => void action('unapprove', shot.shotNumber)}>Retirer la validation</button>}
+          {shot.active && !shot.approved && editing !== shot.shotNumber && <button type="button" className={buttonClass} disabled={busy} onClick={() => void action('approve', shot.shotNumber)}>Conforme</button>}
+          {shot.active && !shot.approved && editing !== shot.shotNumber && <button type="button" className={`${buttonClass} border-[#c51e1c] text-[#b21c1a]`} disabled={busy || editing !== null} onClick={() => setEditing(shot.shotNumber)}>Non conforme</button>}
+          {!shot.active && <button type="button" className={buttonClass} disabled={busy} onClick={() => void action('enable', shot.shotNumber)}>Réactiver ce clip</button>}
         </div>
-        {shot.active && shot.canRevise && !editing && <div className="mt-2 space-y-2">{(['clip', 'full'] as const).map((scope) => { const cost = shot.clipOptions?.[scope]; return cost ? <div key={scope}><button type="button" className={buttonClass} disabled={busy} onClick={() => setEditing({ number: shot.shotNumber, scope })}>{scope === 'clip' ? 'Modifier la vidéo du plan' : 'Revenir à l’image clé'}</button><p className="mt-1 text-xs"><RelaunchCost cost={cost} withMinutes={false} /> · {shot.revisionsLeft ?? 1} modification{(shot.revisionsLeft ?? 1) > 1 ? 's' : ''} possible{(shot.revisionsLeft ?? 1) > 1 ? 's' : ''} pour le clip.</p></div> : null; })}</div>}
-        {!shot.canRevise && <p className="mt-2 text-xs">Modification utilisée</p>}
-        {editing?.number === shot.shotNumber && <div className="mt-3"><ReviseShotForm versionId={versionId} shotNumber={shot.shotNumber} scope={editing.scope} cost={shot.clipOptions?.[editing.scope] ?? undefined} onCancel={() => setEditing(null)} onSent={(conflicts) => { setConflicts(conflicts); setEditing(null); onChanged(); }} /></div>}
+        {shot.active && !shot.approved && !shot.canRevise && <p className="mt-2 text-xs">Relance utilisée pour ce clip.</p>}
+        {editing === shot.shotNumber && <div className="mt-3"><NonConformityForm
+          versionId={versionId}
+          shotNumber={shot.shotNumber}
+          stage="video"
+          relaunchOptions={shot.canRevise ? (['clip', 'full'] as const).flatMap((scope): RelaunchOption[] => shot.clipOptions?.[scope] ? [{ scope, label: scope === 'clip' ? 'Relancer la vidéo du plan' : 'Refaire l’image clé puis la vidéo', cost: shot.clipOptions[scope] ?? undefined }] : []) : []}
+          revisionsLeft={shot.revisionsLeft ?? null}
+          onAccept={() => send('approve', shot.shotNumber)}
+          onReject={activeCount > 1 ? () => send('disable', shot.shotNumber) : undefined}
+          onDecided={() => { setEditing(null); onChanged(); }}
+          onCancel={() => setEditing(null)}
+          onSent={(conflicts) => { setConflicts(conflicts); setEditing(null); onChanged(); }}
+        /></div>}
       </article>;
     })}</div>
     <button type="button" className="mt-4 min-h-11 rounded-full bg-[#c51e1c] px-5 text-xs font-semibold text-white disabled:opacity-50" disabled={busy || editing !== null} onClick={() => void action('approve')}>Tout valider et lancer le montage</button>

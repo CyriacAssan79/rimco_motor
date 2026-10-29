@@ -27,6 +27,8 @@ export const shotReviewSchema = z.object({
   reasons: z.array(z.enum(REVISION_REASON_IDS as [string, ...string[]])).max(REVISION_REASON_IDS.length).optional(),
   /** Refused clip only: « Refaire la vidéo de ce plan » (clip) or « Refaire l’image clé puis la vidéo » (full). */
   scope: z.enum(['clip', 'full']).optional(),
+  /** 29/10 · S01 : relance après une erreur technique, jamais facturée au client (une reprise créative suit le réglage). */
+  kind: z.enum(['creative', 'technical']).optional(),
 }).strict().superRefine((value, context) => {
   if (value.decision === 'revise' && !cleanUserFeedback(value.feedback) && !value.reasons?.length) {
     context.addIssue({ code: 'custom', path: ['feedback'], message: 'Cochez au moins un motif ou dites ce qui ne va pas.' });
@@ -102,7 +104,7 @@ export async function reviewShot(actor: Actor, versionId: string, shotNumber: nu
     const cap = revisionCapCheck({ capUsd: env.VIDEO_COST_CAP_USD, mode: env.VIDEO_COST_CAP_MODE, engagedUsd, plannedWorstCaseUsd: storedCostPlan(brief)?.worstCaseUsd ?? null, revisionUsd: relaunchCostUsd(brief) });
     if (!cap.ok) throw new HttpError(422, cap.message);
     // 27/10: a modification priced by KÔMIAN is held on the credits before anything is reserved (402 if too low).
-    await holdRevisionCredits(admin, actor, brief, { videoId: version.video_id, versionId, key: `revision:${versionId}:keyframe:${shotNumber}:${used + 1}` });
+    if (input.kind !== 'technical') await holdRevisionCredits(admin, actor, brief, { videoId: version.video_id, versionId, key: `revision:${versionId}:keyframe:${shotNumber}:${used + 1}` });
     const feedback = decision === 'revise' ? cleanUserFeedback(input.feedback) : '';
     const reasons = decision === 'revise' ? input.reasons ?? [] : [];
     const drafts = Array.isArray(brief.storyboard) ? brief.storyboard as Array<{ locationPhotoId?: unknown }> : [];
@@ -186,7 +188,7 @@ async function redoClip({ admin, actor, version, video, shot, input, attempt, ve
   const versionBrief = version.brief_json && typeof version.brief_json === 'object' ? version.brief_json as Record<string, unknown> : {};
   const limit = humanRevisionLimit(versionBrief, 'video');
   if (used >= limit) throw new HttpError(409, 'Modification utilisée pour ce clip. Acceptez-le tel quel ou annulez la vidéo.');
-  await holdRevisionCredits(admin, actor, versionBrief, { videoId: String(version.video_id ?? ''), versionId, key: `revision:${versionId}:video:${shotNumber}:${used + 1}` });
+  if (input.kind !== 'technical') await holdRevisionCredits(admin, actor, versionBrief, { videoId: String(version.video_id ?? ''), versionId, key: `revision:${versionId}:video:${shotNumber}:${used + 1}` });
   const keyframeAttempt = Number(shot.keyframe_retry_count ?? 0);
   if (typeof shot.keyframe_path !== 'string' || !shot.keyframe_path) throw new HttpError(409, 'L’image clé de ce plan est introuvable : le clip ne peut pas être refait.');
   if (scope === 'full' && keyframeAttempt + 1 >= MAX_KEYFRAME_ATTEMPTS) throw new HttpError(409, 'Le nombre maximal d’images clés est atteint pour ce plan : choisissez « Refaire la vidéo de ce plan ».');
