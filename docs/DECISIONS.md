@@ -1,5 +1,16 @@
 # Décisions
 
+## Finitions avant la présentation RIMCO : forfait, Manager / Contributeur, téléchargement direct (2026-10-29)
+
+Lot PRÉ du backlog : O01, O02, O03, E01 (partiel). Migrations **0044** (forfait) et **0045** (réglage de validation), ajoutées à `setup.sql`, retour arrière dans `supabase/rollback/0044_down.sql` et `0045_down.sql`. Le numéro 0043 reste réservé au patch « optimisation vitesse » (L04).
+
+- **O01 · Forfait par vidéo.** Un prix par niveau, quelle que soit la durée, jusqu'à 30 s de clips : Standard 13 000 FCFA, Pro 18 000 FCFA (offre du 28/10). Premium garde 19 000 FCFA en base mais n'est ni affiché ni sélectionnable côté RIMCO (D-06 ouverte). **D-01** : l'aperçu de 5 s paie le même forfait (décision du 29/10). `src/core/pricing.ts` (`videoPriceFcfa`, `VIDEO_PRICE_COLUMNS`) remplace la grille à la seconde dans les quatre calculs de prix (storyboard, lancement multi-plans, lancement simple, modèles disponibles), la page Crédits et l'écran de prix de l'opérateur. Les colonnes `grid_fcfa_per_second_*` restent en base. Le journal des coûts garde le prix figé de chaque vidéo déjà lancée ; le passage au forfait est inscrit dans `pricing_change_log`.
+- **O02 · Libellés.** « Manager » pour l'administrateur du client, « Contributeur » pour le collaborateur (menu, Équipe, messages, connexion). Plus aucun « valideur » visible. Les rôles SQL ne changent pas. Les messages qui renvoyaient à « l'administrateur » pour un problème fournisseur ou de plafond renvoient à KÔMIAN.
+- **O03 · Téléchargement direct.** La validation d'une vidéo devient un réglage du client (`client_billing_settings.video_validation_enabled`, désactivé par défaut, case dans Espace KÔMIAN › Paramètres). Désactivée : une vidéo prête se télécharge tout de suite par son auteur ou le Manager ; « À valider », « Envoyer en validation », « Peut valider » et les onglets de validation sont masqués. Activée : comportement d'avant. Règle unique : `src/core/versions/download-access.ts`. La règle d'accès au stockage n'est pas modifiée : le navigateur ne lit jamais le bucket `videos` directement, les liens sont signés par le serveur après ce contrôle.
+- **E01 (en cours).** 25 s et 30 s apparaissent dans le Studio, grisées (« bientôt »). Le serveur reste limité à 20 s jusqu'à un essai réel de 30 s en Standard et en Pro (coût mesuré ≤ 15 $).
+- **O04.** Aucun code : l'opérateur règle « Validité d'un crédit offert » à 12 mois dans Espace KÔMIAN › Paramètres (tracé dans le journal).
+- **Vérifications.** Lint, TypeScript, 86 fichiers / 597 tests, build en simulation. Migrations 0044 et 0045 exécutées deux fois puis retour arrière et réapplication sur PostgreSQL embarqué (PGlite), avec un schéma réduit ; ce n'est pas un essai sur le projet Supabase.
+
 ## Rôles, tarifs et crédits clients (2026-10-27)
 
 Spécification : `docs/specs/ROLES-CREDITS-2026-10-27.md`. Migrations **0041** (rôles) et **0042** (réglages de facturation et crédits), ajoutées à `setup.sql`. Retour arrière : `supabase/rollback/0042_down.sql` puis `0041_down.sql` (hors `setup.sql`).

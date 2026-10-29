@@ -7,7 +7,7 @@ import { montageFailureDecision } from './montage-failure';
 
 /** Explicit admin recovery: only local assembly, never provider polling, submission or billing. */
 export async function retryFailedMontage(admin: SupabaseClient, versionId: string, actor: Actor) {
-  if (!hasAdminRights(actor)) throw new HttpError(403, 'Seul un administrateur peut relancer ce montage.');
+  if (!hasAdminRights(actor)) throw new HttpError(403, 'Seul un Manager ou KÔMIAN peut relancer ce montage.');
   const { data: version, error } = await admin.from('video_versions')
     .select('id,status,brief_json,final_path,updated_at').eq('id', versionId).maybeSingle();
   if (error) throw new HttpError(503, 'Impossible de vérifier le montage.');

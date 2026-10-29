@@ -5,7 +5,9 @@ import { clientBrandIds } from '@/core/auth/client-scope';
 import { withoutInternalFields } from '@/core/auth/internal-fields';
 import { mockVideoProvider } from '@/core/providers/mock';
 import { putVersion, allVersions } from '@/core/versions/store';
-import { estimatePriceFcfa } from '@/core/pricing';
+import { DEFAULT_VIDEO_PRICES_FCFA, videoPriceFcfa } from '@/core/pricing';
+import { canDownloadVideo } from '@/core/versions/download-access';
+import { loadBillingSettings } from '@/core/billing/settings';
 import { env } from '@/env';
 import { requestSchema } from '@/core/versions/request-schema';
 import { createLiveVersion } from '@/core/versions/live';
@@ -121,6 +123,7 @@ export async function GET(request: Request) {
     }
     const { data, error } = await query;
     if (error) throw error;
+    const videoValidation = (await loadBillingSettings(admin, actor.clientId)).videoValidationEnabled;
     const latestBrief = (video: NonNullable<typeof data>[number]) => {
       const rows = Array.isArray(video.video_versions) ? video.video_versions : [];
       const brief = [...rows].sort((a, b) => b.number - a.number)[0]?.brief_json;
@@ -185,10 +188,12 @@ export async function GET(request: Request) {
           break;
         }
       }
-      if (includePreviews && video.status === 'approved' && finalPath) {
+      // 29/10 · O03 : téléchargement dès que la vidéo est prête, sauf si le client a activé la validation.
+      const downloadable = canDownloadVideo({ videoStatus: video.status, isOwner, adminRights: hasAdminRights(actor), operator: isOperator(actor), validationEnabled: videoValidation });
+      if (includePreviews && downloadable && finalPath) {
         videoUrl = await createSignedVideoDownloadUrl((storagePath, expiresIn, options) => storage.createSignedUrl(storagePath, expiresIn, options), finalPath);
       }
-      if (includePreviews && video.status === 'approved' && isPersistedMock && previewUrl) videoUrl = previewUrl;
+      if (includePreviews && downloadable && isPersistedMock && previewUrl) videoUrl = previewUrl;
       const status = video.status === 'approved' ? 'ready' : video.status === 'rejected' ? 'rejected' : video.status === 'review' ? 'review' : video.status === 'cancelled' ? 'cancelled' : video.status === 'ready' ? 'ready' : latest?.status === 'failed' ? 'failed' : latest?.status === 'cancelled' ? 'cancelled' : latest?.status === 'queued' || latest?.status === 'generating' || latest?.status === 'postprocessing' ? 'generating' : 'draft';
       const metrics = briefData.processingMetrics && typeof briefData.processingMetrics === 'object' ? briefData.processingMetrics as ProcessingMetrics : {};
       const stage = qualityCheckActive ? 'quality_checking' : processingStage(latest?.status ?? status, metrics);
@@ -196,7 +201,7 @@ export async function GET(request: Request) {
       const progress = latest ? await versionProgress(admin, { status: latest.status, brief: briefData, shots: runningShotsByVersion.get(latest.id) ?? shotRows as ProgressShotRow[] }) : null;
       return { progress, approvalState: storedApproval(briefData), settings: studioSettings(briefData, video.title), billing: billingSummary(ledgerRows), id: latest?.id ?? video.id, videoId: video.id, title: video.title, status, workflow: briefData.multiClipMode === true ? 'multi_clip' : 'single', tier: generationTier, photoFidelity: isPhotoFidelity, format: typeof briefData.format === 'string' ? briefData.format : '16:9', durationSeconds: playbackDurationSeconds(briefData, Number(latest?.generation_seconds ?? generationCost?.seconds ?? 5)), version: latest?.number ?? 1, versionStatus: latest?.status ?? null, errorMessage: latest?.error_message ?? null, qualityWarnings: storedQualityWarnings(briefData), inputs: extractGenerationInputs(briefData, assetTitles), pollError, canRetryTracking, reconciliationRequired, checkedQualityShots, totalQualityShots, shotProgress, processingStage: stage, stageElapsedSeconds: elapsedSeconds(stageStartedAt), processingDurations: processingDurations(metrics, latest?.status ?? status), processingMetrics: metrics, priceFcfa: generationCost?.priceFcfa ?? (typeof mockMetadata.priceFcfa === 'number' ? mockMetadata.priceFcfa : null), validationId: validationRows[0]?.id ?? null, validationStatus: validationRows[0]?.status ?? null, ...(includePreviews ? { videoUrl, previewUrl, previewSource } : {}), createdAt: video.created_at, department: video.department, userId: video.user_id };
     }));
-    return NextResponse.json({ versions: requestedStatus ? versions.filter((version) => version.status === requestedStatus) : versions });
+    return NextResponse.json({ videoValidation, versions: requestedStatus ? versions.filter((version) => version.status === requestedStatus) : versions });
   } catch (error) { return errorResponse(error); }
 }
 export async function POST(request: Request) {
@@ -250,7 +255,7 @@ export async function POST(request: Request) {
     const imageUrl = '/mock/mock-video.svg';
     const { requestId } = await mockVideoProvider.submit({ prompt, imageUrl, durationS: 5, format: input.format });
     const id = crypto.randomUUID();
-    const record = putVersion({ id, videoId: crypto.randomUUID(), title: input.title || undefined, number: 1, userId: actor.id, brief, prompt, status: 'queued', requestId, priceFcfa: estimatePriceFcfa(5, input.tier), tier: input.tier, createdAt: new Date().toISOString() });
+    const record = putVersion({ id, videoId: crypto.randomUUID(), title: input.title || undefined, number: 1, userId: actor.id, brief, prompt, status: 'queued', requestId, priceFcfa: videoPriceFcfa(5, input.tier, DEFAULT_VIDEO_PRICES_FCFA), tier: input.tier, createdAt: new Date().toISOString() });
     return NextResponse.json({ id: record.id, status: record.status, prompt, estimatedPriceFcfa: record.priceFcfa, version: 1 }, { status: 201 });
   } catch (error) { return errorResponse(error); }
 }

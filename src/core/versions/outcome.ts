@@ -50,11 +50,11 @@ export function studioSettings(brief: Record<string, unknown>, title?: string | 
 export type FailureExplanation = { cause: string; advice: string; detail: string | null };
 
 const FAILURES: Array<{ test: RegExp; cause: string; advice: string }> = [
-  { test: /^Montage impossible\s*:/i, cause: 'Le montage a échoué. Les clips générés sont conservés.', advice: 'Un administrateur peut relancer uniquement le montage, sans nouvelle génération ni nouveau coût fal.' },
+  { test: /^Montage impossible\s*:/i, cause: 'Le montage a échoué. Les clips générés sont conservés.', advice: 'Un Manager peut relancer uniquement le montage, sans nouvelle génération ni nouveau coût fal.' },
   { test: /non validées sous 48 h/i, cause: 'Les images clés n’ont pas été validées sous 48 h : la vidéo a expiré. Les images clés sont conservées.', advice: 'Relancez avec les mêmes réglages : un nouveau storyboard et de nouvelles images clés seront produits.' },
   { test: /content.?polic|safety|nsfw|flagged|moderation|filtre de (?:contenu|s[ée]curit)/i, cause: 'Le fournisseur a refusé le contenu demandé (filtre de sécurité).', advice: 'Reformulez la description ou choisissez une autre photo, puis relancez.' },
-  { test: /quota|insufficient|balance|credit|billing|payment|\b402\b|\b429\b|rate.?limit/i, cause: 'Le compte du fournisseur a atteint sa limite (crédit ou quota).', advice: 'Prévenez l’administrateur avant de relancer.' },
-  { test: /timed? ?out|timeout|délai|n’a pas répondu|deadline/i, cause: 'Le fournisseur n’a pas répondu à temps.', advice: 'Relancez avec les mêmes réglages ; si cela se reproduit, prévenez l’administrateur.' },
+  { test: /quota|insufficient|balance|credit|billing|payment|\b402\b|\b429\b|rate.?limit/i, cause: 'Le compte du fournisseur a atteint sa limite (crédit ou quota).', advice: 'Prévenez KÔMIAN avant de relancer.' },
+  { test: /timed? ?out|timeout|délai|n’a pas répondu|deadline/i, cause: 'Le fournisseur n’a pas répondu à temps.', advice: 'Relancez avec les mêmes réglages ; si cela se reproduit, prévenez KÔMIAN.' },
   { test: /image-cl[ée].*(?:contr[ôo]le|refus)|keyframe/i, cause: 'Une image clé n’a pas passé le contrôle automatique, aucune vidéo de plan n’a été produite.', advice: 'Relancez, ou changez de photo ou de lieu pour ce véhicule.' },
   { test: /a refusé l’animation|refused|rejected|\b4\d\d\b/i, cause: 'Le fournisseur vidéo a refusé l’animation d’un plan.', advice: 'Relancez avec les mêmes réglages ; si cela se reproduit, simplifiez la description.' },
   { test: /annul/i, cause: 'La génération a été annulée.', advice: 'Vous pouvez relancer avec les mêmes réglages.' },
@@ -67,7 +67,7 @@ export function failureExplanation(error: string | null | undefined): FailureExp
   if (known) return { cause: known.cause, advice: known.advice, detail: message || null };
   // A message written by the application in French is already clear.
   if (/[éèàçù]|’/.test(message)) return { cause: message, advice: 'Relancez avec les mêmes réglages.', detail: null };
-  return { cause: 'La génération a échoué chez le fournisseur.', advice: 'Relancez avec les mêmes réglages ; si cela se reproduit, prévenez l’administrateur.', detail: message || null };
+  return { cause: 'La génération a échoué chez le fournisseur.', advice: 'Relancez avec les mêmes réglages ; si cela se reproduit, prévenez KÔMIAN.', detail: message || null };
 }
 
 /** Client price of the video, from the cost journal: what was billed, and whether a cost is still being checked. */

@@ -41,11 +41,14 @@ export function normalizeProfileRole(rawRole: unknown, rawCanValidate: unknown):
   return { role, canValidate: rawCanValidate === true };
 }
 
-/** Plain French label shown under the user's name and in the team list. */
+/**
+ * Plain French label shown under the user's name and in the team list. 29/10 · O02 : « Manager » pour l'administrateur
+ * du client, « Contributeur » pour le collaborateur ; les rôles SQL ne changent pas.
+ */
 export function roleLabel(subject: RoleSubject): string {
   if (subject.role === 'operateur') return 'Opérateur KÔMIAN';
-  if (subject.role === 'admin') return 'Administrateur';
-  return subject.canValidate ? 'Collaborateur · valideur' : 'Collaborateur';
+  if (subject.role === 'admin') return 'Manager';
+  return 'Contributeur';
 }
 
 /** Which roles an actor may assign: only an operator can create or promote an operator. */

@@ -22,8 +22,8 @@ describe('crédits : refus de solde insuffisant', () => {
     expect(insufficientCreditAmount(null)).toBeNull();
   });
 
-  it('dit qui contacter : l’administrateur pour un collaborateur, KÔMIAN pour l’administrateur', () => {
-    expect(insufficientCreditMessage(2000, { role: 'collaborateur' })).toBe('Solde insuffisant : il manque 2 000 FCFA pour lancer cette vidéo. Contactez votre administrateur RIMCO Studio.');
+  it('dit qui contacter : le Manager pour un contributeur, KÔMIAN pour le Manager', () => {
+    expect(insufficientCreditMessage(2000, { role: 'collaborateur' })).toBe('Solde insuffisant : il manque 2 000 FCFA pour lancer cette vidéo. Contactez votre Manager RIMCO Studio.');
     expect(insufficientCreditMessage(2000, { role: 'admin' })).toContain('Contactez KÔMIAN');
     expect(new InsufficientCreditError(5, { role: 'admin' }).status).toBe(402);
   });

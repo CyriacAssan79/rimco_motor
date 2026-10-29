@@ -6,5 +6,5 @@ export function montageFailureDecision(previousAttempts: unknown, message: strin
   const cause = /introuvable|indisponible|ENOENT/i.test(message) ? 'FFmpeg ou le logo est introuvable sur ce déploiement'
     : /délai|SIGKILL|timeout/i.test(message) ? 'le montage dépasse le délai autorisé'
       : 'le montage a échoué';
-  return { attempts, final: attempts >= MAX_MONTAGE_ATTEMPTS, userMessage: `Montage impossible : ${cause}. Les plans générés sont conservés : un administrateur peut relancer le montage sans nouveau coût fal. Détail : ${message.slice(0, 200)}` };
+  return { attempts, final: attempts >= MAX_MONTAGE_ATTEMPTS, userMessage: `Montage impossible : ${cause}. Les plans générés sont conservés : un Manager peut relancer le montage sans nouveau coût fal. Détail : ${message.slice(0, 200)}` };
 }

@@ -13,6 +13,8 @@ export type BillingSettings = {
   humanClipRevisionsPerShot: number;
   /** 0 = modifications included in the video price; the indicative cost is then shown struck through, « non facturé ». */
   revisionPriceFcfa: number;
+  /** 29/10 · O03 (migration 0045) : validation d'une vidéo avant son téléchargement ; désactivée par défaut. */
+  videoValidationEnabled: boolean;
 };
 
 /** Defaults validated by the team on 27/10 (hypotheses to confirm with use). */
@@ -25,6 +27,7 @@ export const DEFAULT_BILLING_SETTINGS: BillingSettings = {
   humanRevisionsPerShot: HUMAN_REVISIONS_PER_SHOT,
   humanClipRevisionsPerShot: HUMAN_CLIP_REVISIONS_PER_SHOT,
   revisionPriceFcfa: 0,
+  videoValidationEnabled: false,
 };
 
 export const billingSettingsPatchSchema = z.object({
@@ -37,6 +40,7 @@ export const billingSettingsPatchSchema = z.object({
   humanRevisionsPerShot: z.number().int().min(0).max(5).optional(),
   humanClipRevisionsPerShot: z.number().int().min(0).max(5).optional(),
   revisionPriceFcfa: z.number().int().min(0).max(10_000_000).optional(),
+  videoValidationEnabled: z.boolean().optional(),
 }).strict();
 
 export const BILLING_COLUMNS: Record<keyof BillingSettings, string> = {
@@ -48,6 +52,7 @@ export const BILLING_COLUMNS: Record<keyof BillingSettings, string> = {
   humanRevisionsPerShot: 'human_revisions_per_shot',
   humanClipRevisionsPerShot: 'human_clip_revisions_per_shot',
   revisionPriceFcfa: 'revision_price_fcfa',
+  videoValidationEnabled: 'video_validation_enabled',
 };
 
 export const BILLING_LABELS: Record<string, string> = {
@@ -59,6 +64,7 @@ export const BILLING_LABELS: Record<string, string> = {
   human_revisions_per_shot: 'Modifications par image clé',
   human_clip_revisions_per_shot: 'Modifications par clip',
   revision_price_fcfa: 'Prix d’une modification (FCFA)',
+  video_validation_enabled: 'Validation des vidéos avant téléchargement',
 };
 
 export function settingsFromRow(row: Record<string, unknown> | null | undefined): BillingSettings {
@@ -73,6 +79,8 @@ export function settingsFromRow(row: Record<string, unknown> | null | undefined)
     humanRevisionsPerShot: number('human_revisions_per_shot', DEFAULT_BILLING_SETTINGS.humanRevisionsPerShot),
     humanClipRevisionsPerShot: number('human_clip_revisions_per_shot', DEFAULT_BILLING_SETTINGS.humanClipRevisionsPerShot),
     revisionPriceFcfa: number('revision_price_fcfa', DEFAULT_BILLING_SETTINGS.revisionPriceFcfa),
+    // Colonne absente (0045 non appliquée) : validation désactivée, comme le défaut.
+    videoValidationEnabled: row.video_validation_enabled === true,
   };
 }
 

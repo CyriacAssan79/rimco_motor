@@ -22,7 +22,7 @@ export function insufficientCreditAmount(error: unknown): number | null {
 /** Actionable message: what happens, how much is missing, who to contact. */
 export function insufficientCreditMessage(missingFcfa: number, actor: Pick<Actor, 'role'>): string {
   return `Solde insuffisant : il manque ${formatFcfa(missingFcfa)} pour lancer cette vidéo. `
-    + (hasAdminRights(actor) ? 'Contactez KÔMIAN pour recharger vos crédits.' : 'Contactez votre administrateur RIMCO Studio.');
+    + (hasAdminRights(actor) ? 'Contactez KÔMIAN pour recharger vos crédits.' : 'Contactez votre Manager RIMCO Studio.');
 }
 
 export class InsufficientCreditError extends HttpError {

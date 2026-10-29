@@ -1,19 +1,22 @@
 import { describe, expect, it } from 'vitest';
-import { estimateGridPriceFcfa, estimatePriceFcfa, estimateRealCost, formatFcfa, formatSignedFcfa } from './pricing';
+import { DEFAULT_VIDEO_PRICES_FCFA, estimateRealCost, formatFcfa, formatSignedFcfa, videoPriceFcfa, videoPricesFromRow } from './pricing';
 
 describe('pricing',()=>{
-  it('applies the fixed five-second client price by tier',()=>{
-    expect(estimatePriceFcfa(5,'standard')).toBe(2300);
-    expect(estimatePriceFcfa(5,'pro')).toBe(3500);
-    expect(estimatePriceFcfa(5,'premium')).toBe(4750);
-    expect(estimatePriceFcfa(5,'test')).toBe(4750);
+  it('O01 · bills one flat price per video and tier, whatever the duration up to 30 s',()=>{
+    const prices = { standard: 13000, pro: 18000, premium: 19000 };
+    for (const seconds of [5, 10, 15, 20, 25, 30]) {
+      expect(videoPriceFcfa(seconds, 'standard', prices)).toBe(13000);
+      expect(videoPriceFcfa(seconds, 'pro', prices)).toBe(18000);
+    }
+    expect(videoPriceFcfa(20, 'premium', prices)).toBe(19000);
+    expect(videoPriceFcfa(20, 'test', prices)).toBe(19000);
   });
-  it('uses the active brand grid for Standard and Premium client prices',()=>{
-    const grid = { standard: 460, pro: 700, premium: 950 };
-    expect(estimateGridPriceFcfa(20, 'premium', grid)).toBe(19000);
-    expect(estimateGridPriceFcfa(20, 'standard', grid)).toBe(9200);
-    expect(estimateGridPriceFcfa(20, 'pro', grid)).toBe(14000);
-    expect(estimateGridPriceFcfa(20, 'test', grid)).toBe(19000);
+  it('O01 · refuses a duration beyond the 30 s covered by the flat price',()=>{
+    expect(()=>videoPriceFcfa(31, 'standard', DEFAULT_VIDEO_PRICES_FCFA)).toThrow(/30 s/);
+  });
+  it('O01 · reads the flat prices of a pricing_settings row',()=>{
+    expect(videoPricesFromRow({ video_price_fcfa_standard: '13000', video_price_fcfa_pro: 18000, video_price_fcfa_premium: 19000 })).toEqual({ standard: 13000, pro: 18000, premium: 19000 });
+    expect(DEFAULT_VIDEO_PRICES_FCFA).toEqual({ standard: 13000, pro: 18000, premium: 19000 });
   });
   it('converts real provider cost to EUR and FCFA',()=>{
     expect(estimateRealCost(5,.1,.9,655.957)).toEqual({costUsd:.5,costEur:.45,costRealFcfa:.45*655.957});
@@ -29,7 +32,8 @@ describe('pricing',()=>{
     expect(()=>formatFcfa(-1)).toThrow();
   });
   it('rejects invalid inputs at the pricing boundary',()=>{
-    expect(()=>estimatePriceFcfa(0,'standard')).toThrow();
+    expect(()=>videoPriceFcfa(0,'standard',DEFAULT_VIDEO_PRICES_FCFA)).toThrow();
+    expect(()=>videoPriceFcfa(10,'standard',{ standard: -1, pro: 1, premium: 1 })).toThrow();
     expect(()=>estimateRealCost(5,-.1,.9,655.957)).toThrow();
   });
 });

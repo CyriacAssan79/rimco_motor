@@ -75,6 +75,8 @@ export function AdaptationsNote({ video }: { video: Video }) {
 /** `currentUserId`: only the author of a video sends it for validation. */
 export function VideoLibrary({ currentUserId }: { currentUserId?: string }) {
   const [videos, setVideos] = useState<Video[]>([]);
+  // 29/10 · O03 : réglage du client renvoyé par /api/versions ; désactivé par défaut (téléchargement direct).
+  const [videoValidation, setVideoValidation] = useState(false);
   const [filter, setFilter] = useState('all');
   const [query, setQuery] = useState('');
   const [error, setError] = useState('');
@@ -109,6 +111,7 @@ export function VideoLibrary({ currentUserId }: { currentUserId?: string }) {
     const nextVideos = incoming.map((video) => preservePreviewUrl(video, existing.get(video.id), renewPreviewIds));
     videosRef.current = nextVideos;
     setVideos(nextVideos);
+    setVideoValidation(data.videoValidation === true);
     setSelectedVideo((current) => {
       if (!current) return null;
       const updated = incoming.find((video) => (video.videoId ?? video.id) === (current.videoId ?? current.id));
@@ -168,7 +171,8 @@ export function VideoLibrary({ currentUserId }: { currentUserId?: string }) {
   const selectedVideos = videos.filter((video) => selectedIds.includes(video.videoId ?? video.id));
   const selectableVisibleIds = filtered.filter((video) => !isVideoInProgress(video.status)).map((video) => video.videoId ?? video.id);
   const allVisibleSelected = selectableVisibleIds.length > 0 && selectableVisibleIds.every((id) => selectedIds.includes(id));
-  const tabs = LIBRARY_TABS;
+  // Sans validation, les onglets « En validation », « Validées » et « Refusées » n'ont pas lieu d'être.
+  const tabs = videoValidation ? LIBRARY_TABS : LIBRARY_TABS.filter(([value]) => !['review', 'approved', 'rejected'].includes(value));
 
   function toggleSelected(id: string) {
     setSelectedIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
@@ -261,9 +265,9 @@ export function VideoLibrary({ currentUserId }: { currentUserId?: string }) {
         {(!video.previewUrl || unavailablePreviewIds.includes(video.id)) && ['ready', 'review'].includes(video.status) && <p className="border-t border-[#ead9b4] bg-[#fff9ed] px-4 py-2 text-xs text-[#77591f]">Aperçu indisponible après renouvellement : le MP4 est absent ou inaccessible dans le stockage.</p>}
         <div className="p-4"><div className="flex items-center justify-between gap-3"><StatusPill status={LIBRARY_STATUS_LABELS[libraryStatus(video)]} /><span className="text-xs font-semibold tabular-nums">{formatVideoPrice(video)}</span></div><h3 className="mt-3 truncate text-sm font-semibold">{video.title ?? `${video.make ?? 'Nouvelle'} ${video.model ?? 'vidéo'}`}</h3><p className="mt-1 text-xs text-[#626269]">{formatVideoDate(video.createdAt ?? video.created_at)} · {video.durationSeconds ?? 5} s · <span className="font-medium text-[#4b4b50]">{videoMethodLabel(video)}</span></p>
           {libraryStatus(video) === 'failed' && <p className="mt-3 text-xs leading-5 text-[#9d352e]">{failureExplanation(video.errorMessage).cause}</p>}
-          {/* 27/10: download after approval only; « Envoyer en validation » for the author of a video that is ready. */}
-          {libraryStatus(video) === 'approved' && video.videoUrl ? <div className="mt-4 flex flex-wrap gap-2"><a href={video.videoUrl} download onClick={(event) => event.stopPropagation()} className="inline-flex min-h-11 items-center rounded-sm bg-[#c51e1c] px-3.5 py-2.5 text-xs font-semibold text-white hover:bg-[#a71715] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#c51e1c]">Télécharger le MP4</a></div>
-            : libraryStatus(video) === 'ready' && (!currentUserId || video.userId === currentUserId) ? <div className="mt-4 flex flex-wrap items-center gap-2"><button type="button" onClick={(event) => { event.stopPropagation(); void submitForValidation(video); }} className="inline-flex min-h-11 items-center rounded-sm border border-[#e2e2e5] px-3.5 py-2.5 text-xs font-semibold hover:bg-[#f7f7f8] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#c51e1c]">Envoyer en validation</button><span className="text-xs text-[#626269]">Téléchargement après validation.</span></div>
+          {/* 29/10 · O03 : le serveur ne renvoie un lien de téléchargement que si la vidéo peut être téléchargée ; « Envoyer en validation » seulement si le client a activé la validation. */}
+          {video.videoUrl ? <div className="mt-4 flex flex-wrap gap-2"><a href={video.videoUrl} download onClick={(event) => event.stopPropagation()} className="inline-flex min-h-11 items-center rounded-sm bg-[#c51e1c] px-3.5 py-2.5 text-xs font-semibold text-white hover:bg-[#a71715] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#c51e1c]">Télécharger le MP4</a></div>
+            : videoValidation && libraryStatus(video) === 'ready' && (!currentUserId || video.userId === currentUserId) ? <div className="mt-4 flex flex-wrap items-center gap-2"><button type="button" onClick={(event) => { event.stopPropagation(); void submitForValidation(video); }} className="inline-flex min-h-11 items-center rounded-sm border border-[#e2e2e5] px-3.5 py-2.5 text-xs font-semibold hover:bg-[#f7f7f8] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#c51e1c]">Envoyer en validation</button><span className="text-xs text-[#626269]">Téléchargement après validation.</span></div>
             : video.status === 'generating' ? <LibraryProgressLine version={tracker.snapshot.versions.find((version) => version.id === video.id) ?? video} now={now} /> : null}
           {video.status !== 'generating' && video.progress && formatStepDurations(video.progress.durations) && <p className="mt-3 text-xs text-[#626269]">Durées : {formatStepDurations(video.progress.durations)}</p>}
           <GenerationInputsDetails video={video} />

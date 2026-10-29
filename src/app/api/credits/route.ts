@@ -7,6 +7,7 @@ import { creditSummary } from '@/core/billing/credits';
 import { loadBillingSettings } from '@/core/billing/settings';
 import { loadHistory, perPersonSummary } from '@/core/billing/credit-history';
 import { creditScope, periodFilters } from '@/core/billing/credit-access';
+import { VIDEO_PRICE_COLUMNS, videoPricesFromRow } from '@/core/pricing';
 
 /** Page « Crédits » (27/10): balance for everyone, the history by role. Never any production cost. */
 export async function GET(request: Request) {
@@ -23,8 +24,9 @@ export async function GET(request: Request) {
     const operator = isOperator(actor);
     // Rollout (credits not applied): the client's users see nothing yet; the operator sees what is traced.
     if (!settings.creditsEnforced && !operator) return NextResponse.json({ summary, lines: [], people: {}, perPerson: [], prices: null, scope: { seesAll: scope.seesAll, operator } });
-    const { data: pricing } = actor.brandId ? await admin.from('pricing_settings').select('grid_fcfa_per_second_standard,grid_fcfa_per_second_pro,grid_fcfa_per_second_premium').eq('brand_id', actor.brandId).maybeSingle() : { data: null };
-    const prices = pricing ? { standard: Number(pricing.grid_fcfa_per_second_standard), pro: Number(pricing.grid_fcfa_per_second_pro), premium: Number(pricing.grid_fcfa_per_second_premium) } : null;
+    const { data: pricing } = actor.brandId ? await admin.from('pricing_settings').select(VIDEO_PRICE_COLUMNS).eq('brand_id', actor.brandId).maybeSingle() : { data: null };
+    // 29/10 · O01 : forfait par vidéo (jusqu'à 30 s).
+    const prices = pricing ? videoPricesFromRow(pricing as Record<string, unknown>) : null;
     if (params.get('history') === 'false') return NextResponse.json({ summary, prices, scope: { seesAll: scope.seesAll, operator } });
     const history = await loadHistory(admin, { clientId: scope.clientId, userId: scope.userId, ...periodFilters(params) });
     const type = params.get('type');

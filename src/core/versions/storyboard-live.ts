@@ -14,7 +14,7 @@ import { createSignedStorageObjectUrl } from '@/core/storage/signed-video';
 import { keyframeImageUploadTarget } from '@/core/storage/keyframe-image';
 import { createSupabaseServerClient } from '@/core/supabase/server';
 import { env } from '@/env';
-import { estimateGridPriceFcfa } from '@/core/pricing';
+import { VIDEO_PRICE_COLUMNS, videoPriceFcfa, videoPricesFromRow } from '@/core/pricing';
 import { assertCreditsCover, creditContext, holdCredits } from '@/core/billing/credits';
 import { frozenRevisionLimits } from '@/core/billing/settings';
 import { notifyStoryboardState } from '@/core/notifications/storyboard';
@@ -256,11 +256,9 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
   const generatedSeconds = generationShots.reduce((sum, shot) => sum + shot.durationSeconds, 0);
   const maximumGeneratedSeconds = generatedSeconds * (premiumQualityMode ? 2 : 1);
   const { data: pricingSettings, error: pricingError } = await admin.from('pricing_settings')
-    .select('grid_fcfa_per_second_standard,grid_fcfa_per_second_pro,grid_fcfa_per_second_premium').eq('brand_id', actor.brandId).maybeSingle();
+    .select(VIDEO_PRICE_COLUMNS).eq('brand_id', actor.brandId).maybeSingle();
   if (pricingError || !pricingSettings) throw new HttpError(503, 'La grille tarifaire de votre marque n’est pas configurée.');
-  const priceFcfa = estimateGridPriceFcfa(input.clipDurationSeconds, input.storyMode, {
-    standard: Number(pricingSettings.grid_fcfa_per_second_standard), pro: Number(pricingSettings.grid_fcfa_per_second_pro), premium: Number(pricingSettings.grid_fcfa_per_second_premium),
-  });
+  const priceFcfa = videoPriceFcfa(input.clipDurationSeconds, input.storyMode, videoPricesFromRow(pricingSettings));
 
   // Garde-fou de coût (nominal, ou pire cas selon VIDEO_COST_CAP_MODE), vérifié avant toute écriture et tout appel payant.
   const plannedStoryboardLedgerIds = input.storyboardLedgerIds ?? [];

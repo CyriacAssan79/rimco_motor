@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { formatFcfa, formatSignedFcfa } from '@/core/pricing';
+import { formatFcfa, MAX_FLAT_PRICE_SECONDS, formatSignedFcfa } from '@/core/pricing';
 
 type Summary = { enforced: boolean; availableFcfa: number; heldFcfa: number; lowBalance: boolean; thresholdFcfa: number; nextExpiry: { amountFcfa: number; at: string } | null };
 type Line = { key: string; at: string; kind: string; label: string; amountFcfa: number; availableAfterFcfa: number; userId: string | null; videoId: string | null; note: string | null; enforced: boolean };
@@ -58,7 +58,7 @@ export function CreditsView({ clientId, historyOnly = false }: { clientId?: stri
     </section>}
 
     {!historyOnly && data.prices && <details className="border border-[var(--border)] bg-white p-4"><summary className="min-h-11 cursor-pointer text-xs font-semibold">Tarifs en vigueur</summary>
-      <ul className="mt-2 grid gap-2 text-xs sm:grid-cols-3">{([['Standard', data.prices.standard, 15], ['Pro', data.prices.pro, 15], ['Premium', data.prices.premium, 20]] as const).map(([label, price, seconds]) => <li key={label} className="border border-[var(--border)] p-3"><b className="block font-semibold">{label}</b><span className="tabular-nums">{formatFcfa(price)} par seconde · {seconds} s : {formatFcfa(price * seconds)}</span></li>)}</ul>
+      <ul className="mt-2 grid gap-2 text-xs sm:grid-cols-3">{([['Standard', data.prices.standard], ['Pro', data.prices.pro], ...(data.scope.operator ? [['Premium', data.prices.premium]] : [])] as Array<[string, number]>).map(([label, price]) => <li key={label} className="border border-[var(--border)] p-3"><b className="block font-semibold">{label}</b><span className="tabular-nums">{formatFcfa(price)} par vidéo, de 5 à {MAX_FLAT_PRICE_SECONDS} s</span></li>)}</ul>
       <p className="mt-2 text-xs text-[#626269]">Les tarifs sont fixés par KÔMIAN. Une vidéo garde le prix affiché à son lancement.</p></details>}
 
     <section aria-labelledby="history-title" className="border border-[var(--border)] bg-white">

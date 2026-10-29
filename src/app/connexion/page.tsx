@@ -43,7 +43,7 @@ export default function Connexion() {
             <p className="mt-1.5 text-xs leading-5 text-[#82745c]">Après avoir ouvert le lien sécurisé reçu par e-mail, définissez votre mot de passe ici pour activer ou récupérer votre accès. Les inscriptions publiques sont désactivées.</p>
           </div>
           <LoginForm />
-          <p className="mt-7 text-center text-[10px] leading-5 text-[#9a968f]">L’accès est réservé aux membres invités par votre administrateur.<br />Les inscriptions publiques sont désactivées.</p>
+          <p className="mt-7 text-center text-[10px] leading-5 text-[#9a968f]">L’accès est réservé aux membres invités par votre Manager.<br />Les inscriptions publiques sont désactivées.</p>
         </div>
       </section>
     </main>

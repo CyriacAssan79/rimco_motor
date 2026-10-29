@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useState } from 'react';
 import { generationTierLabel } from '@/core/versions/generation-tier';
 import { failureBillingText, failureExplanation, type BillingSummary, type StudioSettings } from '@/core/versions/outcome';
+import { useVideoValidation } from './shell';
 
 type Outcome = {
   id: string;
@@ -25,7 +26,9 @@ type Outcome = {
 /** Direct link to the video in the library: opened and highlighted there. */
 export const libraryVideoHref = (outcome: Pick<Outcome, 'id' | 'videoId'>) => `/bibliotheque?video=${encodeURIComponent(outcome.videoId ?? outcome.id)}`;
 
-export const DOWNLOAD_AFTER_APPROVAL = 'Le téléchargement est possible après l’approbation du valideur.';
+export const DOWNLOAD_AFTER_APPROVAL = 'Le téléchargement est possible après l’approbation de la vidéo.';
+/** 29/10 · O03 : sans validation (défaut), la vidéo prête se télécharge tout de suite depuis la Bibliothèque. */
+export const DOWNLOAD_NOW = 'Vous pouvez la télécharger tout de suite depuis la Bibliothèque.';
 
 const aspect = (format?: string) => format === '9:16' ? 'aspect-[9/16] max-h-[520px] mx-auto' : format === '1:1' ? 'aspect-square max-h-[480px] mx-auto' : 'aspect-video';
 
@@ -33,6 +36,7 @@ const aspect = (format?: string) => format === '9:16' ? 'aspect-[9/16] max-h-[52
 export function ReadyOutcome({ outcome, onVariant, onSeen, onSubmitted }: { outcome: Outcome; onVariant?: () => void; onSeen: () => void; onSubmitted: () => void }) {
   const [state, setState] = useState<'idle' | 'sending' | 'sent'>('idle');
   const [error, setError] = useState('');
+  const validationEnabled = useVideoValidation();
   const validation = state === 'sent' || outcome.status === 'review' ? 'pending' : outcome.validationStatus ?? null;
   const duration = outcome.durationSeconds ?? (outcome.settings ? outcome.settings.durationS + 2 : null);
   const tier = outcome.tier ?? outcome.settings?.tier ?? null;
@@ -44,12 +48,12 @@ export function ReadyOutcome({ outcome, onVariant, onSeen, onSubmitted }: { outc
     try {
       const response = await fetch('/api/validations', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ versionId: outcome.id }) });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error ?? 'La vidéo n’a pas pu être envoyée au valideur.');
+      if (!response.ok) throw new Error(data.error ?? 'La vidéo n’a pas pu être envoyée en validation.');
       setState('sent');
       onSubmitted();
     } catch (cause) {
       setState('idle');
-      setError(cause instanceof Error ? cause.message : 'La vidéo n’a pas pu être envoyée au valideur.');
+      setError(cause instanceof Error ? cause.message : 'La vidéo n’a pas pu être envoyée en validation.');
     }
   }
 
@@ -60,21 +64,22 @@ export function ReadyOutcome({ outcome, onVariant, onSeen, onSubmitted }: { outc
       : <div className="grid aspect-video w-full place-items-center rounded bg-[#f3f1ee] text-xs text-[#6b6760]">Chargement de la vidéo…</div>}
     <p className="text-xs text-[#55545a]">
       {[duration ? `Durée ${duration} s` : null, tier ? `Niveau ${generationTierLabel(tier)}` : null, outcome.format ? `Format ${outcome.format}` : null].filter(Boolean).join(' · ')}
-      {warnings ? ` · ${warnings} point${warnings > 1 ? 's' : ''} signalé${warnings > 1 ? 's' : ''} par le contrôle automatique, à vérifier ci-dessous avant l’envoi` : ''}
+      {warnings ? ` · ${warnings} point${warnings > 1 ? 's' : ''} signalé${warnings > 1 ? 's' : ''} par le contrôle automatique, à vérifier avant de l’utiliser` : ''}
     </p>
     <div className="flex flex-wrap gap-2">
       {validation === 'approved'
-        ? <p className="w-full text-xs font-semibold text-[#315c39]">Approuvée par le valideur : vous pouvez la télécharger depuis la Bibliothèque.</p>
+        ? <p className="w-full text-xs font-semibold text-[#315c39]">Approuvée : vous pouvez la télécharger depuis la Bibliothèque.</p>
         : validation === 'rejected'
-          ? <p className="w-full text-xs font-semibold text-[#9d352e]">Refusée par le valideur : le motif est dans la Bibliothèque. Créez une variante pour corriger.</p>
+          ? <p className="w-full text-xs font-semibold text-[#9d352e]">Refusée : le motif est dans la Bibliothèque. Créez une variante pour corriger.</p>
           : validation === 'pending'
-            ? <p role="status" className="w-full text-xs font-semibold text-[#55545a]">Envoyée au valideur : en attente de sa décision. Vous serez notifié.</p>
-            : <button type="button" onClick={() => void submit()} disabled={state === 'sending'} className="min-h-11 rounded-md bg-[#c51e1c] px-4 text-xs font-semibold text-white disabled:opacity-50">{state === 'sending' ? 'Envoi…' : 'Envoyer au valideur'}</button>}
+            ? <p role="status" className="w-full text-xs font-semibold text-[#55545a]">Envoyée en validation : en attente de la décision. Vous serez notifié.</p>
+            : !validationEnabled ? null
+            : <button type="button" onClick={() => void submit()} disabled={state === 'sending'} className="min-h-11 rounded-md bg-[#c51e1c] px-4 text-xs font-semibold text-white disabled:opacity-50">{state === 'sending' ? 'Envoi…' : 'Envoyer en validation'}</button>}
       {onVariant && <button type="button" onClick={onVariant} className="min-h-11 rounded-md border border-[#d2cec6] bg-white px-4 text-xs font-semibold text-[#242428]">Créer une variante</button>}
       <Link href={libraryVideoHref(outcome)} onClick={onSeen} className="inline-flex min-h-11 items-center rounded-md border border-[#d2cec6] bg-white px-4 text-xs font-semibold text-[#242428]">Ouvrir dans la Bibliothèque</Link>
     </div>
     {error && <p role="alert" className="text-xs text-[#9d352e]">{error}</p>}
-    {validation !== 'approved' && <p className="text-xs text-[#55545a]">{DOWNLOAD_AFTER_APPROVAL}</p>}
+    {!validationEnabled ? <p className="text-xs text-[#55545a]">{DOWNLOAD_NOW}</p> : validation !== 'approved' && <p className="text-xs text-[#55545a]">{DOWNLOAD_AFTER_APPROVAL}</p>}
   </div>;
 }
 

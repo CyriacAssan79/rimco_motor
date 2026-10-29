@@ -37,7 +37,7 @@ export function LoginForm() {
         : null;
 
     if (authError) {
-      setError('Ce lien de première connexion a expiré ou a déjà été utilisé. Demandez un nouvel e-mail à l’administrateur.');
+      setError('Ce lien de première connexion a expiré ou a déjà été utilisé. Demandez un nouvel e-mail à votre Manager.');
       return;
     }
     if (!firstAccessType) {
@@ -73,7 +73,7 @@ export function LoginForm() {
         const userResult = sessionError ? null : await client.auth.getUser();
         if (!active) return;
         if (sessionError || userResult?.error || !userResult?.data.user) {
-          setError('Ce lien de première connexion a expiré ou a déjà été utilisé. Demandez un nouvel e-mail à l’administrateur.');
+          setError('Ce lien de première connexion a expiré ou a déjà été utilisé. Demandez un nouvel e-mail à votre Manager.');
           return;
         }
         setAuthVerified(true);
@@ -82,10 +82,10 @@ export function LoginForm() {
         cleanUrl.hash = '';
         window.history.replaceState({}, document.title, `${cleanUrl.pathname}${cleanUrl.search}`);
       })().catch(() => {
-        if (active) setError('Impossible de vérifier ce lien. Demandez un nouvel e-mail à l’administrateur.');
+        if (active) setError('Impossible de vérifier ce lien. Demandez un nouvel e-mail à votre Manager.');
       });
     } catch {
-      setError('La configuration Supabase est incomplète. Contactez l’administrateur.');
+      setError('La configuration Supabase est incomplète. Contactez KÔMIAN.');
     }
 
     return () => {

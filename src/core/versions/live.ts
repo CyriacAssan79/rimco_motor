@@ -18,7 +18,7 @@ import { requestSchema } from './request-schema';
 import { beginPostproduction, retryPostproduction } from '@/core/postproduction/pipeline';
 import { refreshLivePhotoFidelity } from '@/core/versions/photo-fidelity';
 import { getScenePreset, inferVehicleCategory } from '@/core/scenes/catalog';
-import { estimateGridPriceFcfa } from '@/core/pricing';
+import { VIDEO_PRICE_COLUMNS, videoPriceFcfa, videoPricesFromRow } from '@/core/pricing';
 import { assertCreditsCover, creditContext, holdCredits } from '@/core/billing/credits';
 import { refreshLiveStoryboard } from './storyboard-live';
 import { getSceneConceptDirection } from '@/core/scenes/concepts';
@@ -127,11 +127,9 @@ export async function createLiveVersion(actor: Actor, input: CreateVersionInput,
   const initialBrief = options?.reuse?.brief ?? buildBrief(input.description || 'Vidéo automobile réaliste et élégante.', briefOptions);
   if (initialBrief.vehicle_asset_id !== asset.id || initialBrief.format !== input.format) throw new HttpError(422, 'Le brief commun ne correspond pas à la photo ou au format sélectionné.');
   const { data: pricingSettings, error: pricingError } = await admin.from('pricing_settings')
-    .select('grid_fcfa_per_second_standard,grid_fcfa_per_second_pro,grid_fcfa_per_second_premium').eq('brand_id', actor.brandId).maybeSingle();
+    .select(VIDEO_PRICE_COLUMNS).eq('brand_id', actor.brandId).maybeSingle();
   if (pricingError || !pricingSettings) throw new HttpError(503, 'La grille tarifaire de votre marque n’est pas configurée.');
-  const priceFcfa = estimateGridPriceFcfa(input.durationS, input.tier, {
-    standard: Number(pricingSettings.grid_fcfa_per_second_standard), pro: Number(pricingSettings.grid_fcfa_per_second_pro), premium: Number(pricingSettings.grid_fcfa_per_second_premium),
-  });
+  const priceFcfa = videoPriceFcfa(input.durationS, input.tier, videoPricesFromRow(pricingSettings));
   const videoTitle = input.title || `${vehicleMake ?? ''} ${vehicleModel ?? 'Véhicule'} · Nouvelle création`.trim();
   const credits = await creditContext(admin, actor);
   await assertCreditsCover(admin, actor, credits, priceFcfa);
@@ -365,7 +363,7 @@ export async function refreshLiveVersion(versionId: string, actor: Actor) {
     const { data: ledger } = await admin.from('usage_ledger').select('id').eq('version_id', versionId).eq('status', 'reserved').maybeSingle();
     if (ledger) {
       const { error: settleError } = await settleUsageCost(admin, { entryId: ledger.id, outcome: 'released', actualCostUsd: 0, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA });
-      if (settleError) throw new HttpError(503, 'La réservation de budget doit être réconciliée par l’administrateur.');
+      if (settleError) throw new HttpError(503, 'La réservation de budget doit être réconciliée par KÔMIAN.');
     }
   }
   const updates: Record<string, unknown> = { status: status.status, updated_at: new Date().toISOString() };
@@ -416,7 +414,7 @@ async function settleCompletedGenerationCost(admin: ReturnType<typeof createStor
   if (ledgerReadError) throw new HttpError(503, 'Impossible de lire la réservation de coût de la génération.');
   if (!ledger) return;
   const { error } = await settleUsageCost(admin, { entryId: ledger.id, outcome: 'charged', actualCostUsd: ledger.cost_usd, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA });
-  if (error) throw new HttpError(503, 'La vidéo est générée mais la clôture du budget doit être réconciliée par l’administrateur.');
+  if (error) throw new HttpError(503, 'La vidéo est générée mais la clôture du budget doit être réconciliée par KÔMIAN.');
 }
 
 async function readBoundedVideo(response: Response, maxBytes: number): Promise<Buffer> {

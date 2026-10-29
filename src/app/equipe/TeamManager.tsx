@@ -1,14 +1,15 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import { useVideoValidation } from '@/components/shell';
 
 type Role = 'collaborateur' | 'admin' | 'operateur';
 type Member = { id: string; email: string; name: string; role: Role; canValidate: boolean; brandId: string | null; isActive: boolean };
 
-const ROLE_LABELS: Record<Role, string> = { collaborateur: 'Collaborateur', admin: 'Administrateur', operateur: 'Opérateur KÔMIAN' };
+const ROLE_LABELS: Record<Role, string> = { collaborateur: 'Contributeur', admin: 'Manager', operateur: 'Opérateur KÔMIAN' };
 const ROLE_HELP: Array<[Role, string]> = [
-  ['collaborateur', 'crée et modifie ses vidéos, les envoie en validation, voit le solde et ses dépenses. Avec « Peut valider », il approuve aussi les vidéos de l’équipe.'],
-  ['admin', 'en plus : gère l’équipe et la médiathèque, valide toujours, suit les crédits et leur historique.'],
+  ['collaborateur', 'crée ses vidéos et les télécharge dès qu’elles sont prêtes, voit le solde et ses dépenses.'],
+  ['admin', 'en plus : gère l’équipe et la médiathèque, télécharge les vidéos de l’équipe, suit les crédits et leur historique.'],
   ['operateur', 'équipe KÔMIAN : tarifs, crédits, coûts de production et paramètres internes.'],
 ];
 
@@ -27,6 +28,8 @@ export function TeamManager() {
   const [busy, setBusy] = useState('');
   const [temporary, setTemporary] = useState<{ name: string; password: string } | null>(null);
   const [copied, setCopied] = useState(false);
+  // 29/10 · O03 : « Peut valider » n'apparaît que si le client a activé la validation des vidéos.
+  const videoValidation = useVideoValidation();
   const [form, setForm] = useState<{ name: string; email: string; role: Role; canValidate: boolean }>({ name: '', email: '', role: 'collaborateur', canValidate: false });
 
   const load = useCallback(async () => {
@@ -111,10 +114,10 @@ export function TeamManager() {
                     {(roles.includes(member.role) ? roles : [member.role]).map((role) => <option key={role} value={role}>{ROLE_LABELS[role]}</option>)}
                   </select>
                 </label>
-                <label className={`flex min-h-11 items-center gap-2 text-xs ${alwaysValidates ? 'text-[#626269]' : 'text-[#161619]'}`}>
+                {videoValidation && <label className={`flex min-h-11 items-center gap-2 text-xs ${alwaysValidates ? 'text-[#626269]' : 'text-[#161619]'}`}>
                   <input type="checkbox" className="size-4 accent-[#c51e1c]" checked={alwaysValidates || member.canValidate} disabled={alwaysValidates || busy === member.id} onChange={(event) => update(member, { canValidate: event.target.checked })} />
-                  {alwaysValidates ? 'Valide toujours (administration)' : 'Peut valider les vidéos'}
-                </label>
+                  {alwaysValidates ? 'Valide toujours (Manager)' : 'Peut valider les vidéos'}
+                </label>}
               </div>
               <div className="flex flex-wrap gap-2 md:col-span-2 2xl:col-span-1 2xl:justify-end">
                 {!self && <button type="button" disabled={busy === member.id} onClick={() => update(member, { isActive: !member.isActive })} className="min-h-11 rounded-sm border border-[#d4d4d8] px-3 text-xs font-semibold hover:bg-[#f7f7f8] disabled:opacity-50">{member.isActive ? 'Désactiver' : 'Réactiver'}</button>}
@@ -131,7 +134,7 @@ export function TeamManager() {
         <label className="grid gap-1.5 text-xs font-semibold">Nom complet<input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} required minLength={2} maxLength={120} autoComplete="off" className={field} /></label>
         <label className="grid gap-1.5 text-xs font-semibold">Adresse e-mail<input type="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} required autoComplete="off" className={field} /></label>
         <label className="grid gap-1.5 text-xs font-semibold">Rôle<select value={form.role} onChange={(event) => setForm({ ...form, role: event.target.value as Role })} className={field}>{roles.map((role) => <option key={role} value={role}>{ROLE_LABELS[role]}</option>)}</select></label>
-        {form.role === 'collaborateur' && <label className="flex min-h-11 items-center gap-2 text-xs"><input type="checkbox" className="size-4 accent-[#c51e1c]" checked={form.canValidate} onChange={(event) => setForm({ ...form, canValidate: event.target.checked })} />Peut valider les vidéos de l’équipe</label>}
+        {videoValidation && form.role === 'collaborateur' && <label className="flex min-h-11 items-center gap-2 text-xs"><input type="checkbox" className="size-4 accent-[#c51e1c]" checked={form.canValidate} onChange={(event) => setForm({ ...form, canValidate: event.target.checked })} />Peut valider les vidéos de l’équipe</label>}
         <button disabled={busy === 'create'} className="min-h-11 w-full rounded-sm bg-[#c51e1c] px-4 text-xs font-semibold text-white hover:bg-[#a71715] disabled:opacity-50">{busy === 'create' ? 'Création…' : 'Créer le compte'}</button>
       </form>
     </div>

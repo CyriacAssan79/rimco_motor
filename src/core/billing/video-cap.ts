@@ -118,5 +118,5 @@ export function revisionCapCheck(input: { capUsd: number | undefined; mode: Vide
   if (input.capUsd === undefined) return { ok: true };
   const base = input.mode === 'worst_case' ? Math.max(input.engagedUsd, input.plannedWorstCaseUsd ?? 0) : input.engagedUsd;
   if (base + input.revisionUsd <= input.capUsd + 1e-9) return { ok: true };
-  return { ok: false, message: 'Cette modification dépasserait le plafond de coût fixé pour une vidéo. Acceptez le plan tel quel ou annulez la vidéo ; l’administrateur peut relever le plafond.' };
+  return { ok: false, message: 'Cette modification dépasserait le plafond de coût fixé pour une vidéo. Acceptez le plan tel quel ou annulez la vidéo ; KÔMIAN peut relever le plafond.' };
 }

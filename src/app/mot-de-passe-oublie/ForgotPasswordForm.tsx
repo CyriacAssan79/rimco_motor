@@ -39,7 +39,7 @@ export function ForgotPasswordForm() {
       {error && <p role="alert" className="rounded-lg bg-[#fae9e7] px-3 py-2.5 text-xs text-[#9b352d]">{error}</p>}
       {sent && <p role="status" className="rounded-lg bg-[#edf4ee] px-3 py-2.5 text-xs leading-5 text-[#456c4c]">Si un compte correspond à cette adresse, un lien de réinitialisation va être envoyé.</p>}
       <button type="submit" disabled={busy} className="w-full rounded-xl bg-[var(--brand-red)] py-3 text-sm font-semibold text-white transition-colors hover:bg-[var(--brand-burgundy)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--brand-red)] disabled:opacity-50">{busy ? 'Envoi…' : 'Envoyer le lien'}</button>
-      <p className="text-xs leading-5 text-[#716d66]">Vous ne recevez pas l’e-mail ? Demandez à votre administrateur de réinitialiser votre mot de passe depuis l’écran Équipe.</p>
+      <p className="text-xs leading-5 text-[#716d66]">Vous ne recevez pas l’e-mail ? Demandez à votre Manager de réinitialiser votre mot de passe depuis l’écran Équipe.</p>
     </form>
   );
 }

@@ -269,7 +269,7 @@ export function MediaLibrary() {
           <span aria-hidden="true" className="mt-0.5 text-[#716d66]">•</span>
           <div>
             <p className="text-xs font-semibold text-[#675432]">{pending} média{pending > 1 ? 's' : ''} en attente</p>
-            <p className="mt-1 text-xs text-[#87795e]">Ces fichiers doivent être validés par un administrateur avant utilisation.</p>
+            <p className="mt-1 text-xs text-[#87795e]">Ces fichiers doivent être validés par un Manager avant utilisation.</p>
           </div>
         </div>
       )}

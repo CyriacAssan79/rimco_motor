@@ -3,7 +3,7 @@
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
-import { useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useState } from "react";
 import {
   GenerationIndicator,
   GenerationTrackerProvider,
@@ -29,7 +29,8 @@ type NavItem = {
 const nav: NavItem[] = [
   { label: "Accueil", href: "/", icon: "home", section: "production" },
   { label: "File de génération", href: "/file-generation", icon: "queue", section: "production" },
-  { label: "À valider", href: "/a-valider", icon: "check", section: "production", visible: canValidate, badge: true },
+  // 29/10 · O03 : « À valider » seulement si le client a activé la validation des vidéos (désactivée par défaut).
+  { label: "À valider", href: "/a-valider", icon: "check", section: "production", visible: (actor) => canValidate(actor) && actor.videoValidation === true, badge: true },
   { label: "Bibliothèque", href: "/bibliotheque", icon: "film", section: "production" },
   { label: "Médiathèque", href: "/mediatheque", icon: "image", section: "production" },
   { label: "Crédits", href: "/credits", icon: "wallet", section: "production" },
@@ -97,7 +98,13 @@ function NavLink({
   );
 }
 
-type Actor = { id?: string; role: string; canValidate?: boolean; name?: string };
+type Actor = { id?: string; role: string; canValidate?: boolean; name?: string; videoValidation?: boolean };
+
+/** 29/10 · O03 : réglage « validation des vidéos » du client, lu par le Studio (désactivé tant que /api/me n'a pas répondu). */
+const VideoValidationContext = createContext(false);
+export function useVideoValidation(): boolean {
+  return useContext(VideoValidationContext);
+}
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -108,7 +115,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     fetch("/api/me")
       .then(async (response) => (response.ok ? response.json() : null))
       .then((data) => {
-        if (active && data?.actor) setActor(data.actor);
+        if (active && data?.actor) setActor({ ...data.actor, videoValidation: data.videoValidation === true });
       })
       .catch(() => undefined);
     return () => {
@@ -123,11 +130,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     >
       <NotificationsProvider
         enabled={Boolean(actor)}
-        countReviews={canValidate(actor)}
+        countReviews={canValidate(actor) && actor?.videoValidation === true}
       >
-        <ShellFrame actor={actor} pathname={pathname}>
-          {children}
-        </ShellFrame>
+        <VideoValidationContext.Provider value={actor?.videoValidation === true}>
+          <ShellFrame actor={actor} pathname={pathname}>
+            {children}
+          </ShellFrame>
+        </VideoValidationContext.Provider>
       </NotificationsProvider>
     </GenerationTrackerProvider>
   );

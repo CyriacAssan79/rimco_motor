@@ -12,6 +12,7 @@ type Settings = {
   humanRevisionsPerShot: number;
   humanClipRevisionsPerShot: number;
   revisionPriceFcfa: number;
+  videoValidationEnabled: boolean;
 };
 type Client = { id: string; name: string; settings: Settings; availableFcfa?: number };
 
@@ -88,11 +89,18 @@ export function BillingSettings() {
             <span><b className="font-semibold">Appliquer les crédits</b><span className="block text-xs leading-5 text-[#626269]">Activé : une vidéo n’est lancée que si le solde couvre son prix. Désactivé : les montants sont tracés sans bloquer personne (mise en service). Solde actuel : {formatFcfa(balances[client.id] ?? 0)}.</span></span>
           </label>
           <div className="grid gap-3 sm:grid-cols-2">
-            <NumberField label="Seuil d’alerte de solde bas (FCFA)" help="L’administrateur du client et KÔMIAN sont prévenus sous ce montant." value={draft.lowBalanceThresholdFcfa} min={0} max={1_000_000_000} onChange={(value) => set({ lowBalanceThresholdFcfa: value })} />
+            <NumberField label="Seuil d’alerte de solde bas (FCFA)" help="Le Manager du client et KÔMIAN sont prévenus sous ce montant." value={draft.lowBalanceThresholdFcfa} min={0} max={1_000_000_000} onChange={(value) => set({ lowBalanceThresholdFcfa: value })} />
             <NumberField label="Alerte avant expiration (jours)" value={draft.expiryWarningDays} min={0} max={365} onChange={(value) => set({ expiryWarningDays: value })} />
             <NumberField label="Validité d’un crédit acheté (mois)" value={draft.purchaseValidityMonths} min={1} max={60} onChange={(value) => set({ purchaseValidityMonths: value })} />
             <NumberField label="Validité d’un crédit offert (mois)" value={draft.giftValidityMonths} min={1} max={60} onChange={(value) => set({ giftValidityMonths: value })} />
           </div>
+        </fieldset>
+        <fieldset className="space-y-3">
+          <legend className="text-xs font-bold uppercase tracking-[.14em] text-[#626269]">Validation des vidéos</legend>
+          <label className="flex min-h-11 items-start gap-3 text-sm">
+            <input type="checkbox" className="mt-1 size-4 accent-[#c51e1c]" checked={draft.videoValidationEnabled} onChange={(event) => set({ videoValidationEnabled: event.target.checked })} />
+            <span><b className="font-semibold">Valider les vidéos avant téléchargement</b><span className="block text-xs leading-5 text-[#626269]">Désactivé (par défaut) : une vidéo prête se télécharge tout de suite. Activé : elle doit être approuvée avant ; « À valider » et « Envoyer en validation » réapparaissent.</span></span>
+          </label>
         </fieldset>
         <fieldset className="space-y-3">
           <legend className="text-xs font-bold uppercase tracking-[.14em] text-[#626269]">Modifications demandées par l’utilisateur</legend>

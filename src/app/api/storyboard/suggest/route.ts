@@ -19,7 +19,7 @@ import { peoplePresetIds } from '@/core/people-presets';
 import { detectBriefConflicts, forbiddenShotsIssue, mergeBriefConflicts } from '@/core/brief/conflicts';
 import { signStoryboard, storyboardSigningKey } from '@/core/storyboard-signature';
 import { onlyCatalogLighting, onlyCatalogMood } from '@/core/scenes/prompt-values';
-import { estimateGridPriceFcfa } from '@/core/pricing';
+import { VIDEO_PRICE_COLUMNS, videoPriceFcfa, videoPricesFromRow } from '@/core/pricing';
 import { storyboardDirectionSchema } from '@/core/storyboard-direction';
 import { filmLightingIssue, placesForFilm, resolveFilmLighting } from '@/core/brief/film-lighting';
 
@@ -185,12 +185,10 @@ export async function POST(request: Request) {
       const falCredential = await getActiveFalCredential(admin);
       falApiKeyForRedaction = falCredential.apiKey;
       const { data: pricing, error: pricingError } = await admin.from('pricing_settings')
-        .select('grid_fcfa_per_second_standard,grid_fcfa_per_second_pro,grid_fcfa_per_second_premium').eq('brand_id', actor.brandId).maybeSingle();
+        .select(VIDEO_PRICE_COLUMNS).eq('brand_id', actor.brandId).maybeSingle();
       if (pricingError || !pricing) throw new HttpError(503, 'La grille tarifaire de votre marque n’est pas configurée.');
       // 27/10 · « bloquer avant l'effort » : sans solde pour cette vidéo, le storyboard n'est ni préparé ni payé.
-      const plannedPriceFcfa = estimateGridPriceFcfa(input.durationSeconds, input.mode, {
-        standard: Number(pricing.grid_fcfa_per_second_standard), pro: Number(pricing.grid_fcfa_per_second_pro), premium: Number(pricing.grid_fcfa_per_second_premium),
-      });
+      const plannedPriceFcfa = videoPriceFcfa(input.durationSeconds, input.mode, videoPricesFromRow(pricing));
       await assertCreditsCover(admin, actor, await creditContext(admin, actor), plannedPriceFcfa);
       const { data: reservation, error: reservationError } = await reserveLlmCost(admin, {
         userId: actor.id, department: actor.department, maxCostUsd: llmReservationUsd(env.LLM_MAX_COST_USD ?? 0),
@@ -228,9 +226,7 @@ export async function POST(request: Request) {
         directorConflicts = result.fields.briefConflicts ?? [];
         castDescription = cast.length ? '' : result.fields.castDescription ?? '';
         storyboardCostUsd = result.costUsd ?? (env.LLM_MAX_COST_USD ?? 0) * result.completedRequests;
-        totalEstimatedPriceFcfa = estimateGridPriceFcfa(input.durationSeconds, input.mode, {
-          standard: Number(pricing.grid_fcfa_per_second_standard), pro: Number(pricing.grid_fcfa_per_second_pro), premium: Number(pricing.grid_fcfa_per_second_premium),
-        });
+        totalEstimatedPriceFcfa = videoPriceFcfa(input.durationSeconds, input.mode, videoPricesFromRow(pricing));
         const { error: settleError } = await settleUsageCost(admin, { entryId: reservation, outcome: 'charged', actualCostUsd: storyboardCostUsd, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA, billable: false });
         if (settleError) throw new HttpError(503, 'Le coût du storyboard n’a pas pu être clôturé.');
       } catch (cause) {

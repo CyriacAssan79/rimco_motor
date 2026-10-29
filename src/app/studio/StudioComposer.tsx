@@ -115,6 +115,8 @@ type StoryShot = {
   locationPhotoId?: string | null;
 };
 const durationOptions = [5, 10, 15, 20];
+/** 29/10 · E01 (en cours) : 25 et 30 s affichées mais pas encore sélectionnables, en attente d'un essai réel validé. */
+const upcomingDurationOptions = [25, 30];
 /** No server limit exists yet: the Studio lets a user run at most two videos at a time (see docs/DECISIONS.md). */
 const MAX_ACTIVE_VIDEOS = 2;
 const premiumDurationOptions = [20];
@@ -294,7 +296,7 @@ export function StudioComposer({ mode, showPrompt = false, canRetryMontage = fal
   const missingFcfa = creditsApply && estimatedPriceFcfa != null ? Math.max(0, estimatedPriceFcfa - credit!.availableFcfa) : 0;
   const creditBlocked = missingFcfa > 0;
   const noCreditLeft = creditsApply && credit!.availableFcfa <= 0;
-  const creditContact = credit?.admin ? "contactez KÔMIAN pour recharger vos crédits" : "contactez votre administrateur RIMCO Studio";
+  const creditContact = credit?.admin ? "contactez KÔMIAN pour recharger vos crédits" : "contactez votre Manager RIMCO Studio";
   const lightingChoices = Array.from(
     new Map(
       sceneChoices.map((scene) => [getLightingLabel(scene.lighting), scene]),
@@ -954,6 +956,18 @@ export function StudioComposer({ mode, showPrompt = false, canRetryMontage = fal
                   {seconds} s{seconds === 5 && tier !== "premium" ? " · aperçu" : ""}
                 </button>
               ))}
+              {tier !== "premium" && upcomingDurationOptions.map((seconds) => (
+                <button
+                  type="button"
+                  key={seconds}
+                  disabled
+                  aria-disabled="true"
+                  title="Bientôt disponible"
+                  className="inline-flex min-h-11 cursor-not-allowed items-center justify-center rounded-full border border-dashed border-[#e5e2dd] px-3 text-xs text-[#a3a09a]"
+                >
+                  {seconds} s · bientôt
+                </button>
+              ))}
             </div>
             {/* 28/10 · V1 : ce que donne la durée choisie (nombre de plans, coupes franches, logo). */}
             <p id="duration-help" className="mt-2 text-xs leading-5 text-[#626269]">
@@ -1326,24 +1340,31 @@ export function StudioComposer({ mode, showPrompt = false, canRetryMontage = fal
                   { value: "pro", label: "Pro" },
                   { value: "premium", label: "Premium" },
                 ] as const
-              ).map((option) => (
+              ).map((option) => {
+                // 29/10 · Premium grisé pour RIMCO, sans prix, tant que D-06 est ouverte ; KÔMIAN garde l'accès pour ses essais.
+                const locked = option.value === "premium" && mode === "live" && credit?.operator !== true;
+                return (
                 <button
                   type="button"
                   key={option.value}
+                  disabled={locked}
+                  aria-disabled={locked || undefined}
+                  title={locked ? "Bientôt disponible" : undefined}
                   onClick={() => {
                     setTier(option.value);
                     if (option.value === "premium") setDurationS(20);
                     clearFormError();
                   }}
                   aria-pressed={tier === option.value}
-                  className={`inline-flex min-h-11 items-center justify-center rounded-full border px-3 text-xs ${tier === option.value ? "border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]" : "border-[#e5e2dd] text-[#77736d]"}`}
+                  className={`inline-flex min-h-11 items-center justify-center rounded-full border px-3 text-xs ${locked ? "cursor-not-allowed border-dashed border-[#e5e2dd] text-[#a3a09a]" : tier === option.value ? "border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]" : "border-[#e5e2dd] text-[#77736d]"}`}
                 >
-                  {option.label}
+                  {locked ? `${option.label} · bientôt` : option.label}
                 </button>
-              ))}
+                );
+              })}
             </div>
             <p className="mt-2 text-xs text-[#626269]">
-              Le niveau fixe le prix par seconde ; le prix de la vidéo s’affiche avant le lancement.
+              Le niveau fixe le prix de la vidéo, le même de 5 à 30 s ; il s’affiche avant le lancement.
             </p>
           </fieldset>
           {approvalBox.visible && (

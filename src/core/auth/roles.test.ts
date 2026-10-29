@@ -36,7 +36,10 @@ describe('rôles du 27/10 : collaborateur, admin (client), operateur (KÔMIAN)',
 
   it('affiche le rôle en clair', () => {
     expect(roleLabel({ role: 'operateur' })).toBe('Opérateur KÔMIAN');
-    expect(roleLabel({ role: 'collaborateur', canValidate: true })).toBe('Collaborateur · valideur');
+    // 29/10 · O02 : Manager et Contributeur, jamais « valideur » côté RIMCO ; les rôles SQL ne changent pas.
+    expect(roleLabel({ role: 'admin' })).toBe('Manager');
+    expect(roleLabel({ role: 'collaborateur' })).toBe('Contributeur');
+    expect(roleLabel({ role: 'collaborateur', canValidate: true })).toBe('Contributeur');
   });
 });
 
